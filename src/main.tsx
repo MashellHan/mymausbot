@@ -3,7 +3,9 @@ import { createRoot } from "react-dom/client";
 import {
   previewBrowserSignIn, readSessionState, rememberTeamSignIn, takeBrowserSignInFromLocation, takePairingCodeFromLocation, takeInvitedEmailFromLocation,
 } from "./lib/session";
+import { pairedDestination } from "./lib/phone-pairing";
 import { bootstrapBrand, productName } from "./lib/brand";
+import { bootstrapPwaConfig, remoteFetch, type PwaPairingBootResult } from "./lib/pwa-config";
 import { t } from "./lib/i18n";
 import { loadPageLanguage } from "./lib/language-preference";
 import { applySkinChoice, readSkinChoice } from "./lib/skins";
@@ -36,12 +38,20 @@ const loadApp = () => import("./App").catch((error: unknown) => ({ default: (): 
 const appPage = PAGES_WITHOUT_THE_APP.has(location.pathname) ? null : loadApp();
 
 /** A team's name as its server describes itself to anyone (the descriptor's label), null when it can't say. */
-const teamName = () => fetch("/.well-known/openmausbot/environment").then((res) => res.json() as Promise<{ label?: unknown; capabilities?: { cloudTeam?: unknown } }>)
+const teamName = () => remoteFetch("/.well-known/openmausbot/environment").then((res) => res.json() as Promise<{ label?: unknown; capabilities?: { cloudTeam?: unknown } }>)
   .then((descriptor) => (descriptor.capabilities?.cloudTeam === true && typeof descriptor.label === "string" ? descriptor.label : null), () => null);
 
-async function chooseRoot(): Promise<React.ReactNode> {
+async function chooseRoot(pwaBootPromise: Promise<PwaPairingBootResult>): Promise<React.ReactNode> {
   const home = window.ogb?.home;
   if (location.pathname === "/home" && home) return <HomeScreen bridge={home} manage={window.ogb?.cloudPlan?.manage} />;
+  const pwaBoot = await pwaBootPromise;
+  if (pwaBoot.status === "failed") {
+    await pageLanguage;
+    return <PairPage initialCode={null} reason={pwaBoot.error} />;
+  }
+  if (pwaBoot.status === "paired" && location.pathname === "/pair") {
+    history.replaceState(null, "", pairedDestination(location.search));
+  }
   if (location.pathname === "/pair") {
     const signIn = takeBrowserSignInFromLocation();
     if (signIn) {
@@ -75,6 +85,9 @@ async function chooseRoot(): Promise<React.ReactNode> {
 
 // The window is named before the brand file is asked for: the answer only ever renames it.
 document.title = productName();
-void Promise.all([bootstrapBrand(), chooseRoot(), pageLanguage]).then(([, root]) => {
+const pwaBoot = window.ogb?.home && location.pathname === "/home"
+  ? Promise.resolve<PwaPairingBootResult>({ status: "none" })
+  : bootstrapPwaConfig();
+void Promise.all([pwaBoot.then(() => bootstrapBrand()), chooseRoot(pwaBoot), pageLanguage]).then(([, root]) => {
   createRoot(document.getElementById("root")!).render(<StrictMode><PageBoundary>{root}</PageBoundary></StrictMode>);
 });

@@ -1,3 +1,5 @@
+import { pwaReady, remoteFetch } from "./pwa-config";
+
 export interface Brand {
   name: string;
   tagline?: string;
@@ -106,10 +108,11 @@ function isBrandStatus(value: unknown): value is BrandStatus {
 }
 
 export async function bootstrapBrand(fetchImpl: typeof fetch = fetch, timeoutMs = 1500): Promise<BrandStatus> {
+  if (fetchImpl === fetch) await pwaReady();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetchImpl("/api/brand", { signal: controller.signal });
+    const res = await remoteFetch("/api/brand", { signal: controller.signal }, fetchImpl);
     if (!res.ok) return current;
     const body: unknown = await res.json();
     if (isBrandStatus(body)) applyBrand(body);

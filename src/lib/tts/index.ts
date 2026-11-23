@@ -3,6 +3,7 @@
 import { localSystemVoiceActive, remoteSystemVoice, resolveLocalSystemVoice } from "@/lib/local-voice";
 import { recordBlockTiming, recordPrepared, recordSpeakEnter } from "../voice-latency-probe";
 import { t, tFromServer } from "@/lib/i18n";
+import { remoteFetch } from "@/lib/pwa-config";
 import { serverErrorText } from "@/lib/server-error";
 import type { ServerErrorBody } from "../../../shared/server-text";
 
@@ -360,7 +361,7 @@ export class Speaker {
   }
 
   private async prepare(text: string, voiceId: string | undefined, signal: AbortSignal): Promise<string[]> {
-    const res = await fetch("/api/tts/prepare", {
+    const res = await remoteFetch("/api/tts/prepare", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text, voiceId }),
@@ -375,7 +376,7 @@ export class Speaker {
   }
 
   private async render(text: string, voiceId: string | undefined, signal: AbortSignal): Promise<Blob> {
-    const res = await fetch("/api/tts/speak", {
+    const res = await remoteFetch("/api/tts/speak", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text, voiceId }),

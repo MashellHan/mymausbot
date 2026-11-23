@@ -1,6 +1,7 @@
 import type { TeamTemplate, TemplateCard, TemplateDetails, TemplateRepoPublish } from "../../shared/share-card";
 import { SKILL_FILE_LIMITS, skillFilePathProblem } from "../../shared/skill-files";
 import { t } from "./i18n";
+import { remoteFetch } from "./pwa-config";
 import { api, type Action, type Bot, type Group } from "@/state/store";
 import type { Routine } from "@/lib/routines";
 
@@ -84,7 +85,7 @@ export async function saveTemplateFolder(card: Pick<TemplateCard, "id" | "name">
     if (!chosen) return null;
     return (await api<{ path: string }>(`/api/share/${encodeURIComponent(card.id)}/save`, post({ path: chosen }))).path;
   }
-  const response = await fetch(`/api/share/${encodeURIComponent(card.id)}/download`);
+  const response = await remoteFetch(`/api/share/${encodeURIComponent(card.id)}/download`);
   if (!response.ok) throw new Error(t("template.failed"));
   const url = URL.createObjectURL(new Blob([await response.blob()], { type: "application/zip" }));
   const link = document.createElement("a");

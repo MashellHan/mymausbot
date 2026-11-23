@@ -1,4 +1,5 @@
 import { botShowsUnread } from "@/lib/bot-unread";
+import { remoteFetch } from "@/lib/pwa-config";
 import type { AppState, BotAnnouncement, Group } from "./store";
 
 export function markShownBotRead(
@@ -34,7 +35,7 @@ export function markShownGroupRead(state: AppState, group: Partial<Group> & { id
     const task = group.tasks?.find((candidate) => candidate.threadId === threadId);
     if (!task?.unread && (group.tasks || !group.unread)) continue;
     if (task) task.unread = false;
-    fetch(`/api/groups/${group.id}/read`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ threadId }) }).catch(() => {});
+    remoteFetch(`/api/groups/${group.id}/read`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ threadId }) }).catch(() => {});
   }
   group.unread = group.tasks ? group.tasks.some((task) => task.unread) : false;
 }

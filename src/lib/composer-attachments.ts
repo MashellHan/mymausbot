@@ -1,4 +1,5 @@
 import { isCitationAttachment, serializeCitation, type CitationAttachment } from "./citations.ts";
+import { remoteFetch } from "./pwa-config.ts";
 import { randomUuid } from "./random-uuid.ts";
 import { FILE_MAX_BYTES } from "../../shared/upload-limits.ts";
 export { dataContextFor, type DataContext, type DataViewContext } from "../../shared/data-context.ts";
@@ -295,7 +296,7 @@ async function uploadWithRetry<T>(url: string, init: RequestInit): Promise<T> {
   for (let attempt = 0; attempt < UPLOAD_ATTEMPTS; attempt += 1) {
     let response: Response;
     try {
-      response = await fetch(url, init);
+      response = await remoteFetch(url, init);
     } catch (error) {
       const aborted = typeof error === "object" && error !== null && "name" in error && error.name === "AbortError";
       if (aborted || attempt === UPLOAD_ATTEMPTS - 1) throw error;
@@ -716,7 +717,7 @@ export function discardUnsentUpload(attachment: Attachment): void {
   if ((attachment.kind !== "image" && attachment.kind !== "file") || !attachment.path) return;
   const name = attachmentBasename(attachment.path);
   if (!/^[A-Za-z0-9-]+\.[A-Za-z0-9]{1,10}$/.test(name)) return;
-  void fetch(`/api/attachments/${encodeURIComponent(name)}`, { method: "DELETE" }).catch(() => undefined);
+  void remoteFetch(`/api/attachments/${encodeURIComponent(name)}`, { method: "DELETE" }).catch(() => undefined);
 }
 
 export function attachmentBasename(path: string): string {
