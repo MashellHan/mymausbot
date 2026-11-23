@@ -862,13 +862,13 @@ class LegacyAdoJoinTests(unittest.TestCase):
                          "operationWindow": {"startDay": "2026-09-08", "endDay": "2026-11-06"},
                          "sources": [source], "state": state}}
 
-    def extract(self, snapshot):
+    def extract(self, snapshot, at="2026-11-06T08:00:00Z"):
         with patch.object(usage.local_usage_contributions, "load_previous", return_value=snapshot), \
              patch.object(usage.local_usage_contributions, "validate_seed_bindings", return_value=snapshot):
             identity = lambda remote: {"id": usage.local_usage_ado.digest("dev.azure.com", "example/project/repo"),
                                        "name": "dev.azure.com/example/Project/Repo"}
             return usage.legacy_ado_commits(self.config, identity,
-                                            lambda remote, config: "work", "/fixture/usage.json")
+                                            lambda remote, config: "work", at=at, file="/fixture/usage.json")
 
     def test_join_keeps_only_ordinary_author_commits_with_repository_identity_and_cutoff(self):
         result = self.extract(self.fixture())
@@ -884,6 +884,39 @@ class LegacyAdoJoinTests(unittest.TestCase):
         snapshot = self.fixture("partial")
         result = self.extract(snapshot)
         self.assertFalse(result["complete"])
+        self.assertEqual([row["key"] for row in result["records"]], [self.ordinary])
+
+    def test_ready_snapshot_before_aggregate_cutoff_retains_only_a_lower_bound(self):
+        result = self.extract(self.fixture(), at="2026-11-06T08:00:01Z")
+        self.assertFalse(result["complete"])
+        self.assertEqual([row["key"] for row in result["records"]], [self.ordinary])
+
+    def test_cached_proof_rollover_validates_its_old_window_then_filters_to_current_days(self):
+        snapshot = self.fixture("partial")
+        project = snapshot["ado"]["state"]["projects"]["example/project"]
+        proof = project["work"]["repoDone"].pop(self.repo_id)
+        old = {"id": "5" * 40, "day": "2026-09-08", "authoredAt": "2026-09-08T04:00:00Z",
+               "merge": False, "coauthor": False}
+        proof["items"].insert(0, old)
+        proof["checked"].insert(0, old["id"])
+        project["cache"][self.repo_id] = proof
+        project["work"].update(firstDay="2026-09-09", progress={self.repo_id: {**proof, "pending": [self.merge]}},
+                               scanComplete=False)
+        snapshot["ado"]["operationWindow"]["startDay"] = "2026-09-09"
+        snapshot["ado"]["sources"][0]["provenance"]["pinnedHeads"] = {}
+        result = self.extract(snapshot)
+        self.assertFalse(result["complete"])
+        self.assertEqual([row["key"] for row in result["records"]], [self.ordinary])
+
+    def test_completed_proof_precedes_incomplete_progress_for_the_same_repository(self):
+        snapshot = self.fixture("partial")
+        project = snapshot["ado"]["state"]["projects"]["example/project"]
+        active = dict(project["work"]["repoDone"][self.repo_id])
+        active["head"] = "b" * 40
+        active["items"] = []
+        active["checked"] = []
+        project["work"]["progress"] = {self.repo_id: active}
+        result = self.extract(snapshot)
         self.assertEqual([row["key"] for row in result["records"]], [self.ordinary])
 
     def test_partial_progress_recovers_cached_proof_at_the_same_pinned_head(self):
@@ -915,7 +948,7 @@ class LegacyAdoJoinTests(unittest.TestCase):
     def test_missing_legacy_cache_is_partial_and_has_no_fabricated_lower_bound(self):
         with patch.object(usage.local_usage_contributions, "load_previous", return_value=None):
             result = usage.legacy_ado_commits(self.config, lambda remote: {}, lambda remote, config: "work",
-                                              "/fixture/usage.json")
+                                              at="2026-11-06T08:00:00Z", file="/fixture/usage.json")
         self.assertEqual(result, {"records": [], "complete": False})
 
 
@@ -1123,6 +1156,73 @@ def collect(config):
         self.assertTrue(all(worker["env"]["GIT_CONFIG_GLOBAL"] == "/dev/null"
                             and worker["env"]["GIT_ASKPASS"] == "/usr/bin/false"
                             and "GH_TOKEN" not in worker["env"] for worker in workers))
+
+    def test_primary_passes_only_published_fresh_or_retained_snapshot_to_legacy_worker(self):
+        target = self.root / "candidate.json"
+        retained = {"version": 2, "generation": "retained"}
+        seen, legacy_snapshots, legacy_on_disk = [], [], []
+
+        class Worker:
+            returncode = 0
+
+            def __init__(self, fail_stage=None):
+                self.fail_stage = fail_stage
+                self.stdin = self.Input(self)
+
+            class Input(io.BytesIO):
+                def __init__(self, process):
+                    super().__init__()
+                    self.process = process
+
+                def close(self):
+                    request = json.loads(self.getvalue())
+                    stage = request["stage"]
+                    seen.append(stage)
+                    if stage == "legacy":
+                        legacy_snapshots.append(request["primary"])
+                        legacy_on_disk.append(json.loads(target.read_text()) if target.exists() else None)
+                    elif stage == self.process.fail_stage:
+                        self.process.returncode = 1
+                    else:
+                        Path(request["output"]).write_text(json.dumps({
+                            "generation": "fresh", "provider": stage,
+                            "asOfAt": request["at"], "sources": []}))
+                    super().close()
+
+            def wait(self, timeout):
+                return self.returncode
+
+            def poll(self):
+                return self.returncode
+
+        common = [patch.object(usage, "primary_config"),
+                  patch.object(usage.local_usage_contributions, "target_lock", return_value=nullcontext()),
+                  patch.object(usage.local_usage_contributions, "validate_bindings", side_effect=lambda value, config: value),
+                  patch.object(usage.local_usage_contributions, "preserve_incomplete_github"),
+                  patch.object(usage, "finalized_day", return_value=dt.date(2026, 11, 10)),
+                  patch.object(usage.local_usage_contributions, "write_private",
+                               side_effect=lambda path, value: path.write_text(json.dumps(value)))]
+        with common[0], common[1], common[2], common[3], common[4], common[5], \
+             patch.object(usage.subprocess, "Popen", side_effect=lambda *a, **k: Worker()):
+            current = usage.refresh_primary(self.root / "collector.py", {}, self.root, file=target)
+        self.assertEqual(seen, ["github", "ado", "legacy"])
+        self.assertEqual(legacy_snapshots, [current])
+        self.assertEqual(legacy_on_disk, [current])
+        self.assertEqual(json.loads(target.read_text()), current)
+
+        seen.clear(); legacy_snapshots.clear(); legacy_on_disk.clear()
+        target.write_text(json.dumps(retained)); target.chmod(0o600)
+        with patch.object(usage, "primary_config"), \
+             patch.object(usage.local_usage_contributions, "target_lock", return_value=nullcontext()), \
+             patch.object(usage.local_usage_contributions, "load_previous", return_value=retained), \
+             patch.object(usage, "refresh_window", return_value=(dt.date(2026, 11, 10), dt.date(2026, 11, 9))), \
+             patch.object(usage.local_usage_contributions, "validate_bindings", side_effect=lambda value, config: value), \
+             patch.object(usage.subprocess, "Popen", side_effect=lambda *a, **k: Worker("github")):
+            with self.assertRaisesRegex(ValueError, "previous generation retained"):
+                usage.refresh_primary(self.root / "collector.py", {}, self.root, file=target)
+        self.assertEqual(seen, ["github", "ado", "legacy"])
+        self.assertEqual(legacy_snapshots, [retained])
+        self.assertEqual(legacy_on_disk, [retained])
 
     def test_private_capture_prefers_valid_candidate_progress_over_immutable_seed(self):
         zone = dt.timezone(dt.timedelta(hours=8))

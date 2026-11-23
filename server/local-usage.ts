@@ -299,6 +299,8 @@ function repositoryRows(raw: unknown, daily: Map<string, DailyRow>, span = 31): 
         if (typeof date !== "string" || !daily.has(date) || seen.has(date)) throw new Error("Invalid repository day");
         seen.add(date);
         const knownPrs = count(item.knownPrs), commits = count(item.commits);
+        const categoryLimit = daily.get(date)!.categories[category];
+        if (knownPrs > categoryLimit.knownPrs || categoryLimit.commitObserved && commits > categoryLimit.commits) throw new Error("Invalid repository accounting");
         const total = accounting.get(date) ?? { knownPrs: 0, commits: 0 };
         total.knownPrs = sum([total.knownPrs, knownPrs]); total.commits = sum([total.commits, commits]);
         const limit = totals(daily.get(date)!);
