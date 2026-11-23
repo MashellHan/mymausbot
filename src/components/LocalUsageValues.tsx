@@ -5,6 +5,8 @@ import { activeLocale, t } from "@/lib/i18n";
 export const usageMetrics = ["prs", "commits", "totalTokens"] as const;
 export type UsageMetric = typeof usageMetrics[number];
 export const metricText = (value: number | null) => value === null ? t("computer.usage.unavailable") : value.toLocaleString(activeLocale());
+export const compactMetricText = (value: number | null) => value !== null && value >= 1_000_000
+  ? new Intl.NumberFormat(activeLocale(), { notation: "compact", maximumFractionDigits: 1 }).format(value) : metricText(value);
 export const countText = (value: number | null, known: number | null) => metricText(value ?? known);
 export const observedCountText = (value: number | null, known: number | null) => value === null && known !== null
   ? t("computer.usage.observedCount", { count: metricText(known) }) : countText(value, known);

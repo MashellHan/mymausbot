@@ -52,6 +52,8 @@ export interface EngineLimit {
   held?: boolean;
   /** Every window the engine reported, in the engine's order. A server that predates it sends only the deciding window above. */
   windows?: LimitWindowUsage[];
+  /** Original read time in epoch ms when these windows are retained after a failed read. */
+  checkedAt?: number;
 }
 
 export interface EngineLimitsReport {

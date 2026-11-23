@@ -8,6 +8,7 @@ import { cn } from "@/lib/cn";
 import { useCopyFeedback } from "@/lib/copy-text";
 import { t } from "@/lib/i18n";
 import { useAdvancedMode } from "@/lib/interface-mode";
+import { remoteFetch } from "@/lib/pwa-config";
 import { serverErrorText } from "@/lib/server-error";
 import { addPointedChip, usePointedChips } from "@/lib/pointed-chips";
 import { latestWebPanels, setWebPanels, useWebPanels } from "@/lib/web-panel-preferences";
@@ -114,7 +115,7 @@ export function usePageSave(threadId: string, messageId: string, title: string) 
     setBusy(true);
     setReason("");
     try {
-      const response = await fetch(appDownloadPath(threadId, messageId, rev));
+      const response = await remoteFetch(appDownloadPath(threadId, messageId, rev));
       if (!response.ok) throw new Error(serverErrorText(await response.json().catch(() => null), t("chat.preview.saveFailed")));
       const name = canonicalDownloadFilename({ contentDisposition: response.headers.get("content-disposition"), fallback: `${title}.html` });
       await saveToDevice(new File([await response.blob()], name, { type: "text/html" }));

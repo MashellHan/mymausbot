@@ -135,6 +135,21 @@ describe("the Automations page warning", () => {
     expect(fixture.dispatch).toHaveBeenCalledWith({ type: "routinePatched", routine: moved });
   });
 
+  it("shows retained usage without a reset action and keeps genuine refusal targets", () => {
+    const before = routine("brief", NOW + HOUR);
+    fixture.state = { ...fixture.state, routines: [before] };
+    const retained = { ...claude(92), checkedAt: NOW - 10 * 60_000 };
+    serve([retained]);
+    const container = mount(createElement(LimitWarnings));
+    expect(container.textContent).toContain("Claude: 92% used · resets 3:40 PM");
+    expect(container.querySelector("button")).toBeNull();
+    expect(limits.resetMarkers([retained], NOW, NOW + 24 * HOUR, NOW)).toEqual([]);
+
+    const refusal = { ...retained, blocked: true, held: true };
+    expect(limits.dueBeforeReset([before], () => "claude", refusal, NOW)).toEqual([before]);
+    expect(limits.resetMarkers([refusal], NOW, NOW + 24 * HOUR, NOW)).toEqual([{ engine: "claude", name: "Claude", at: RESET }]);
+  });
+
   it("stays away while every engine has room", () => {
     limits.rememberLimits({ checkedAt: NOW, engines: [claude(40)] });
     fixture.api.mockImplementation(async () => ({ checkedAt: NOW, engines: [claude(40)] }));
@@ -268,6 +283,11 @@ describe("the bars", () => {
   it("say how long ago the usage was read", () => {
     limits.rememberLimits({ checkedAt: NOW - 3 * 60_000, engines: [windows(38, 80)] });
     expect(mount(createElement(UsageRows, { limit: windows(38, 80) })).querySelector("[data-usage-checked]")?.textContent).toBe("checked 3 min ago");
+  });
+
+  it("say when the usage shown was read, when the latest read failed and kept the one before", () => {
+    limits.rememberLimits({ checkedAt: NOW, engines: [{ ...windows(38, 80), checkedAt: NOW - 12 * 60_000 }] });
+    expect(mount(createElement(UsageRows, { limit: { ...windows(38, 80), checkedAt: NOW - 12 * 60_000 } })).querySelector("[data-usage-checked]")?.textContent).toBe("checked 12 min ago");
   });
 
   it("read limits on their own as a background poll, so a sleeping Cloud home stays asleep", async () => {

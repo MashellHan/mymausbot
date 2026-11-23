@@ -9,6 +9,9 @@ const base: Message = { id: "m1", at: 1, role: "bot", kind: "text", text: "hello
 describe("reply display", () => {
   it("uses human labels and member attribution", () => {
     expect(replyAuthor({ ...base, role: "user" })).toBe("You");
+    const continuation: Message = { ...base, role: "user", text: undefined, automated: true, waitContinuation: true };
+    expect(replyAuthor(continuation)).toBe("Automation");
+    expect(canReplyToMessage(continuation)).toBe(false);
     expect(replyAuthor({ ...base, from: { botId: "b", name: "Scout", color: "green" } })).toBe("Scout");
     expect(replyAuthor(base, "Mochi")).toBe("Mochi");
   });

@@ -3,7 +3,9 @@ import { createRoot } from "react-dom/client";
 import {
   previewBrowserSignIn, readSessionState, rememberTeamSignIn, takeBrowserSignInFromLocation, takePairingCodeFromLocation, takeInvitedEmailFromLocation,
 } from "./lib/session";
+import { pairedDestination } from "./lib/phone-pairing";
 import { bootstrapBrand, productName } from "./lib/brand";
+import { bootstrapPwaConfig, remoteFetch, type PwaPairingBootResult } from "./lib/pwa-config";
 import { t } from "./lib/i18n";
 import { loadPageLanguage } from "./lib/language-preference";
 import { applySkinChoice, readSkinChoice } from "./lib/skins";
@@ -17,7 +19,9 @@ import { PairPage, TeamLeftPage } from "./pair/PairPage";
 import { TEAM_LEFT_REFUSAL } from "../shared/cloud-hints";
 import { HomeScreen, SignedOutAtHome } from "./components/HomeScreen";
 import { PageBoundary } from "./components/PageBoundary";
-import { endedBeforeReload, forgetEndedSession } from "./lib/session-ended";
+import { preloadPwaBootCache, type PwaBootCache } from "./lib/pwa-cache";
+import { registerPwaServiceWorker } from "./lib/pwa-sw";
+import { markSessionEnded, endedBeforeReload, forgetEndedSession } from "./lib/session-ended";
 import "./styles.css";
 
 // Before first paint; settleInterfaceMode must run before applySkin writes omb-skin.
@@ -36,12 +40,23 @@ const loadApp = () => import("./App").catch((error: unknown) => ({ default: (): 
 const appPage = PAGES_WITHOUT_THE_APP.has(location.pathname) ? null : loadApp();
 
 /** A team's name as its server describes itself to anyone (the descriptor's label), null when it can't say. */
-const teamName = () => fetch("/.well-known/openmausbot/environment").then((res) => res.json() as Promise<{ label?: unknown; capabilities?: { cloudTeam?: unknown } }>)
+const teamName = () => remoteFetch("/.well-known/openmausbot/environment").then((res) => res.json() as Promise<{ label?: unknown; capabilities?: { cloudTeam?: unknown } }>)
   .then((descriptor) => (descriptor.capabilities?.cloudTeam === true && typeof descriptor.label === "string" ? descriptor.label : null), () => null);
 
-async function chooseRoot(): Promise<React.ReactNode> {
+async function chooseRoot(
+  pwaBootPromise: Promise<PwaPairingBootResult>,
+  pwaCachePromise: Promise<PwaBootCache | null>,
+): Promise<React.ReactNode> {
   const home = window.ogb?.home;
   if (location.pathname === "/home" && home) return <HomeScreen bridge={home} manage={window.ogb?.cloudPlan?.manage} />;
+  const pwaBoot = await pwaBootPromise;
+  if (pwaBoot.status === "failed") {
+    await pageLanguage;
+    return <PairPage initialCode={null} reason={pwaBoot.error} />;
+  }
+  if (pwaBoot.status === "paired" && location.pathname === "/pair") {
+    history.replaceState(null, "", pairedDestination(location.search));
+  }
   if (location.pathname === "/pair") {
     const signIn = takeBrowserSignInFromLocation();
     if (signIn) {
@@ -50,6 +65,22 @@ async function chooseRoot(): Promise<React.ReactNode> {
       return preview ? <BrowserSignInPage credential={signIn} owner={preview.owner} team={preview.team} /> : <PairPage initialCode={null} reason={t("pair.browser.signInFailed")} />;
     }
     return <PairPage initialCode={takePairingCodeFromLocation()} initialEmail={takeInvitedEmailFromLocation()} />;
+  }
+  if (location.pathname !== "/desktop-viewer") {
+    const cached = await pwaCachePromise;
+    if (cached) {
+      forgetEndedSession();
+      void readSessionState().then((session) => {
+        if (session.kind === "unauthenticated") {
+          markSessionEnded();
+        } else if (session.kind === "session") {
+          rememberTeamSignIn(session.teamSignIn);
+        }
+      });
+      const { default: App } = await (appPage ?? loadApp());
+      void loadTheme();
+      return <App />;
+    }
   }
   const session = await readSessionState();
   if (session.kind === "unauthenticated") {
@@ -75,6 +106,25 @@ async function chooseRoot(): Promise<React.ReactNode> {
 
 // The window is named before the brand file is asked for: the answer only ever renames it.
 document.title = productName();
-void Promise.all([bootstrapBrand(), chooseRoot(), pageLanguage]).then(([, root]) => {
+const pwaBoot = window.ogb?.home && location.pathname === "/home"
+  ? Promise.resolve<PwaPairingBootResult>({ status: "none" })
+  : bootstrapPwaConfig();
+const pwaCache = pwaBoot.then((result) =>
+  (result.status === "existing" || result.status === "paired") &&
+  location.pathname !== "/pair" &&
+  location.pathname !== "/desktop-viewer" &&
+  !(window.ogb?.home && location.pathname === "/home")
+    ? preloadPwaBootCache(result.auth)
+    : null,
+);
+const brandBoot = pwaCache.then((cache) => {
+  if (cache) {
+    void bootstrapBrand();
+    return;
+  }
+  return bootstrapBrand();
+});
+void Promise.all([brandBoot, chooseRoot(pwaBoot, pwaCache), pageLanguage]).then(([, root]) => {
   createRoot(document.getElementById("root")!).render(<StrictMode><PageBoundary>{root}</PageBoundary></StrictMode>);
+  void registerPwaServiceWorker();
 });

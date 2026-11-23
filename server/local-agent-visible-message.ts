@@ -724,10 +724,10 @@ export function redactedAssistantPreview(raw: unknown): string | null {
   return redactedVisibleText(raw).text;
 }
 
-function redactedVisibleText(raw: unknown): { text: string | null; clipped: boolean } {
+export function redactedVisibleText(raw: unknown, limit = 400): { text: string | null; clipped: boolean } {
   if (typeof raw !== "string" || escapeNotes(raw) !== raw ||
       INTERNAL_ENVELOPE.test(raw.replace(/[\p{Cc}\p{Cf}]/gu, ""))) return { text: null, clipped: false };
-  return redactedAgentText(raw, 400);
+  return redactedAgentText(raw, limit);
 }
 
 export function piVisibleMessageText(row: Record<string, unknown>, role: "user" | "assistant"): { text: string | null; clipped: boolean } | null {

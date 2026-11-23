@@ -3,6 +3,7 @@ import { ZoomIn } from "lucide-react";
 
 import { AttachmentPreviewDialog, type MessageAttachmentContext, type PreviewImage } from "@/components/AttachmentPreview";
 import { t } from "@/lib/i18n";
+import { useRemoteMediaUrl } from "@/lib/use-remote-media";
 import type { Message } from "@/state/store";
 
 export function screenFramePreview(message: MessageAttachmentContext, mime = "image/png"): PreviewImage {
@@ -17,8 +18,10 @@ export function screenFramePreview(message: MessageAttachmentContext, mime = "im
 
 export function ScreenFrame({ threadId, message }: { threadId: string; message: Message }) {
   const [open, setOpen] = useState(false);
-  if (!message.hasImage && !message.png) return null;
+  const hasFrame = Boolean(message.hasImage || message.png);
   const image = screenFramePreview({ threadId, messageId: message.id }, message.mime);
+  const remoteImage = useRemoteMediaUrl(hasFrame ? image.src : null);
+  if (!hasFrame) return null;
   return (
     <div className="flex justify-start">
       <button
@@ -27,11 +30,11 @@ export function ScreenFrame({ threadId, message }: { threadId: string; message: 
         aria-label={t("attach.previewAria", { name: image.name })}
         className="group/image relative w-fit max-w-[min(var(--chat-bubble-max),var(--chat-bubble-pct))] overflow-hidden rounded-2xl border border-hairline/40 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       >
-        <img
-          src={image.src}
+        {remoteImage.url && <img
+          src={remoteImage.url}
           alt={image.name}
           className="block max-w-full transition duration-200 group-hover/image:scale-[1.015]"
-        />
+        />}
         <span
           aria-hidden
           className="absolute right-2 top-2 flex size-7 items-center justify-center rounded-full bg-black/55 text-white opacity-0 backdrop-blur-sm transition-opacity group-hover/image:opacity-100 group-focus-within/image:opacity-100"

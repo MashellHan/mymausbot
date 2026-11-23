@@ -48,10 +48,11 @@ Expected:
   `options` card titled `Waiting: the report` with the subtitle
   `Then Pepper will: Say the report is ready.`
 - After the `touch`: exactly one bot line `the report: done. <W>/report.txt is there now.`
-  carrying `"wait": { "id": "...", "status": "fired" }`, then a user line
-  `[Wait finished: the report] Say the report is ready.`, then that turn's `wait_until`
-  row with `"ok": true` (the condition already holds, so the result asks it to
-  carry out `follow_up` now), and the fake engine's reply.
+  carrying `"wait": { "id": "...", "status": "fired" }`. The fake engine receives
+  `[Wait finished: the report] Say the report is ready.` in its prompt. The API
+  carries a `waitContinuation` row with its original ID and no message body.
+  Chat displays the completion notice, the turn's successful `wait_until` step
+  and the bot's reply. A saved reply to that internal row labels it Automation.
 - Still one `options` card because the condition already holds.
 - `waits.json` holds `"waits": []`.
 - One notification with `"kind": "wait"` and `"title": "Pepper's wait is over"`.
