@@ -281,6 +281,20 @@ def _collect_worker():
             result = collector.collect(request["config"], request["device"],
                                        at=collector.instant(request["at"]),
                                        history_days=request["history_days"])
+            classifier = collector.Classifier(request["repositories"], request["config"])
+            opencode, error = local_usage_models.opencode_events(
+                Path(request["config"]["home"]).expanduser(), classifier.classify,
+                collector.instant(result["start"]), collector.instant(result["capturedAt"]),
+                env=request.get("opencodeEnvironment", {}),
+            )
+            if opencode:
+                result["tokens"].extend(opencode)
+                result["errors"] = [failure for failure in result["errors"]
+                                    if failure != {"source": "tokens", "code": "NoRetainedLogs"}]
+            if error:
+                result["errors"].append({"source": "opencode", "code": error})
+            if opencode or error:
+                result["status"] = "partial" if result["errors"] else "ok"
         json.dump(result, sys.stdout)
     except Exception as error:
         print(f"usage stage=local-collect failed type={type(error).__name__}", file=sys.stderr, flush=True)
@@ -314,11 +328,17 @@ def _run_worker(request, timeout):
     return json.loads(output)
 
 
+def _is_opencode_error(error):
+    return isinstance(error, dict) and error.get("source") == "opencode"
+
+
 def collect_local(collector_path, config, device, at=None, history_days=30):
     deadline = time.monotonic() + LOCAL_COLLECT_TIMEOUT
     fields = ("home", "repoRoots", "authorEmails", "workGithubOrgs", "personalGithubOwners", "m365Repos")
     request = {"collector": str(collector_path), "config": {k: config[k] for k in fields if k in config},
-               "device": device, "at": at.isoformat() if at else None, "history_days": history_days}
+               "device": device, "at": at.isoformat() if at else None, "history_days": history_days,
+               "opencodeEnvironment": {name: os.environ[name] for name in ("XDG_DATA_HOME", "OPENCODE_DB")
+                                       if name in os.environ}}
     repositories, failed_roots, errors = [], [], []
     for index, root in enumerate(config["repoRoots"], 1):
         print(f"usage stage=repository root={index} begin", file=sys.stderr, flush=True)
@@ -357,13 +377,14 @@ def collect_local(collector_path, config, device, at=None, history_days=30):
                 if record.get("category") == "unclassified" and previous_category in ("work", "personal"):
                     record["category"] = previous_category
         combined_errors = list(result.get("errors") or []) + list(errors)
-        fetch_disabled_only = bool(combined_errors) and all(
+        non_opencode_errors = [error for error in combined_errors if not _is_opencode_error(error)]
+        skip_retained_commits = all(
             isinstance(error, dict)
             and error.get("source") == "git-fetch"
             and error.get("code") == "DisabledByAuthBoundary"
-            for error in combined_errors
+            for error in non_opencode_errors
         )
-        retain_fields = ("tokens",) if fetch_disabled_only else ("tokens", "commits")
+        retain_fields = ("tokens",) if skip_retained_commits else ("tokens", "commits")
         for field in retain_fields:
             def key(record):
                 return record["key"] if field == "tokens" else (record["key"], (record.get("repository") or {}).get("id"))
@@ -1186,16 +1207,20 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
                 git_fetch_only = isinstance(errors, list) and bool(errors) and all(
                     isinstance(error, dict) and error.get("source") == "git-fetch" for error in errors
                 )
-                fetch_disabled_only = isinstance(errors, list) and bool(errors) and all(
+                commit_errors = [error for error in errors if not _is_opencode_error(error)] if isinstance(errors, list) else None
+                fetch_disabled_only = bool(commit_errors) and all(
                     isinstance(error, dict)
                     and error.get("source") == "git-fetch"
                     and error.get("code") == "DisabledByAuthBoundary"
-                    for error in errors
+                    for error in commit_errors
                 )
                 source["tokenStatus"] = "ready" if machine.get("status") == "ok" or (
                     machine.get("status") == "partial" and git_fetch_only
                 ) else "partial" if machine.get("status") in ("partial", "stale") else "unavailable"
-                source["commitStatus"] = "ready" if machine.get("status") == "ok" else (
+                commit_ready = machine.get("status") == "ok" or (
+                    machine.get("status") == "partial" and bool(errors) and commit_errors == []
+                )
+                source["commitStatus"] = "ready" if commit_ready else (
                     "local-ref-ready" if machine.get("status") == "partial" and fetch_disabled_only
                     and not machine.get("retainedCapturedAt")
                     and not machine.get("retainedCommits")

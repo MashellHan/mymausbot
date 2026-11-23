@@ -456,6 +456,9 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False, history_d
             ("partial", [{"source": "git-fetch", "code": "CalledProcessError"},
                          {"source": "git-fetch", "code": "TimeoutExpired"}], "ready", "partial"),
             ("partial", [{"source": "git-fetch", "code": "DisabledByAuthBoundary"}], "ready", "local-ref-ready"),
+            ("partial", [{"source": "opencode", "code": "ReadFailed"}], "partial", "ready"),
+            ("partial", [{"source": "git-fetch", "code": "DisabledByAuthBoundary"},
+                         {"source": "opencode", "code": "ReadFailed"}], "partial", "local-ref-ready"),
             ("partial", [{"source": "git-fetch"}, {"source": "codex"}], "partial", "partial"),
             ("partial", [{"source": "tokens", "code": "NoRetainedLogs"}], "partial", "partial"),
             ("partial", [{"source": "repositories"}], "partial", "partial"),
@@ -599,6 +602,46 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False):
         self.assertEqual([row["key"] for row in result["tokens"]], ["old-token"])
         self.assertEqual(result["retainedTokenCapturedAt"], old["capturedAt"])
         self.assertNotIn("retainedCapturedAt", result)
+
+    def test_collection_adds_opencode_before_retention_with_separate_error(self):
+        start = "2026-11-06T00:00:00Z"
+        cutoff = "2026-11-06T08:00:00Z"
+
+        def parse(value):
+            return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+        request = {"stage": "collect", "collector": "fixture.py", "config": {"home": str(self.root)},
+                   "failedRoots": [], "repositories": [], "device": "fixture", "at": cutoff, "history_days": 59,
+                   "opencodeEnvironment": {"OPENCODE_DB": "fixture.db"}}
+        event = {"key": "opaque-event", "at": "2026-11-06T07:59:00Z", "provider": "opencode", "model": "example-model",
+                 "input": 1, "output": 2, "cacheRead": 3, "category": "unclassified"}
+
+        class Classifier:
+            def __init__(self, repos, _config):
+                self.repos = repos
+
+            def classify(self, _cwd, _context=None):
+                return "unclassified"
+
+        local = {"status": "partial", "tokens": [], "start": start, "capturedAt": cutoff,
+                 "errors": [{"source": "tokens", "code": "NoRetainedLogs"}]}
+        collector = types.SimpleNamespace(Classifier=Classifier, instant=parse, collect=lambda *_args, **_kwargs: local)
+        output = io.StringIO()
+        with (
+            patch.object(usage, "load_collector", return_value=collector),
+            patch.object(usage.local_usage_models, "opencode_events", return_value=([event], "ReadFailed")) as read,
+            patch.object(sys, "stdin", io.StringIO(json.dumps(request))),
+            patch.object(sys, "stdout", output),
+        ):
+            usage._collect_worker()
+        home, classify, lower, upper = read.call_args.args
+        self.assertEqual((home, lower, upper), (self.root, parse(start), parse(cutoff)))
+        self.assertEqual(classify("/fixture/repo"), "unclassified")
+        self.assertEqual(read.call_args.kwargs, {"env": request["opencodeEnvironment"]})
+        result = json.loads(output.getvalue())
+        self.assertEqual(result["tokens"], [event])
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["errors"], [{"source": "opencode", "code": "ReadFailed"}])
 
     def test_repeat_disabled_fetch_only_keeps_local_ref_ready_and_marks_covered_days_only(self):
         at = dt.datetime.fromisoformat("2026-11-06T08:00:00+00:00")
