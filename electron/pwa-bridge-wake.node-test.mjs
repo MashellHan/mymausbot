@@ -122,7 +122,7 @@ test("createPwaBridgeWakeHold acquires once, releases on disable or stop, and ig
   assert.equal(unwatched, true);
 });
 
-test("in-flight poll resolving after stop does not re-acquire the power save blocker", async () => {
+test("in-flight poll resolving after stop or a newer poll does not re-acquire the power save blocker", async () => {
   const { blocker } = createFakeBlocker();
   let resolveFetch;
   const hold = createPwaBridgeWakeHold({
@@ -141,6 +141,28 @@ test("in-flight poll resolving after stop does not re-acquire the power save blo
   resolveFetch({ config: { enabled: true }, status: { state: "connected" } });
   await pending;
   assert.equal(hold.holding(), false);
+
+  const responses = [];
+  const hold2 = createPwaBridgeWakeHold({
+    isServerReady: () => true,
+    fetchStatus: () =>
+      new Promise((resolve) => {
+        responses.push(resolve);
+      }),
+    blocker,
+    log() {},
+  });
+
+  const olderPoll = hold2.poll();
+  const newerPoll = hold2.poll();
+  await Promise.resolve();
+  responses[1]({ config: { enabled: false }, status: { state: "off" } });
+  await newerPoll;
+  assert.equal(hold2.holding(), false);
+
+  responses[0]({ config: { enabled: true }, status: { state: "connected" } });
+  await olderPoll;
+  assert.equal(hold2.holding(), false);
 });
 
 test("watchPwaBridgeConfig triggers on pwa-bridge.json changes", async () => {
@@ -183,10 +205,15 @@ test("main.mjs decouples PWA bridge keep-awake from companion stops and clears i
   assert.match(supervisorSlice, /pwaBridgeWake\.start\(\)/);
   assert.match(supervisorSlice, /pwaBridgeWake\.stop\(\)/);
 
+  const wakeInitSlice = main.slice(
+    main.indexOf("const pwaBridgeWake = createMainPwaBridgeWake("),
+    main.indexOf("const pwaBridgeWake = createMainPwaBridgeWake(") + 250,
+  );
+  assert.match(wakeInitSlice, /runningDataDir\s*\?\?\s*startupEnvironmentDir/);
+
   const quitSlice = main.slice(main.indexOf('app.on("before-quit"'));
   assert.match(quitSlice, /pwaBridgeWake\.stop\(\)/);
 
-  // Exercise both blockers side-by-side with the real helper and syncCompanionKeepAwake logic.
   const { blocker } = createFakeBlocker();
   let companionPowerBlocker = null;
   function syncCompanionKeepAwake(companionEnabled, keepAwake) {
@@ -213,12 +240,10 @@ test("main.mjs decouples PWA bridge keep-awake from companion stops and clears i
   assert.notEqual(companionPowerBlocker, null);
   assert.equal(pwaBridgeWake.holding(), true);
 
-  // Stopping companion drops companionPowerBlocker without dropping pwaBridgeWake.
   syncCompanionKeepAwake(false, false);
   assert.equal(companionPowerBlocker, null);
   assert.equal(pwaBridgeWake.holding(), true);
 
-  // Disabling the PWA bridge or quitting releases pwaBridgeWake.
   bridgeEnabled = false;
   await pwaBridgeWake.poll();
   assert.equal(pwaBridgeWake.holding(), false);

@@ -12,7 +12,6 @@ import type {
   PwaBridgeRotateSecretResponse,
   PwaBridgeSettingsResponse,
 } from "../../../shared/pwa-bridge";
-import { Layer } from "../Layer";
 import { Select } from "../Select";
 import {
   SETTINGS_INPUT,
@@ -24,7 +23,7 @@ import {
   SettingsRows,
   Switch,
 } from "../SettingsPrimitives";
-import { DialogTitle } from "./SettingsDialog";
+import { SettingsDialog } from "./SettingsDialog";
 
 const POLL_INTERVAL_MS = 5_000;
 
@@ -38,20 +37,77 @@ function relayHostLabel(relayUrl: string): string {
   }
 }
 
+function localizedRelayStatusError(lastError: string): string {
+  if (lastError.includes("(4401)") || /authentication rejected/i.test(lastError)) {
+    return t("pwaBridge.status.authRejected");
+  }
+  if (lastError.includes("(4403)") || /host forbidden/i.test(lastError)) {
+    return t("pwaBridge.status.hostForbidden");
+  }
+  if (lastError.includes("(4409)") || /replaced/i.test(lastError)) {
+    return t("pwaBridge.status.replaced");
+  }
+  if (/missing relay/i.test(lastError)) {
+    return t("pwaBridge.status.missingConfig");
+  }
+  if (/invalid relay/i.test(lastError)) {
+    return t("pwaBridge.status.invalidRelayUrl");
+  }
+  if (/heartbeat timeout/i.test(lastError)) {
+    return t("pwaBridge.status.timeout");
+  }
+  return t("pwaBridge.status.error");
+}
+
 function bridgeStatusText(data: PwaBridgeSettingsResponse, remoteBlocked: string | null): string {
   if (remoteBlocked) return remoteBlocked;
   if (!data.config.enabled || data.status.state === "off") return t("pwaBridge.status.off");
   if (data.status.state === "connected") return t("pwaBridge.status.connected");
   if (data.status.state === "connecting") return t("pwaBridge.status.connecting");
-  if (data.status.lastError) return t("pwaBridge.status.errorDetail", { error: data.status.lastError });
+  if (data.status.lastError) return localizedRelayStatusError(data.status.lastError);
   return t("pwaBridge.status.error");
 }
 
-function errorStatus(cause: unknown): number | null {
-  if (typeof cause === "object" && cause !== null && "status" in cause && typeof (cause as { status?: unknown }).status === "number") {
-    return (cause as { status: number }).status;
+function errorMeta(cause: unknown): {
+  status: number | null;
+  code: string | null;
+  hasErrorKey: boolean;
+  message: string;
+} {
+  if (typeof cause !== "object" || cause === null) {
+    return { status: null, code: null, hasErrorKey: false, message: String(cause) };
   }
-  return null;
+  const obj = cause as {
+    status?: unknown;
+    message?: unknown;
+    body?: { code?: unknown; errorKey?: unknown };
+  };
+  return {
+    status: typeof obj.status === "number" ? obj.status : null,
+    code: typeof obj.body?.code === "string" ? obj.body.code : null,
+    hasErrorKey: typeof obj.body?.errorKey === "string",
+    message: typeof obj.message === "string" ? obj.message : "",
+  };
+}
+
+function localizedActionError(
+  cause: unknown,
+  action: "toggle" | "save" | "rotate" | "invite",
+  remoteBlocked: string | null,
+): string {
+  const { status, code, hasErrorKey, message } = errorMeta(cause);
+  if (hasErrorKey && message) return message;
+  if (code === "managed_policy") return remoteBlocked ?? t("pwaBridge.error.managedPolicy");
+  if (status === 401) return t("pwaBridge.error.sessionEnded");
+  if (/\brelayUrl and hostId are required\b/i.test(message)) return t("pwaBridge.error.missingConfig");
+  if (/\brelayUrl\b/i.test(message)) return t("pwaBridge.error.invalidRelayUrl");
+  if (/\bpwaOrigin\b/i.test(message)) return t("pwaBridge.error.invalidPwaOrigin");
+  if (/\bhostId\b/i.test(message)) return t("pwaBridge.error.invalidHostId");
+  if (/\bdefaultBotId\b/i.test(message)) return t("pwaBridge.error.invalidDefaultBot");
+  if (/before creating a pairing link/i.test(message)) return t("pwaBridge.error.pairNotReady");
+  if (action === "rotate") return t("pwaBridge.error.rotateFailed");
+  if (action === "invite") return t("pwaBridge.error.inviteFailed");
+  return t("pwaBridge.error.saveFailed");
 }
 
 function SecretCopyRow({
@@ -115,6 +171,10 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
   const dirtyRef = useRef(false);
   dirtyRef.current = dirty;
 
+  const hasSyncedRef = useRef(false);
+  const readSeqRef = useRef(0);
+  const writeEpochRef = useRef(0);
+
   const [busyAction, setBusyAction] = useState<"toggle" | "save" | "rotate" | "invite" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
@@ -127,7 +187,8 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
   const [now, setNow] = useState(() => Date.now());
 
   function syncFromResponse(next: PwaBridgeSettingsResponse, forceDrafts = false) {
-    setData(next);
+    setData({ config: next.config, status: next.status });
+    hasSyncedRef.current = true;
     if (forceDrafts || !dirtyRef.current) {
       setRelayUrl(next.config.relayUrl);
       setHostId(next.config.hostId);
@@ -140,42 +201,46 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
   useEffect(() => {
     let alive = true;
     const controller = new AbortController();
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+    function stopPolling() {
+      alive = false;
+      controller.abort();
+      if (pollTimer !== null) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    }
 
     async function load(isInitial: boolean) {
+      const readSeq = ++readSeqRef.current;
+      const writeEpoch = writeEpochRef.current;
       try {
         const next = await api<PwaBridgeSettingsResponse>("/api/pwa-bridge", {
           signal: controller.signal,
           ...(isInitial ? {} : { background: true }),
         });
-        if (!alive) return;
-        if (!next?.config || !next?.status) {
-          if (isInitial) setUnavailable(true);
-          return;
-        }
-        syncFromResponse(next, isInitial);
+        if (!alive || readSeq !== readSeqRef.current || writeEpoch !== writeEpochRef.current) return;
+        if (!next?.config || !next?.status) return;
+        syncFromResponse(next, !hasSyncedRef.current);
       } catch (cause) {
         if (!alive || controller.signal.aborted) return;
-        const status = errorStatus(cause);
+        const { status } = errorMeta(cause);
         if (status === 403 || status === 404) {
           setUnavailable(true);
-          return;
-        }
-        if (isInitial) {
-          setUnavailable(true);
+          stopPolling();
         }
       }
     }
 
     void load(true);
-    const pollTimer = setInterval(() => {
+    pollTimer = setInterval(() => {
       if (!alive) return;
       void load(false);
     }, POLL_INTERVAL_MS);
 
     return () => {
-      alive = false;
-      controller.abort();
-      clearInterval(pollTimer);
+      stopPolling();
     };
   }, []);
 
@@ -192,7 +257,8 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
   const canPair = data.config.enabled && data.config.hasBridgeSecret && !remoteBlocked;
 
   async function toggleEnabled(enabled: boolean) {
-    if (busy || remoteBlocked) return;
+    if (busy || (enabled && remoteBlocked)) return;
+    writeEpochRef.current += 1;
     setBusyAction("toggle");
     setError(null);
     setSavedNotice(null);
@@ -218,7 +284,7 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
         setInvite(null);
       }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(localizedActionError(cause, "toggle", remoteBlocked));
     } finally {
       setBusyAction(null);
     }
@@ -227,6 +293,7 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
   async function saveSettings(event: FormEvent) {
     event.preventDefault();
     if (busy) return;
+    writeEpochRef.current += 1;
     setBusyAction("save");
     setError(null);
     setSavedNotice(null);
@@ -243,7 +310,7 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
       syncFromResponse(next, true);
       setSavedNotice(t("pwaBridge.settings.saved"));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(localizedActionError(cause, "save", remoteBlocked));
     } finally {
       setBusyAction(null);
     }
@@ -251,6 +318,7 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
 
   async function rotateSecret() {
     if (busy) return;
+    writeEpochRef.current += 1;
     setBusyAction("rotate");
     setError(null);
     setSavedNotice(null);
@@ -265,7 +333,7 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
       });
       setSettingsOpen(true);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(localizedActionError(cause, "rotate", remoteBlocked));
     } finally {
       setBusyAction(null);
     }
@@ -286,7 +354,7 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
       setInvite(next);
       setNow(Date.now());
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(localizedActionError(cause, "invite", remoteBlocked));
     } finally {
       setBusyAction(null);
     }
@@ -311,57 +379,62 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
   return (
     <>
       {invite && (
-        <Layer modal>
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label={t("pwaBridge.modal.title")}
-            data-settings-look="simple"
-            data-pwa-pair-dialog=""
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4"
-            onMouseDown={(event) => event.target === event.currentTarget && setInvite(null)}
-          >
-            <div className="relative flex max-h-full w-full max-w-[440px] flex-col gap-4 overflow-y-auto rounded-2xl border-[0.5px] border-(--settings-edge) bg-app p-6 shadow-xl">
-              <DialogTitle title={t("pwaBridge.modal.title")} onClose={() => setInvite(null)} />
-              {expired ? (
-                <p className="text-[13px] leading-[18px] text-ink-secondary">{t("pwaBridge.modal.expired")}</p>
-              ) : (
-                <div className="flex flex-col items-start gap-4">
-                  <div data-pwa-pair-qr="" className="self-center rounded-[12px] bg-white p-3 shadow-[inset_0_0_0_0.5px_var(--settings-edge)]">
-                    <QRCodeSVG
-                      value={invite.inviteUrl}
-                      title={t("pwaBridge.modal.title")}
-                      size={200}
-                      level="M"
-                      bgColor="#ffffff"
-                      fgColor="#111111"
-                    />
-                  </div>
-                  <p className="text-[14px] leading-5 text-ink">{t("pwaBridge.modal.scan")}</p>
-                  <code data-pwa-pair-url="" className="w-full select-all break-all rounded-lg border-[0.5px] border-(--settings-edge) bg-ink/[0.04] p-3 text-[12px] leading-4 text-ink-secondary">
-                    {invite.inviteUrl}
-                  </code>
-                  <div className="text-[12px] leading-4 text-ink-secondary">{codeUntil(invite.expiresAt)}</div>
-                </div>
-              )}
-              <div className="flex items-center justify-end gap-2">
-                {!expired && (
-                  <button type="button" data-pwa-pair-copy="" onClick={() => void copyInviteLink()} className="ui-button mr-auto">
-                    {copied === "copied" ? t("pwaBridge.modal.copied") : copied === "failed" ? t("common.copyFailed") : t("pwaBridge.modal.copyLink")}
-                  </button>
-                )}
-                {expired && (
-                  <button type="button" onClick={() => void createInvite()} disabled={busy} className="ui-button">
-                    {t("pwaBridge.modal.newLink")}
-                  </button>
-                )}
-                <button type="button" className="ui-button ui-button-primary" onClick={() => setInvite(null)}>
-                  {t("devices.pair.done")}
+        <SettingsDialog
+          title={t("pwaBridge.modal.title")}
+          onClose={() => setInvite(null)}
+          footer={(
+            <>
+              {!expired && (
+                <button
+                  type="button"
+                  data-autofocus=""
+                  data-pwa-pair-copy=""
+                  onClick={() => void copyInviteLink()}
+                  className="ui-button mr-auto"
+                >
+                  {copied === "copied" ? t("pwaBridge.modal.copied") : copied === "failed" ? t("common.copyFailed") : t("pwaBridge.modal.copyLink")}
                 </button>
+              )}
+              {expired && (
+                <button
+                  type="button"
+                  data-autofocus=""
+                  onClick={() => void createInvite()}
+                  disabled={busy}
+                  className="ui-button"
+                >
+                  {t("pwaBridge.modal.newLink")}
+                </button>
+              )}
+              <button type="button" className="ui-button ui-button-primary" onClick={() => setInvite(null)}>
+                {t("devices.pair.done")}
+              </button>
+            </>
+          )}
+        >
+          {expired ? (
+            <p className="text-[13px] leading-[18px] text-ink-secondary">{t("pwaBridge.modal.expired")}</p>
+          ) : (
+            <div data-pwa-pair-dialog="" className="flex flex-col items-start gap-4">
+              <div data-pwa-pair-qr="" className="self-center rounded-[12px] bg-white p-3 shadow-[inset_0_0_0_0.5px_var(--settings-edge)]">
+                <QRCodeSVG
+                  value={invite.inviteUrl}
+                  title={t("pwaBridge.modal.title")}
+                  size={200}
+                  marginSize={4}
+                  level="M"
+                  bgColor="#ffffff"
+                  fgColor="#111111"
+                />
               </div>
+              <p className="text-[14px] leading-5 text-ink">{t("pwaBridge.modal.scan")}</p>
+              <code data-pwa-pair-url="" className="w-full select-all break-all rounded-lg border-[0.5px] border-(--settings-edge) bg-ink/[0.04] p-3 text-[12px] leading-4 text-ink-secondary">
+                {invite.inviteUrl}
+              </code>
+              <div className="text-[12px] leading-4 text-ink-secondary">{codeUntil(invite.expiresAt)}</div>
             </div>
-          </div>
-        </Layer>
+          )}
+        </SettingsDialog>
       )}
 
       <SettingsGroup label={t("pwaBridge.title")} block="pwa-bridge">
@@ -375,7 +448,7 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
               id="pwa-bridge-enabled"
               data-pwa-bridge-switch=""
               checked={data.config.enabled}
-              disabled={busy || Boolean(remoteBlocked)}
+              disabled={busy || (Boolean(remoteBlocked) && !data.config.enabled)}
               aria-label={t("pwaBridge.enable")}
               onClick={() => void toggleEnabled(!data.config.enabled)}
             />
@@ -399,7 +472,10 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
             subtitle={t("pwaBridge.settings.subtitle")}
             value={relayHostLabel(data.config.relayUrl)}
             open={settingsOpen}
-            onToggle={() => setSettingsOpen((prev) => !prev)}
+            onToggle={() => setSettingsOpen((prev) => {
+              if (prev) setRevealedSecret(null);
+              return !prev;
+            })}
           >
             <div className="flex flex-col gap-4">
               <form data-pwa-bridge-form="" onSubmit={(event) => void saveSettings(event)} className="flex flex-col gap-3">

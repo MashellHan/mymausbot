@@ -81,7 +81,10 @@ vi.mock("./settings-shell", () => ({
 const { PwaBridgeCard } = await import("./PwaBridgeCard");
 const { PhonePage } = await import("./pages/PhonePage");
 
-function makeState(overrides: Partial<PwaBridgeSettingsResponse> = {}): PwaBridgeSettingsResponse {
+function makeState(overrides: {
+  config?: Partial<PwaBridgeSettingsResponse["config"]>;
+  status?: Partial<PwaBridgeSettingsResponse["status"]>;
+} = {}): PwaBridgeSettingsResponse {
   return {
     config: {
       enabled: true,
@@ -132,6 +135,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   act(() => root.unmount());
   host.remove();
 });
@@ -144,7 +148,7 @@ async function renderCard() {
 }
 
 describe("PwaBridgeCard", () => {
-  it("masks the stored bridge secret and reveals a rotated secret once until hidden", async () => {
+  it("masks the stored bridge secret and clears a rotated secret on collapse or Hide", async () => {
     mocks.api.mockImplementation(async (path: string, init?: RequestInit) => {
       if (path === "/api/pwa-bridge" && (!init?.method || init.method === "GET")) {
         return makeState();
@@ -164,7 +168,6 @@ describe("PwaBridgeCard", () => {
     expect(host.textContent).toContain("Connected to relay");
     expect(host.textContent).not.toContain("omb_bridge_");
 
-    // Open the settings fold and verify the masked secret status.
     const foldToggle = host.querySelector<HTMLButtonElement>('[data-settings-disclosure="pwa-bridge-settings"] button')!;
     await act(async () => {
       foldToggle.click();
@@ -173,12 +176,25 @@ describe("PwaBridgeCard", () => {
     expect(host.querySelector("[data-pwa-secret-status]")?.textContent).toBe("Saved on this computer (hidden).");
     expect(host.querySelector("[data-pwa-secret-revealed]")).toBeNull();
 
-    const rotateBtn = host.querySelector<HTMLButtonElement>("[data-pwa-rotate-secret]")!;
     await act(async () => {
-      rotateBtn.click();
+      host.querySelector<HTMLButtonElement>("[data-pwa-rotate-secret]")!.click();
     });
 
     expect(host.querySelector("[data-pwa-secret-hash]")?.textContent).toBe("a".repeat(64));
+    expect(host.querySelector("[data-pwa-secret-value]")?.textContent).toBe("omb_bridge_once_secret_value");
+
+    await act(async () => {
+      foldToggle.click();
+    });
+    await act(async () => {
+      foldToggle.click();
+    });
+    expect(host.querySelector("[data-pwa-secret-revealed]")).toBeNull();
+    expect(host.textContent).not.toContain("omb_bridge_once_secret_value");
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>("[data-pwa-rotate-secret]")!.click();
+    });
     expect(host.querySelector("[data-pwa-secret-value]")?.textContent).toBe("omb_bridge_once_secret_value");
 
     const hideBtn = Array.from(host.querySelectorAll("button")).find((btn) => btn.textContent === "Hide")!;
@@ -189,7 +205,7 @@ describe("PwaBridgeCard", () => {
     expect(host.textContent).not.toContain("omb_bridge_once_secret_value");
   });
 
-  it("saves relayUrl and defaultBotId, toggles bridge state, and opens the #pair= QR modal", async () => {
+  it("saves relayUrl and defaultBotId, toggles bridge state, and handles pairing dialog keyboard and QR quiet zone", async () => {
     let current = makeState({
       config: {
         enabled: false,
@@ -236,7 +252,6 @@ describe("PwaBridgeCard", () => {
     const pairBtn = host.querySelector<HTMLButtonElement>("[data-pwa-pair-action]")!;
     expect(pairBtn.disabled).toBe(true);
 
-    // Enable the relay via switch.
     const toggle = host.querySelector<HTMLButtonElement>("[data-pwa-bridge-switch]")!;
     await act(async () => {
       toggle.click();
@@ -244,7 +259,6 @@ describe("PwaBridgeCard", () => {
     expect(toggle.getAttribute("aria-checked")).toBe("true");
     expect(pairBtn.disabled).toBe(false);
 
-    // Open settings fold, change relayUrl and defaultBotId, and save.
     await act(async () => {
       host.querySelector<HTMLButtonElement>('[data-settings-disclosure="pwa-bridge-settings"] button')!.click();
     });
@@ -266,31 +280,180 @@ describe("PwaBridgeCard", () => {
     expect(current.config.relayUrl).toBe("https://sg-relay.mxhan.com");
     expect(current.config.defaultBotId).toBe("acct-bot");
 
-    // Generate pairing link and verify QR + #pair= URL + copy button.
+    pairBtn.focus();
     await act(async () => {
-      host.querySelector<HTMLButtonElement>("[data-pwa-pair-action]")!.click();
+      pairBtn.click();
     });
 
-    const dialog = document.body.querySelector("[data-pwa-pair-dialog]");
+    const dialog = document.body.querySelector("[data-settings-dialog]");
     expect(dialog).not.toBeNull();
-    expect(dialog!.querySelector("[data-pwa-pair-qr] svg")).not.toBeNull();
+    expect(dialog!.querySelector("[data-pwa-pair-dialog]")).not.toBeNull();
+    const svg = dialog!.querySelector<SVGElement>("[data-pwa-pair-qr] svg");
+    expect(svg).not.toBeNull();
+    expect(svg!.querySelectorAll("path")[1]?.getAttribute("d")).toMatch(/^M4[ ,]4/);
     expect(dialog!.querySelector("[data-pwa-pair-url]")?.textContent).toContain("https://mausbot.mxhan.com/#pair=");
 
+    const copyBtn = dialog!.querySelector<HTMLButtonElement>("[data-pwa-pair-copy]")!;
+    expect(document.activeElement).toBe(copyBtn);
+
     await act(async () => {
-      dialog!.querySelector<HTMLButtonElement>("[data-pwa-pair-copy]")!.click();
+      copyBtn.click();
     });
     expect(mocks.copyText).toHaveBeenCalledWith(
       "https://mausbot.mxhan.com/#pair=eyJyZWxheVVybCI6Imh0dHBzOi8vcmVsYXkubXhoYW4uY29tIiwiY3JlZGVudGlhbCI6Im9tYl9wYWlyX3h5eiJ9",
     );
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    expect(document.body.querySelector("[data-settings-dialog]")).toBeNull();
+    expect(document.activeElement).toBe(pairBtn);
   });
 
-  it("hides cleanly when the server refuses the bridge route (403)", async () => {
-    mocks.api.mockRejectedValue(Object.assign(new Error("unavailable"), { status: 403 }));
+  it("recovers from transient initial load failures, ignores stale GETs after save, and stops polling on 403", async () => {
+    vi.useFakeTimers();
+
+    let call = 0;
+    let resolveStaleGet!: (value: PwaBridgeSettingsResponse) => void;
+    let saved = makeState({ config: { relayUrl: "https://sg-relay.mxhan.com" } });
+
+    mocks.api.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/api/pwa-bridge" && (!init?.method || init.method === "GET")) {
+        call += 1;
+        if (call === 1) return Promise.reject(Object.assign(new Error("temporarily down"), { status: 503 }));
+        if (call === 2) return Promise.resolve(makeState());
+        if (call === 3) {
+          return new Promise<PwaBridgeSettingsResponse>((resolve) => {
+            resolveStaleGet = resolve;
+          });
+        }
+        return Promise.resolve(saved);
+      }
+      if (path === "/api/pwa-bridge" && init?.method === "PUT") {
+        return Promise.resolve(saved);
+      }
+      throw new Error(`unexpected api call: ${path}`);
+    });
+
     await act(async () => {
       root.render(createElement(PwaBridgeCard));
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
     expect(host.querySelector('[data-settings-block="pwa-bridge"]')).toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(host.querySelector('[data-settings-block="pwa-bridge"]')).not.toBeNull();
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[data-settings-disclosure="pwa-bridge-settings"] button')!.click();
+    });
+    const relayInput = host.querySelector<HTMLInputElement>("#pwa-bridge-relay-url")!;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      setter.call(relayInput, "https://sg-relay.mxhan.com");
+      relayInput.dispatchEvent(new Event("input", { bubbles: true }));
+      host.querySelector<HTMLButtonElement>("[data-pwa-bridge-save]")!.click();
+    });
+    expect(relayInput.value).toBe("https://sg-relay.mxhan.com");
+
+    await act(async () => {
+      resolveStaleGet(makeState({ config: { relayUrl: "https://relay.mxhan.com" } }));
+    });
+    expect(relayInput.value).toBe("https://sg-relay.mxhan.com");
+
+    mocks.api.mockRejectedValue(Object.assign(new Error("unavailable"), { status: 403 }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(host.querySelector('[data-settings-block="pwa-bridge"]')).toBeNull();
+
+    const countAt403 = mocks.api.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(mocks.api.mock.calls.length).toBe(countAt403);
+  });
+
+  it("allows disabling an already-enabled relay under managed policy and localizes relay and validation errors", async () => {
+    let current = makeState({
+      config: { enabled: true },
+      status: {
+        state: "error",
+        lastConnectedAt: null,
+        lastError: "bridge authentication rejected (4401)",
+        activeStreams: 0,
+      },
+    });
+
+    mocks.api.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/api/pwa-bridge" && (!init?.method || init.method === "GET")) {
+        return current;
+      }
+      if (path === "/api/pwa-bridge" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body));
+        if (body.hostId === "bad host") {
+          throw Object.assign(
+            new Error("hostId must be 1 to 64 characters using letters, numbers, '.', '_' or '-'"),
+            { status: 400 },
+          );
+        }
+        current = {
+          config: { ...current.config, ...body },
+          status: { state: "off", lastConnectedAt: null, lastError: null, activeStreams: 0 },
+        };
+        return current;
+      }
+      throw new Error(`unexpected api call: ${path}`);
+    });
+
+    await act(async () => {
+      root.render(createElement(PwaBridgeCard, { remoteBlocked: "Remote access is turned off by your organization." }));
+    });
+    await vi.waitFor(() => expect(host.querySelector('[data-settings-block="pwa-bridge"]')).not.toBeNull());
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[data-settings-disclosure="pwa-bridge-settings"] button')!.click();
+    });
+    const hostInput = host.querySelector<HTMLInputElement>("#pwa-bridge-host-id")!;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      setter.call(hostInput, "bad host");
+      hostInput.dispatchEvent(new Event("input", { bubbles: true }));
+      host.querySelector<HTMLButtonElement>("[data-pwa-bridge-save]")!.click();
+    });
+
+    const alertEl = host.querySelector('[role="alert"]');
+    expect(alertEl?.textContent).toBe("Host ID must use 1 to 64 letters, numbers, dots, underscores, or hyphens.");
+    expect(alertEl?.textContent).not.toContain("1 to 64 characters");
+
+    const toggle = host.querySelector<HTMLButtonElement>("[data-pwa-bridge-switch]")!;
+    expect(toggle.disabled).toBe(false);
+    await act(async () => {
+      toggle.click();
+    });
+    expect(current.config.enabled).toBe(false);
+    expect(toggle.disabled).toBe(true);
+
+    act(() => root.unmount());
+    root = createRoot(host);
+    current = makeState({
+      config: { enabled: true },
+      status: {
+        state: "error",
+        lastConnectedAt: null,
+        lastError: "bridge authentication rejected (4401)",
+        activeStreams: 0,
+      },
+    });
+    await renderCard();
+    expect(host.textContent).toContain("Relay rejected the relay secret.");
+    expect(host.textContent).not.toContain("4401");
   });
 
   it("renders on PhonePage for this computer and stays hidden on MausBot Cloud", async () => {

@@ -514,7 +514,7 @@ const routineWake = createRoutineWakeHold({
   log: (line) => slog(line),
 });
 
-const pwaBridgeWake = createMainPwaBridgeWake({ port: () => SERVER_PORT, isServerReady: () => serverReady, blocker: powerSaveBlocker, dataDir: desktopDataDir, log: (line) => slog(line) });
+const pwaBridgeWake = createMainPwaBridgeWake({ port: () => SERVER_PORT, isServerReady: () => serverReady, blocker: powerSaveBlocker, dataDir: () => runningDataDir ?? startupEnvironmentDir(environmentsState, desktopDataDir()), log: (line) => slog(line) });
 
 function slog(line) {
   try {

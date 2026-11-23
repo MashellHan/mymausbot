@@ -49,6 +49,7 @@ export function createPwaBridgeWakeHold(deps) {
   let unwatch = null;
   let stopped = false;
   let generation = 0;
+  let pollSeq = 0;
   let last = { hold: false, reason: "off" };
 
   const apply = (decision) => {
@@ -66,15 +67,16 @@ export function createPwaBridgeWakeHold(deps) {
   const state = () => ({ ...last, serverReady: Boolean(deps.isServerReady()) });
 
   const poll = async () => {
+    const gen = generation;
+    const seq = ++pollSeq;
     if (stopped || !deps.isServerReady()) {
       apply({ hold: false, reason: stopped ? "stopped" : "server-unavailable" });
       return state();
     }
-    const gen = generation;
     const status = await Promise.resolve()
       .then(() => deps.fetchStatus())
       .catch(() => null);
-    if (stopped || gen !== generation) return state();
+    if (stopped || gen !== generation || seq !== pollSeq) return state();
     apply(pwaBridgeWakeDecision({ serverReady: deps.isServerReady(), status }));
     return state();
   };
