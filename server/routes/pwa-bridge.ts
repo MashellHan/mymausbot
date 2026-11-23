@@ -74,11 +74,19 @@ export function createPwaBridgeRoutes(deps: PwaBridgeRouteDeps): RouteHandler {
     }
 
     if (isRoot && method === "PUT") {
+      if (auth.kind === "session" && !deps.sessions.isLive(auth.session.id)) {
+        json(res, 401, { error: "Your session ended. Sign in again before updating PWA bridge settings." });
+        return;
+      }
       let raw: unknown;
       try {
         raw = await readBody(req, 8_192);
       } catch {
         json(res, 400, { error: "invalid JSON body" });
+        return;
+      }
+      if (auth.kind === "session" && !deps.sessions.isLive(auth.session.id)) {
+        json(res, 401, { error: "Your session ended. Sign in again before updating PWA bridge settings." });
         return;
       }
       const parsed = updateSchema.safeParse(raw);
@@ -176,6 +184,15 @@ export function createPwaBridgeRoutes(deps: PwaBridgeRouteDeps): RouteHandler {
         raw = await readBody(req, 4_096);
       } catch {
         json(res, 400, { error: "invalid JSON body" });
+        return;
+      }
+      if (auth.kind === "session" && !deps.sessions.isLive(auth.session.id)) {
+        json(res, 401, { error: "Your session ended. Sign in again before creating a pairing link." });
+        return;
+      }
+      const postBodyRefusal = deps.managedRemoteAccessRefusal?.();
+      if (postBodyRefusal) {
+        json(res, 403, { error: postBodyRefusal, code: "managed_policy" });
         return;
       }
       const parsed = inviteSchema.safeParse(raw);

@@ -12,6 +12,7 @@ import { PROXY_HEADERS, sanitizeSource } from "./request-auth.ts";
 export const PWA_BRIDGE_SUBPROTOCOL = "omb-pwa-bridge.v1";
 export const PWA_BRIDGE_MAX_FRAME_BYTES = 512 * 1024;
 export const PWA_BRIDGE_MAX_BODY_BYTES = 12 * 1024 * 1024;
+export const PWA_BRIDGE_MAX_PENDING_BODY_BYTES = 32 * 1024 * 1024;
 export const PWA_BRIDGE_MAX_CONCURRENT_STREAMS = 128;
 export const PWA_BRIDGE_MAX_WS_BUFFERED_BYTES = 64 * 1024 * 1024;
 
@@ -153,18 +154,33 @@ export function normalizeBridgeTarget(rawPath: string): { ok: true; url: URL } |
   }
 }
 
+function appendHeaderValue(out: HeaderMap, key: string, next: string | string[]): void {
+  if (Object.hasOwn(out, key)) {
+    const existing = out[key];
+    out[key] = Array.isArray(existing)
+      ? Array.isArray(next)
+        ? [...existing, ...next]
+        : [...existing, next]
+      : Array.isArray(next)
+        ? [existing, ...next]
+        : [existing, next];
+    return;
+  }
+  out[key] = next;
+}
+
 function sanitizeInboundHeaders(raw: unknown): HeaderMap | undefined {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
   const out: HeaderMap = {};
   for (const [k, v] of Object.entries(raw)) {
     const key = k.toLowerCase();
-    if (!key || /[\r\n:]/.test(key)) return undefined;
+    if (!key || key === "__proto__" || /[\r\n:]/.test(key)) return undefined;
     if (typeof v === "string") {
       if (/[\r\n]/.test(v)) return undefined;
-      out[key] = v;
+      appendHeaderValue(out, key, v);
     } else if (Array.isArray(v) && v.every((item) => typeof item === "string")) {
       if (v.some((item) => /[\r\n]/.test(item))) return undefined;
-      out[key] = v;
+      appendHeaderValue(out, key, v);
     } else {
       return undefined;
     }
@@ -274,10 +290,10 @@ export function scrubHeadersObject(
       return { ok: false, status: 400, error: "invalid request header value" };
     }
     if (name === "content-length") {
-      if (declaredContentLength !== undefined) {
+      if (declaredContentLength !== undefined || Array.isArray(value)) {
         return { ok: false, status: 400, error: "duplicate content-length header" };
       }
-      if (Array.isArray(value) || !/^\d+$/.test(value)) {
+      if (!/^\d+$/.test(value)) {
         return { ok: false, status: 400, error: "invalid content-length header" };
       }
       const parsedLength = Number(value);

@@ -649,6 +649,33 @@ describe("PWA bridge unit, config, and route enforcement", () => {
     expect(badTerminal.status).toBe(400);
     expect(mutationCount).toBe(0);
 
+    // Mixed-case duplicate Content-Length headers must fail 400 at the wire parser before reaching handlers.
+    const dupContentLengthDiff = await mockRelay.request({
+      method: "POST",
+      path: "/api/bots/bot-acct/messages",
+      headers: {
+        "content-type": "application/json",
+        "Content-Length": "5",
+        "content-length": "10",
+      },
+      body: payload,
+    });
+    expect(dupContentLengthDiff.status).toBe(400);
+    expect(mutationCount).toBe(0);
+
+    const dupContentLengthSame = await mockRelay.request({
+      method: "POST",
+      path: "/api/bots/bot-acct/messages",
+      headers: {
+        "content-type": "application/json",
+        "Content-Length": String(Buffer.byteLength(payload)),
+        "content-length": String(Buffer.byteLength(payload)),
+      },
+      body: payload,
+    });
+    expect(dupContentLengthSame.status).toBe(400);
+    expect(mutationCount).toBe(0);
+
     // Body on GET must be rejected 400 before origin handler runs.
     const badGetBody = await mockRelay.request({
       method: "GET",
@@ -722,6 +749,225 @@ describe("PWA bridge unit, config, and route enforcement", () => {
       bridge.stop();
       await realRelay.close();
     }
+  });
+
+  it("enforces aggregate pending request byte budget and releases reservations on dispatch, cancel, policy denial, and disconnect", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pwa-bridge-budget-"));
+    dirs.push(dir);
+    const relay = await MockBridgeRelay.start();
+    relays.push(relay);
+
+    let policyRefusal: string | undefined;
+    let handledCount = 0;
+    const bridge = startPwaBridge({
+      dataDir: dir,
+      maxPendingBodyBytes: 120,
+      managedRemoteAccessRefusal: () => policyRefusal,
+      reconnectDelaysMs: [80],
+      jitterFactor: () => 0.5,
+      handle: async (req, res) => {
+        handledCount += 1;
+        await readBody(req);
+        json(res, 201, { ok: true, handledCount });
+      },
+    })!;
+    bridges.push(bridge);
+
+    bridge.applyConfig({
+      enabled: true,
+      relayUrl: relay.url,
+      hostId: "mac-mini",
+      bridgeSecret: "omb_bridge_budget_secret_123456",
+      pwaOrigin: "https://mausbot.mxhan.com",
+      defaultBotId: null,
+    });
+    await relay.waitForHost();
+
+    // Stream 1 buffers 90 bytes without EOF yet (leaves 30 bytes of aggregate budget).
+    const chunk90 = Buffer.alloc(90, 97).toString("base64");
+    const stream1 = relay.openStream({
+      method: "POST",
+      path: "/api/bots/bot-acct/messages",
+      headers: { "content-type": "application/json" },
+      bodyFrames: [{ chunkB64: chunk90, eof: false }],
+    });
+
+    // Stream 2 declaring 50 bytes fails immediately at req.open (90 + 50 > 120).
+    const overDeclared = await relay.request({
+      method: "POST",
+      path: "/api/bots/bot-acct/messages",
+      headers: { "content-type": "application/json", "content-length": "50" },
+      body: JSON.stringify({ text: "12345678901234567890123456789012345678" }),
+    });
+    expect(overDeclared.status).toBe(503);
+    expect(overDeclared.json.code).toBe("bridge_busy");
+
+    // Stream 3 omitting Content-Length and sending 40 bytes fails at req.body (90 + 40 > 120).
+    const overChunked = await relay.request({
+      method: "POST",
+      path: "/api/bots/bot-acct/messages",
+      headers: { "content-type": "application/json" },
+      bodyFrames: [{ chunkB64: Buffer.alloc(40, 98).toString("base64"), eof: false }],
+    });
+    expect(overChunked.status).toBe(503);
+    expect(overChunked.json.code).toBe("bridge_busy");
+    expect(handledCount).toBe(0);
+
+    // Cancelling stream 1 releases its 90-byte reservation so a complete 90-byte request dispatches and releases.
+    stream1.cancel();
+    await new Promise((r) => setTimeout(r, 30));
+
+    const validJson = JSON.stringify({ text: "a".repeat(79) }); // 90 bytes
+    expect(Buffer.byteLength(validJson)).toBe(90);
+    const afterCancel = await relay.request({
+      method: "POST",
+      path: "/api/bots/bot-acct/messages",
+      headers: { "content-type": "application/json", "content-length": "90" },
+      body: validJson,
+    });
+    expect(afterCancel.status).toBe(201);
+    expect(handledCount).toBe(1);
+
+    // Dispatch released the 90 bytes, so another 90-byte request also succeeds.
+    const afterDispatch = await relay.request({
+      method: "POST",
+      path: "/api/bots/bot-acct/messages",
+      headers: { "content-type": "application/json", "content-length": "90" },
+      body: validJson,
+    });
+    expect(afterDispatch.status).toBe(201);
+    expect(handledCount).toBe(2);
+
+    // Policy denial on a pending stream releases its reservation.
+    const stream4 = relay.openStream({
+      method: "POST",
+      path: "/api/bots/bot-acct/messages",
+      headers: { "content-type": "application/json" },
+      bodyFrames: [{ chunkB64: chunk90, eof: false }],
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    policyRefusal = "Org Policy disables remote access.";
+    const triggerPolicy = await relay.request({ method: "GET", path: "/api/bots" });
+    expect(triggerPolicy.status).toBe(403);
+    expect((await stream4.head).status).toBe(403);
+    policyRefusal = undefined;
+
+    const afterPolicy = await relay.request({
+      method: "POST",
+      path: "/api/bots/bot-acct/messages",
+      headers: { "content-type": "application/json", "content-length": "90" },
+      body: validJson,
+    });
+    expect(afterPolicy.status).toBe(201);
+
+    // Socket disconnect releases pending reservations before reconnect.
+    relay.openStream({
+      method: "POST",
+      path: "/api/bots/bot-acct/messages",
+      headers: { "content-type": "application/json" },
+      bodyFrames: [{ chunkB64: chunk90, eof: false }],
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    relay.ws?.terminate();
+    await relay.waitForHost();
+
+    const afterReconnect = await relay.request({
+      method: "POST",
+      path: "/api/bots/bot-acct/messages",
+      headers: { "content-type": "application/json", "content-length": "90" },
+      body: validJson,
+    });
+    expect(afterReconnect.status).toBe(201);
+  });
+
+  it("rechecks admin session liveness and managed policy after reading route bodies", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pwa-bridge-recheck-"));
+    dirs.push(dir);
+    let live = true;
+    let policyRefusal: string | undefined;
+    let openPairingCalls = 0;
+
+    let currentConfig = loadPwaBridgeConfig(dir);
+    currentConfig = {
+      ...currentConfig,
+      enabled: true,
+      relayUrl: "https://relay.mxhan.com",
+      hostId: "mac-mini",
+      bridgeSecret: "omb_bridge_recheck_secret_12345",
+    };
+
+    const handler = createPwaBridgeRoutes({
+      bridge: () => ({
+        status: () => ({ state: "connected", lastConnectedAt: Date.now(), lastError: null, activeStreams: 0 }),
+        config: () => ({ ...currentConfig }),
+        applyConfig: (next) => {
+          currentConfig = { ...next };
+        },
+        stop: () => {},
+      }),
+      dataDir: dir,
+      sessions: {
+        isLive: () => live,
+        openPairing: () => {
+          openPairingCalls += 1;
+          return { id: "p1", code: "123456", credential: "omb_pair_123", expiresAt: Date.now() + 60_000 };
+        },
+      },
+      managedRemoteAccessRefusal: () => policyRefusal,
+    });
+
+    const invoke = async (method: string, path: string, body: unknown, duringRead: () => void) => {
+      const statusOut: { status?: number; body?: Record<string, unknown> } = {};
+      const res = {} as any;
+      await dispatchRoutes([handler], {
+        req: {} as any,
+        res,
+        url: new URL(`http://127.0.0.1${path}`),
+        path,
+        method,
+        auth: {
+          kind: "session",
+          via: "cookie",
+          scopes: ["admin", "client"],
+          session: { id: "admin-sess-1" } as any,
+        },
+        json: (_r, status, payload) => {
+          statusOut.status = status;
+          statusOut.body = payload as Record<string, unknown>;
+        },
+        readBody: async () => {
+          duringRead();
+          return body;
+        },
+      });
+      return statusOut;
+    };
+
+    // Session revoked while awaiting PUT /api/pwa-bridge body -> 401 and no config mutation.
+    live = true;
+    const putRevoked = await invoke("PUT", "/api/pwa-bridge", { hostId: "hijacked-host" }, () => {
+      live = false;
+    });
+    expect(putRevoked.status).toBe(401);
+    expect(currentConfig.hostId).toBe("mac-mini");
+
+    // Session revoked while awaiting POST /api/pwa-bridge/invite body -> 401 and 0 invites opened.
+    live = true;
+    const inviteRevoked = await invoke("POST", "/api/pwa-bridge/invite", { label: "Phone" }, () => {
+      live = false;
+    });
+    expect(inviteRevoked.status).toBe(401);
+    expect(openPairingCalls).toBe(0);
+
+    // Managed policy flips to deny while awaiting POST /api/pwa-bridge/invite body -> 403 and 0 invites opened.
+    live = true;
+    policyRefusal = undefined;
+    const inviteDenied = await invoke("POST", "/api/pwa-bridge/invite", { label: "Phone" }, () => {
+      policyRefusal = "Org Policy disables remote access.";
+    });
+    expect(inviteDenied.status).toBe(403);
+    expect(inviteDenied.body?.code).toBe("managed_policy");
+    expect(openPairingCalls).toBe(0);
   });
 });
 

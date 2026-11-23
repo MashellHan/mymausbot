@@ -18,6 +18,7 @@ import {
   PWA_BRIDGE_MAX_BODY_BYTES,
   PWA_BRIDGE_MAX_CONCURRENT_STREAMS,
   PWA_BRIDGE_MAX_FRAME_BYTES,
+  PWA_BRIDGE_MAX_PENDING_BODY_BYTES,
   PWA_BRIDGE_MAX_WS_BUFFERED_BYTES,
   PWA_BRIDGE_SUBPROTOCOL,
   decodeBase64Chunk,
@@ -41,6 +42,7 @@ export {
   PWA_BRIDGE_MAX_BODY_BYTES,
   PWA_BRIDGE_MAX_CONCURRENT_STREAMS,
   PWA_BRIDGE_MAX_FRAME_BYTES,
+  PWA_BRIDGE_MAX_PENDING_BODY_BYTES,
   PWA_BRIDGE_MAX_WS_BUFFERED_BYTES,
   PWA_BRIDGE_SUBPROTOCOL,
   isBridgeRouteAllowed,
@@ -65,6 +67,7 @@ export interface PwaBridgeOptions {
   refusal?: string | null;
   heartbeatIntervalMs?: number;
   heartbeatTimeoutMs?: number;
+  maxPendingBodyBytes?: number;
   reconnectDelaysMs?: readonly number[];
   jitterFactor?: () => number;
   log?: (line: string) => void;
@@ -100,6 +103,7 @@ interface ActiveStream {
   headers: HeaderMap;
   declaredContentLength?: number;
   pendingChunks: Buffer[];
+  bufferedBytes: number;
   bodyBytesReceived: number;
   requestEnded: boolean;
   dispatched: boolean;
@@ -120,6 +124,7 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
   let currentConfig = loadPwaBridgeConfig(options.dataDir);
   const heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
   const heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? DEFAULT_HEARTBEAT_TIMEOUT_MS;
+  const maxPendingBodyBytes = options.maxPendingBodyBytes ?? PWA_BRIDGE_MAX_PENDING_BODY_BYTES;
   const reconnectDelays = options.reconnectDelaysMs ?? RECONNECT_BACKOFF_MS;
   const jitter = options.jitterFactor ?? Math.random;
 
@@ -132,6 +137,7 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let attempt = 0;
   let lastInboundAt = 0;
+  let pendingBodyBytes = 0;
 
   const streamMeta = new WeakMap<object, StreamMeta>();
   const streams = new Map<string, ActiveStream>();
@@ -202,11 +208,19 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
     }
   };
 
+  const releasePendingBytes = (stream: ActiveStream) => {
+    if (stream.bufferedBytes > 0) {
+      pendingBodyBytes = Math.max(0, pendingBodyBytes - stream.bufferedBytes);
+      stream.bufferedBytes = 0;
+    }
+  };
+
   const cleanupStream = (streamId: string, destroy = true) => {
     const stream = streams.get(streamId);
     if (!stream) return;
     stream.finished = true;
     stream.pendingChunks.length = 0;
+    releasePendingBytes(stream);
     streams.delete(streamId);
     if (destroy) {
       stream.clientReq?.destroy();
@@ -278,6 +292,7 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
           ? stream.pendingChunks[0]!
           : Buffer.concat(stream.pendingChunks, stream.bodyBytesReceived);
     stream.pendingChunks.length = 0;
+    releasePendingBytes(stream);
 
     if (stream.method !== "GET" && stream.method !== "HEAD" && stream.declaredContentLength === undefined) {
       stream.headers["content-length"] = String(body.length);
@@ -445,6 +460,10 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
       sendImmediateJson(socket, frame.streamId, 400, { error: "unexpected request body on GET/HEAD" });
       return;
     }
+    if (scrubbed.declaredContentLength !== undefined && pendingBodyBytes + scrubbed.declaredContentLength > maxPendingBodyBytes) {
+      sendImmediateJson(socket, frame.streamId, 503, { error: "Bridge request buffer full", code: "bridge_busy" });
+      return;
+    }
 
     const expectedPath = target.url.pathname + target.url.search;
     const stream: ActiveStream = {
@@ -456,6 +475,7 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
       headers: scrubbed.headers,
       declaredContentLength: scrubbed.declaredContentLength,
       pendingChunks: [],
+      bufferedBytes: 0,
       bodyBytesReceived: 0,
       requestEnded: false,
       dispatched: false,
@@ -522,7 +542,18 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
       cleanupStream(frame.streamId, true);
       return;
     }
-    if (chunk.length > 0) stream.pendingChunks.push(chunk);
+    if (chunk.length > 0) {
+      if (pendingBodyBytes + chunk.length > maxPendingBodyBytes) {
+        if (!stream.responseStarted) {
+          sendImmediateJson(socket, frame.streamId, 503, { error: "Bridge request buffer full", code: "bridge_busy" });
+        }
+        cleanupStream(frame.streamId, true);
+        return;
+      }
+      pendingBodyBytes += chunk.length;
+      stream.bufferedBytes += chunk.length;
+      stream.pendingChunks.push(chunk);
+    }
     if (frame.eof) {
       stream.requestEnded = true;
       dispatchStream(socket, stream);
