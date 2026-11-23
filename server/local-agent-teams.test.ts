@@ -316,12 +316,23 @@ describe("local Agent Team provider", () => {
     let time = Date.UTC(2026, 10, 9, 10);
     const seat = {
       pane_id: "w6:p1", workspace_id: "w6", name: "opencode-member", agent: "opencode", agent_status: "done",
+      terminal_id: "term_opencode",
       agent_session: { kind: "id", agent: "opencode", source: "herdr:opencode", value: sessionId },
     };
     let agents = [seat, { ...seat, pane_id: "w6:p2", name: "unverified", agent_session: { ...seat.agent_session, source: "other:opencode" } },
       { ...seat, pane_id: "w6:p3", name: "legacy", agent_session: { ...seat.agent_session, value: legacyId } }];
-    const provider = createLocalAgentTeamsProvider({ home, codexHome: join(home, ".codex"), now: () => time,
-      run: async (args) => args.at(-2) === "workspace" ? workspaces : JSON.stringify({ result: { agents } }) });
+    let recheckedAgents: typeof agents | undefined;
+    const makeProvider = () => {
+      let firstRead = true;
+      return createLocalAgentTeamsProvider({ home, codexHome: join(home, ".codex"), now: () => time,
+        bindingCachePath: join(home, "bindings.json"), run: async (args) => {
+          if (args.at(-2) === "workspace") return workspaces;
+          const listed = firstRead ? agents : recheckedAgents ?? agents;
+          firstRead = !firstRead;
+          return JSON.stringify({ result: { agents: listed } });
+        } });
+    };
+    const provider = makeProvider();
     write(time - 500);
     expect((await provider.get()).teams[0]!.agents[0]!.tokenUsage24h).toMatchObject({ coverage: "unavailable", knownTokens: null });
 
@@ -341,10 +352,20 @@ describe("local Agent Team provider", () => {
     expect(unverified!.tokenUsage24h).toMatchObject({ coverage: "unavailable", knownTokens: null });
     expect(legacy!.tokenUsage24h).toMatchObject({ coverage: "partial", knownTokens: 235, estimatedCost: { coverage: "partial" } });
 
-    agents = [...agents, { ...seat, pane_id: "w6:p4", name: "duplicate" }];
+    const restarted = makeProvider();
+    const restored = (await restarted.get()).teams[0]!.agents[0]!;
+    expect(restored.tokenUsage24h).toEqual(verified!.tokenUsage24h);
+    expect(restored.tokenUsage7d).toEqual(verified!.tokenUsage7d);
+
+    recheckedAgents = [...agents, { ...seat, pane_id: "w6:p4", name: "duplicate" }];
     time += 2_000;
-    const duplicate = (await provider.get()).teams[0]!.agents;
-    expect(duplicate.map((member) => member.tokenUsage24h?.coverage)).toEqual(["unavailable", "unavailable", "partial", "unavailable"]);
+    const duplicate = (await restarted.get()).teams[0]!.agents;
+    expect(duplicate.map((member) => member.tokenUsage24h?.coverage)).toEqual(["unavailable", "unavailable", "partial"]);
+
+    agents = [seat];
+    recheckedAgents = undefined;
+    const rebound = (await makeProvider().get()).teams[0]!.agents[0]!;
+    expect(rebound.tokenUsage7d).toMatchObject({ coverage: "unavailable", knownTokens: null });
   });
 
   it("computes per-member 24h and 7d tokens and sub-cent USD cost across turn_context model switches", async () => {
@@ -608,11 +629,14 @@ describe("local Agent Team provider", () => {
     ].join("\n") + "\n");
     let pane = "w6:p1";
     let time = Date.UTC(2026, 10, 9, 10);
-    const provider = createLocalAgentTeamsProvider({ codexHome: home, now: () => time,
+    let terminal = "term_original";
+    const makeProvider = () => createLocalAgentTeamsProvider({ codexHome: home, now: () => time,
+      bindingCachePath: join(home, "bindings.json"),
       run: async (args) => args.at(-2) === "workspace" ? workspaces : JSON.stringify({ result: { agents: [{
-        pane_id: pane, workspace_id: "w6", name: "migrated-seat", agent: "codex", agent_status: "working",
+        pane_id: pane, workspace_id: "w6", name: "migrated-seat", agent: "codex", agent_status: "working", terminal_id: terminal,
         agent_session: { kind: "id", agent: "codex", source: "herdr:codex", value: SESSION },
       }] } }) });
+    const provider = makeProvider();
     const first = (await provider.get()).teams[0]!.agents[0]!;
     expect(first.tokenUsage24h).toEqual({
       coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null },
@@ -643,16 +667,17 @@ describe("local Agent Team provider", () => {
     expect(afterPostBound.tokenUsage7d!.estimatedCost.usd).toBeCloseTo(0.0012, 12);
 
     time = Date.UTC(2026, 10, 9, 11, 15);
-    const restarted = createLocalAgentTeamsProvider({ codexHome: home, now: () => time,
-      run: async (args) => args.at(-2) === "workspace" ? workspaces : JSON.stringify({ result: { agents: [{
-        pane_id: pane, workspace_id: "w6", name: "migrated-seat", agent: "codex", agent_status: "working",
-        agent_session: { kind: "id", agent: "codex", source: "herdr:codex", value: SESSION },
-      }] } }) });
-    const afterRestart = (await restarted.get()).teams[0]!.agents[0]!;
-    expect(afterRestart.tokenUsage24h).toEqual({
+    const afterRestart = (await makeProvider().get()).teams[0]!.agents[0]!;
+    expect(afterRestart.tokenUsage24h).toEqual(afterPostBound.tokenUsage24h);
+    expect(afterRestart.tokenUsage7d).toEqual(afterPostBound.tokenUsage7d);
+
+    terminal = "term_replacement";
+    const replacement = makeProvider();
+    const afterReplacement = (await replacement.get()).teams[0]!.agents[0]!;
+    expect(afterReplacement.tokenUsage24h).toEqual({
       coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null },
     });
-    expect(afterRestart.tokenUsage7d).toEqual({
+    expect(afterReplacement.tokenUsage7d).toEqual({
       coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null },
     });
 
@@ -663,7 +688,7 @@ describe("local Agent Team provider", () => {
       },
     } }) + "\n");
     time = Date.UTC(2026, 10, 9, 11, 25);
-    const postRestartAppend = (await restarted.get()).teams[0]!.agents[0]!;
+    const postRestartAppend = (await replacement.get()).teams[0]!.agents[0]!;
     expect(postRestartAppend.tokenUsage24h).toMatchObject({
       coverage: "partial", knownTokens: 50, estimatedCost: { coverage: "partial" },
     });

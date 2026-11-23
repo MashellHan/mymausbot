@@ -236,6 +236,13 @@ OpenCode member cards use the uniquely verified Herdr session to show the last
 observed model, recognized effort and redacted visible reply. The Host checks
 the binding again before exposing the observation.
 
+Codex and OpenCode member usage is calculated from native session logs after
+the first verified seat observation. The Host caches a fingerprint and start
+time for each currently verified terminal binding in its own data directory.
+Restart the Host with the same Herdr terminal and binding to retain both usage
+windows. A replacement terminal, moved seat or ambiguous session claim starts
+a new attribution window when it is verified again.
+
 ## Per-agent activity
 
 `GET /api/local-dashboard/agents/{paneId}/activity` is the legacy local-owner
