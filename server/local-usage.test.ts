@@ -104,7 +104,8 @@ describe("local Usage projection", () => {
     expect(fresh.view.windows!["1"]).toMatchObject({ commits: 8, knownCommits: 8 });
 
     const prior = structuredClone(snapshot);
-    snapshot.sources = [{ status: "partial", commitStatus: "partial" }];
+    const partialSource = { status: "partial", commitStatus: "partial" };
+    snapshot.sources = [partialSource];
     snapshot.status = "partial";
     for (const rows of [snapshot.daily, snapshot.localHistory.daily]) {
       const today = rows.at(-1)!;
