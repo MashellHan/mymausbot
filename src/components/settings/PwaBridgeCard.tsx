@@ -162,6 +162,9 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
   const [data, setData] = useState<PwaBridgeSettingsResponse | null>(null);
   const [unavailable, setUnavailable] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsOpenRef = useRef(false);
+  settingsOpenRef.current = settingsOpen;
+  const foldToggleEpochRef = useRef(0);
 
   const [relayUrl, setRelayUrl] = useState("");
   const [hostId, setHostId] = useState("");
@@ -185,6 +188,9 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
   const [invite, setInvite] = useState<PwaBridgeInviteResponse | null>(null);
   const [copied, setCopied] = useState<CopyFeedback>("idle");
   const [now, setNow] = useState(() => Date.now());
+  const pairTriggerRef = useRef<HTMLButtonElement>(null);
+  const pairRestoreTargetRef = useRef<HTMLElement | null>(null);
+  const wasInviteOpenRef = useRef(false);
 
   function syncFromResponse(next: PwaBridgeSettingsResponse, forceDrafts = false) {
     setData({ config: next.config, status: next.status });
@@ -224,7 +230,7 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
         if (!next?.config || !next?.status) return;
         syncFromResponse(next, !hasSyncedRef.current);
       } catch (cause) {
-        if (!alive || controller.signal.aborted) return;
+        if (!alive || controller.signal.aborted || readSeq !== readSeqRef.current || writeEpoch !== writeEpochRef.current) return;
         const { status } = errorMeta(cause);
         if (status === 403 || status === 404) {
           setUnavailable(true);
@@ -245,9 +251,22 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
   }, []);
 
   useEffect(() => {
-    if (!invite) return;
-    const timer = setInterval(() => setNow(Date.now()), 15_000);
-    return () => clearInterval(timer);
+    if (invite) {
+      wasInviteOpenRef.current = true;
+      const timer = setInterval(() => setNow(Date.now()), 15_000);
+      return () => clearInterval(timer);
+    }
+    if (wasInviteOpenRef.current) {
+      wasInviteOpenRef.current = false;
+      const target = pairRestoreTargetRef.current;
+      pairRestoreTargetRef.current = null;
+      if (target?.isConnected && !target.hasAttribute("disabled")) {
+        target.focus();
+      } else if (pairTriggerRef.current?.isConnected) {
+        pairTriggerRef.current.focus();
+      }
+    }
+    return undefined;
   }, [invite]);
 
   if (unavailable || !data) return null;
@@ -276,6 +295,7 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
         method: "PUT",
         body: JSON.stringify(payload),
       });
+      writeEpochRef.current += 1;
       syncFromResponse(next, enabled && dirty);
       if (enabled && !next.config.hasBridgeSecret) {
         setSettingsOpen(true);
@@ -307,6 +327,7 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
           defaultBotId: defaultBotId.trim() || null,
         }),
       });
+      writeEpochRef.current += 1;
       syncFromResponse(next, true);
       setSavedNotice(t("pwaBridge.settings.saved"));
     } catch (cause) {
@@ -319,6 +340,7 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
   async function rotateSecret() {
     if (busy) return;
     writeEpochRef.current += 1;
+    const foldEpoch = foldToggleEpochRef.current;
     setBusyAction("rotate");
     setError(null);
     setSavedNotice(null);
@@ -326,12 +348,15 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
       const next = await api<PwaBridgeRotateSecretResponse>("/api/pwa-bridge/rotate-secret", {
         method: "POST",
       });
+      writeEpochRef.current += 1;
       syncFromResponse(next);
-      setRevealedSecret({
-        bridgeSecret: next.bridgeSecret,
-        bridgeSecretSha256: next.bridgeSecretSha256,
-      });
-      setSettingsOpen(true);
+      if (settingsOpenRef.current && foldEpoch === foldToggleEpochRef.current) {
+        setRevealedSecret({
+          bridgeSecret: next.bridgeSecret,
+          bridgeSecretSha256: next.bridgeSecretSha256,
+        });
+        setSettingsOpen(true);
+      }
     } catch (cause) {
       setError(localizedActionError(cause, "rotate", remoteBlocked));
     } finally {
@@ -341,6 +366,12 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
 
   async function createInvite() {
     if (busy || !canPair || !data) return;
+    if (!invite) {
+      pairRestoreTargetRef.current =
+        document.activeElement instanceof HTMLElement && document.activeElement !== document.body
+          ? document.activeElement
+          : pairTriggerRef.current;
+    }
     setBusyAction("invite");
     setError(null);
     setCopied("idle");
@@ -354,6 +385,7 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
       setInvite(next);
       setNow(Date.now());
     } catch (cause) {
+      if (!invite) pairRestoreTargetRef.current = null;
       setError(localizedActionError(cause, "invite", remoteBlocked));
     } finally {
       setBusyAction(null);
@@ -456,6 +488,7 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
 
           <SettingRow title={t("pwaBridge.pair.title")} subtitle={pairSubtitle}>
             <button
+              ref={pairTriggerRef}
               type="button"
               data-pwa-pair-action=""
               disabled={busy || !canPair}
@@ -472,10 +505,13 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
             subtitle={t("pwaBridge.settings.subtitle")}
             value={relayHostLabel(data.config.relayUrl)}
             open={settingsOpen}
-            onToggle={() => setSettingsOpen((prev) => {
-              if (prev) setRevealedSecret(null);
-              return !prev;
-            })}
+            onToggle={() => {
+              foldToggleEpochRef.current += 1;
+              setSettingsOpen((prev) => {
+                if (prev) setRevealedSecret(null);
+                return !prev;
+              });
+            }}
           >
             <div className="flex flex-col gap-4">
               <form data-pwa-bridge-form="" onSubmit={(event) => void saveSettings(event)} className="flex flex-col gap-3">

@@ -310,27 +310,123 @@ describe("PwaBridgeCard", () => {
     expect(document.activeElement).toBe(pairBtn);
   });
 
-  it("recovers from transient initial load failures, ignores stale GETs after save, and stops polling on 403", async () => {
+  it("does not reopen Relay settings or expose the secret if collapsed while rotate-secret is in flight", async () => {
+    let resolveRotate!: (value: unknown) => void;
+    mocks.api.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/api/pwa-bridge" && (!init?.method || init.method === "GET")) {
+        return Promise.resolve(makeState());
+      }
+      if (path === "/api/pwa-bridge/rotate-secret" && init?.method === "POST") {
+        return new Promise((resolve) => {
+          resolveRotate = resolve;
+        });
+      }
+      throw new Error(`unexpected api call: ${path}`);
+    });
+
+    await renderCard();
+
+    const foldToggle = host.querySelector<HTMLButtonElement>('[data-settings-disclosure="pwa-bridge-settings"] button')!;
+    await act(async () => {
+      foldToggle.click();
+    });
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>("[data-pwa-rotate-secret]")!.click();
+    });
+
+    await act(async () => {
+      foldToggle.click();
+    });
+    expect(foldToggle.getAttribute("aria-expanded")).toBe("false");
+
+    await act(async () => {
+      resolveRotate({
+        ...makeState(),
+        bridgeSecret: "omb_bridge_once_secret_value",
+        bridgeSecretSha256: "b".repeat(64),
+      });
+    });
+
+    expect(foldToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(host.querySelector("[data-pwa-secret-revealed]")).toBeNull();
+    expect(host.textContent).not.toContain("omb_bridge_once_secret_value");
+  });
+
+  it("restores focus to Pair PWA after a delayed invite blurs the disabled button", async () => {
+    let resolveInvite!: (value: unknown) => void;
+    mocks.api.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/api/pwa-bridge" && (!init?.method || init.method === "GET")) {
+        return Promise.resolve(makeState());
+      }
+      if (path === "/api/pwa-bridge/invite" && init?.method === "POST") {
+        return new Promise((resolve) => {
+          resolveInvite = resolve;
+        });
+      }
+      throw new Error(`unexpected api call: ${path}`);
+    });
+
+    await renderCard();
+
+    const pairBtn = host.querySelector<HTMLButtonElement>("[data-pwa-pair-action]")!;
+    pairBtn.focus();
+    await act(async () => {
+      pairBtn.click();
+    });
+    document.body.tabIndex = -1;
+    document.body.focus();
+    document.body.removeAttribute("tabindex");
+    expect(document.activeElement).toBe(document.body);
+
+    await act(async () => {
+      resolveInvite({
+        id: "pair_delayed",
+        inviteUrl: "https://mausbot.mxhan.com/#pair=eyJyZWxheVVybCI6Imh0dHBzOi8vcmVsYXkubXhoYW4uY29tIiwiY3JlZGVudGlhbCI6Im9tYl9wYWlyX2RlbGF5ZWQifQ",
+        expiresAt: Date.now() + 600_000,
+        relayUrl: "https://relay.mxhan.com",
+        defaultBotId: "acct-bot",
+      });
+    });
+
+    expect(document.body.querySelector("[data-settings-dialog]")).not.toBeNull();
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    expect(document.body.querySelector("[data-settings-dialog]")).toBeNull();
+    expect(document.activeElement).toBe(pairBtn);
+  });
+
+  it("recovers from transient initial load failures, ignores stale GETs and stale 404s, and stops polling on current 403", async () => {
     vi.useFakeTimers();
 
-    let call = 0;
-    let resolveStaleGet!: (value: PwaBridgeSettingsResponse) => void;
-    let saved = makeState({ config: { relayUrl: "https://sg-relay.mxhan.com" } });
+    let getCall = 0;
+    let rejectStale404!: (err: unknown) => void;
+    let resolveDuringSaveGet!: (value: PwaBridgeSettingsResponse) => void;
+    let resolveSave!: (value: PwaBridgeSettingsResponse) => void;
+    const saved = makeState({ config: { relayUrl: "https://sg-relay.mxhan.com" } });
 
     mocks.api.mockImplementation((path: string, init?: RequestInit) => {
       if (path === "/api/pwa-bridge" && (!init?.method || init.method === "GET")) {
-        call += 1;
-        if (call === 1) return Promise.reject(Object.assign(new Error("temporarily down"), { status: 503 }));
-        if (call === 2) return Promise.resolve(makeState());
-        if (call === 3) {
+        getCall += 1;
+        if (getCall === 1) {
+          return new Promise<PwaBridgeSettingsResponse>((_resolve, reject) => {
+            rejectStale404 = reject;
+          });
+        }
+        if (getCall === 2) return Promise.resolve(makeState());
+        if (getCall === 3) {
           return new Promise<PwaBridgeSettingsResponse>((resolve) => {
-            resolveStaleGet = resolve;
+            resolveDuringSaveGet = resolve;
           });
         }
         return Promise.resolve(saved);
       }
       if (path === "/api/pwa-bridge" && init?.method === "PUT") {
-        return Promise.resolve(saved);
+        return new Promise<PwaBridgeSettingsResponse>((resolve) => {
+          resolveSave = resolve;
+        });
       }
       throw new Error(`unexpected api call: ${path}`);
     });
@@ -346,13 +442,14 @@ describe("PwaBridgeCard", () => {
     expect(host.querySelector('[data-settings-block="pwa-bridge"]')).not.toBeNull();
 
     await act(async () => {
+      rejectStale404(Object.assign(new Error("stale 404"), { status: 404 }));
+    });
+    expect(host.querySelector('[data-settings-block="pwa-bridge"]')).not.toBeNull();
+
+    await act(async () => {
       host.querySelector<HTMLButtonElement>('[data-settings-disclosure="pwa-bridge-settings"] button')!.click();
     });
     const relayInput = host.querySelector<HTMLInputElement>("#pwa-bridge-relay-url")!;
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5_000);
-    });
 
     await act(async () => {
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
@@ -360,10 +457,18 @@ describe("PwaBridgeCard", () => {
       relayInput.dispatchEvent(new Event("input", { bubbles: true }));
       host.querySelector<HTMLButtonElement>("[data-pwa-bridge-save]")!.click();
     });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+
+    await act(async () => {
+      resolveSave(saved);
+    });
     expect(relayInput.value).toBe("https://sg-relay.mxhan.com");
 
     await act(async () => {
-      resolveStaleGet(makeState({ config: { relayUrl: "https://relay.mxhan.com" } }));
+      resolveDuringSaveGet(makeState({ config: { relayUrl: "https://relay.mxhan.com" } }));
     });
     expect(relayInput.value).toBe("https://sg-relay.mxhan.com");
 
