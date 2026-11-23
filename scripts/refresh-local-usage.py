@@ -51,6 +51,10 @@ def child_environment():
         "SSH_ASKPASS_REQUIRE": "never", "GCM_INTERACTIVE": "never"}
 
 
+def _opencode_environment():
+    return {name: os.environ[name] for name in ("XDG_DATA_HOME", "OPENCODE_DB") if name in os.environ}
+
+
 class LocalGitOnly:
     SubprocessError = subprocess.SubprocessError
     CalledProcessError = subprocess.CalledProcessError
@@ -278,23 +282,17 @@ def _collect_worker():
                 return original_classify(self, cwd, context)
 
             collector.Classifier.classify = classify
-            result = collector.collect(request["config"], request["device"],
-                                       at=collector.instant(request["at"]),
-                                       history_days=request["history_days"])
-            classifier = collector.Classifier(request["repositories"], request["config"])
-            opencode, error = local_usage_models.opencode_events(
-                Path(request["config"]["home"]).expanduser(), classifier.classify,
-                collector.instant(result["start"]), collector.instant(result["capturedAt"]),
-                env=request.get("opencodeEnvironment", {}),
-            )
-            if opencode:
-                result["tokens"].extend(opencode)
-                result["errors"] = [failure for failure in result["errors"]
-                                    if failure != {"source": "tokens", "code": "NoRetainedLogs"}]
-            if error:
-                result["errors"].append({"source": "opencode", "code": error})
-            if opencode or error:
-                result["status"] = "partial" if result["errors"] else "ok"
+            if request["stage"] == "opencode":
+                classifier = collector.Classifier(request["repositories"], request["config"])
+                result = local_usage_models.opencode_events(
+                    Path(request["config"]["home"]).expanduser(), classifier.classify,
+                    collector.instant(request["start"]), collector.instant(request["at"]),
+                    env=request["opencodeEnvironment"],
+                )
+            else:
+                result = collector.collect(request["config"], request["device"],
+                                           at=collector.instant(request["at"]),
+                                           history_days=request["history_days"])
         json.dump(result, sys.stdout)
     except Exception as error:
         print(f"usage stage=local-collect failed type={type(error).__name__}", file=sys.stderr, flush=True)
@@ -337,8 +335,7 @@ def collect_local(collector_path, config, device, at=None, history_days=30):
     fields = ("home", "repoRoots", "authorEmails", "workGithubOrgs", "personalGithubOwners", "m365Repos")
     request = {"collector": str(collector_path), "config": {k: config[k] for k in fields if k in config},
                "device": device, "at": at.isoformat() if at else None, "history_days": history_days,
-               "opencodeEnvironment": {name: os.environ[name] for name in ("XDG_DATA_HOME", "OPENCODE_DB")
-                                       if name in os.environ}}
+               "opencodeEnvironment": _opencode_environment()}
     repositories, failed_roots, errors = [], [], []
     for index, root in enumerate(config["repoRoots"], 1):
         print(f"usage stage=repository root={index} begin", file=sys.stderr, flush=True)
@@ -364,6 +361,25 @@ def collect_local(collector_path, config, device, at=None, history_days=30):
             os._exit(1)
         print("usage stage=local-collect timeout lock-retained", file=sys.stderr, flush=True)
         raise RuntimeError("Local activity worker cleanup is unverified") from None
+    tokens, opencode_error = [], "ReadLimit"
+    remaining = deadline - time.monotonic()
+    if remaining > 0:
+        try:
+            tokens, opencode_error = _run_worker({**request, "stage": "opencode", "repositories": repositories,
+                "failedRoots": failed_roots, "start": result["start"], "at": result["capturedAt"]},
+                min(remaining, local_usage_models.MAX_OPENCODE_READ_SECONDS + 2))
+        except subprocess.TimeoutExpired:
+            pass
+        except (OSError, ValueError):
+            opencode_error = "DatabaseReadError"
+    if tokens:
+        result["tokens"].extend(tokens)
+        result["errors"] = [failure for failure in result["errors"]
+                            if failure != {"source": "tokens", "code": "NoRetainedLogs"}]
+    if opencode_error:
+        result["errors"].append({"source": "opencode", "code": opencode_error})
+    if tokens or opencode_error:
+        result["status"] = "partial" if result["errors"] else "ok"
     if errors or result.get("errors"):
         collector = load_collector(collector_path)
         previous = collector.read_json(Path(config["storageDir"]).expanduser() / "machines" / (device + ".json"), {})
@@ -1044,9 +1060,12 @@ def refresh_primary(collector_path, config, azure_config_dir, *, publish=False, 
                                "output": str(Path(temporary) / (stage + ".json")),
                                "publish": publish, "skipApi": False, "reuseSources": reuse_sources,
                                "primary": primary}
+                    environment = child_environment()
+                    if stage == "legacy":
+                        environment.update(_opencode_environment())
                     process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--worker"],
                         stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                        start_new_session=True, env=child_environment())
+                        start_new_session=True, env=environment)
                     processes[stage] = process
                     process.stdin.write(json.dumps(request).encode())
                     process.stdin.close()

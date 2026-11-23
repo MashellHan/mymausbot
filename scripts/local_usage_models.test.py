@@ -88,8 +88,9 @@ class OpenCodeEventsTests(unittest.TestCase):
                  self.payload(self.start_ms + 1000, "sk-" + "a" * 24, cwd="relative/cwd")),
             ])
             db.executemany("INSERT INTO message VALUES (?, ?, ?, ?)", [
-                ("legacy-copy", "current", self.start_ms, self.payload(self.start_ms, legacy=True)),
-                ("legacy-migrated", "migrated", self.start_ms, self.payload(self.start_ms, legacy=True)),
+                ("crossing", "current", self.start_ms, self.payload(self.start_ms, legacy=True)),
+                ("legacy-migrated", "migrated", self.start_ms,
+                 self.payload(self.start_ms, "gemini-4-carbon", legacy=True)),
                 ("legacy-only", "legacy", self.start_ms + 1000,
                  self.payload(self.start_ms + 1000, "mai-code-2", legacy=True, cwd="/fixture/work")),
             ])
@@ -99,7 +100,7 @@ class OpenCodeEventsTests(unittest.TestCase):
             events, error = models.opencode_events(home, classify, self.start, AT, env={})
             self.assertIsNone(error)
             self.assertEqual(path.read_bytes(), file_bytes)
-            self.assertEqual(len(events), 3)
+            self.assertEqual(len(events), 4)
             indexed = {event["model"]: event for event in events}
             valid = indexed["gemini-4-hydrogen"]
             self.assertEqual(valid, {
@@ -109,10 +110,12 @@ class OpenCodeEventsTests(unittest.TestCase):
                 "cacheWrite": 4, "reasoning": 3,
             })
             self.assertEqual(indexed["mai-code-2"]["category"], "work")
+            self.assertEqual(indexed["gemini-4-carbon"]["category"], "personal")
             self.assertEqual(indexed["unknown"]["category"], "unclassified")
             self.assertEqual(models.opencode_events(home, classify, self.start, AT, env={}), (events, None))
             projected = models.daily_models(collector_fixture(), [{"tokens": events}], snapshot([daily(TODAY)]))
-            self.assertEqual({row["model"] for row in projected[TODAY]}, {"gemini-4-hydrogen", "mai-code-2"})
+            self.assertEqual({row["model"] for row in projected[TODAY]},
+                             {"gemini-4-hydrogen", "gemini-4-carbon", "mai-code-2"})
             self.assertNotIn("Synthetic private text", json.dumps(events))
             self.assertNotIn("/fixture", json.dumps(events))
 

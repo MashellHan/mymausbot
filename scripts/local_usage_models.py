@@ -218,7 +218,7 @@ def opencode_events(home, classify, start, end, *, env=None):
                     predicate = "AND msg.type = 'assistant'"
                 elif "session_message" in tables:
                     predicate = ("AND NOT EXISTS (SELECT 1 FROM session_message AS migrated "
-                                 "WHERE migrated.session_id = msg.session_id)")
+                                 "WHERE migrated.session_id = msg.session_id AND migrated.id = msg.id)")
                 else:
                     predicate = ""
                 try:

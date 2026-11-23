@@ -561,15 +561,18 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False):
                 raise subprocess.TimeoutExpired("synthetic root", timeout)
             if request["stage"] == "repositories":
                 return [{"path": "/fixture/ready", "name": "ready", "category": "work"}]
+            if request["stage"] == "opencode":
+                return [], None
             return fresh
         collector = types.SimpleNamespace(read_json=lambda path, default: old,
             instant=lambda value: dt.datetime.fromisoformat(value.replace("Z", "+00:00")))
         config = {"repoRoots": ["/fixture/ready", "/fixture/failed"], "storageDir": str(self.root)}
         with patch.object(usage, "_run_worker", side_effect=worker), patch.object(usage, "load_collector", return_value=collector):
             result = usage.collect_local(self.root / "collector.py", config, "fixture", at=at, history_days=59)
-        self.assertEqual([call[0]["stage"] for call in calls], ["repositories", "repositories", "collect"])
+        self.assertEqual([call[0]["stage"] for call in calls], ["repositories", "repositories", "collect", "opencode"])
         self.assertTrue(all(timeout <= 15 for _, timeout in calls[:2]))
-        self.assertLessEqual(calls[-1][1], 120)
+        self.assertLessEqual(calls[-2][1], 120)
+        self.assertLessEqual(calls[-1][1], 14)
         self.assertEqual(result["status"], "partial")
         self.assertEqual(result["tokens"], [
             {"key": "replayed", "at": "2026-11-06T07:00:00Z", "category": "work"},
@@ -581,7 +584,7 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False):
         self.assertEqual(result["retainedCapturedAt"], old["capturedAt"])
         self.assertEqual(result["errors"], [{"source": "repositories", "rootIndex": 2, "code": "TimeoutExpired"}])
 
-    def test_disabled_fetch_only_does_not_retain_previous_commits(self):
+    def test_opencode_timeout_does_not_lose_fresh_commits_or_resurrect_stale_commits(self):
         at = dt.datetime.fromisoformat("2026-11-06T08:00:00+00:00")
         old = {"capturedAt": "2026-11-05T08:00:00Z",
                "tokens": [{"key": "old-token", "at": "2026-11-06T06:00:00Z", "category": "personal"}],
@@ -595,6 +598,8 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False):
             instant=lambda value: dt.datetime.fromisoformat(value.replace("Z", "+00:00")))
         config = {"repoRoots": ["/fixture/ready"], "storageDir": str(self.root)}
         def worker(request, timeout):
+            if request["stage"] == "opencode":
+                raise subprocess.TimeoutExpired("synthetic OpenCode read", timeout)
             return [{"path": "/fixture/ready", "name": "ready", "category": "work"}] if request["stage"] == "repositories" else fresh
         with patch.object(usage, "_run_worker", side_effect=worker), patch.object(usage, "load_collector", return_value=collector):
             result = usage.collect_local(self.root / "collector.py", config, "fixture", at=at, history_days=59)
@@ -602,16 +607,17 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False):
         self.assertEqual([row["key"] for row in result["tokens"]], ["old-token"])
         self.assertEqual(result["retainedTokenCapturedAt"], old["capturedAt"])
         self.assertNotIn("retainedCapturedAt", result)
+        self.assertIn({"source": "opencode", "code": "ReadLimit"}, result["errors"])
 
-    def test_collection_adds_opencode_before_retention_with_separate_error(self):
+    def test_opencode_worker_uses_the_captured_window_and_classifier(self):
         start = "2026-11-06T00:00:00Z"
         cutoff = "2026-11-06T08:00:00Z"
 
         def parse(value):
             return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
 
-        request = {"stage": "collect", "collector": "fixture.py", "config": {"home": str(self.root)},
-                   "failedRoots": [], "repositories": [], "device": "fixture", "at": cutoff, "history_days": 59,
+        request = {"stage": "opencode", "collector": "fixture.py", "config": {"home": str(self.root)},
+                   "failedRoots": [], "repositories": [], "device": "fixture", "start": start, "at": cutoff,
                    "opencodeEnvironment": {"OPENCODE_DB": "fixture.db"}}
         event = {"key": "opaque-event", "at": "2026-11-06T07:59:00Z", "provider": "opencode", "model": "example-model",
                  "input": 1, "output": 2, "cacheRead": 3, "category": "unclassified"}
@@ -623,9 +629,7 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False):
             def classify(self, _cwd, _context=None):
                 return "unclassified"
 
-        local = {"status": "partial", "tokens": [], "start": start, "capturedAt": cutoff,
-                 "errors": [{"source": "tokens", "code": "NoRetainedLogs"}]}
-        collector = types.SimpleNamespace(Classifier=Classifier, instant=parse, collect=lambda *_args, **_kwargs: local)
+        collector = types.SimpleNamespace(Classifier=Classifier, instant=parse)
         output = io.StringIO()
         with (
             patch.object(usage, "load_collector", return_value=collector),
@@ -638,10 +642,7 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False):
         self.assertEqual((home, lower, upper), (self.root, parse(start), parse(cutoff)))
         self.assertEqual(classify("/fixture/repo"), "unclassified")
         self.assertEqual(read.call_args.kwargs, {"env": request["opencodeEnvironment"]})
-        result = json.loads(output.getvalue())
-        self.assertEqual(result["tokens"], [event])
-        self.assertEqual(result["status"], "partial")
-        self.assertEqual(result["errors"], [{"source": "opencode", "code": "ReadFailed"}])
+        self.assertEqual(json.loads(output.getvalue()), [[event], "ReadFailed"])
 
     def test_repeat_disabled_fetch_only_keeps_local_ref_ready_and_marks_covered_days_only(self):
         at = dt.datetime.fromisoformat("2026-11-06T08:00:00+00:00")
@@ -657,6 +658,8 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False):
             instant=lambda value: dt.datetime.fromisoformat(value.replace("Z", "+00:00")))
         config_local = {"repoRoots": ["/fixture/ready"], "storageDir": str(self.root)}
         def worker(request, timeout):
+            if request["stage"] == "opencode":
+                return [], None
             return [{"path": "/fixture/ready", "name": "ready", "category": "work"}] if request["stage"] == "repositories" else fresh
         with patch.object(usage, "_run_worker", side_effect=worker), patch.object(usage, "load_collector", return_value=collector_stub):
             repeat = usage.collect_local(self.root / "collector.py", config_local, "fixture", at=at, history_days=59)
@@ -1188,7 +1191,8 @@ def collect(config):
             workers.append(kwargs)
             return Worker()
 
-        with patch.object(usage, "primary_config"), \
+        opencode_environment = {"XDG_DATA_HOME": str(self.root / "xdg"), "OPENCODE_DB": ":memory:"}
+        with patch.dict(os.environ, opencode_environment), patch.object(usage, "primary_config"), \
              patch.object(usage.local_usage_contributions, "target_lock", return_value=nullcontext()), \
              patch.object(usage.local_usage_contributions, "load_previous", return_value=None), \
              patch.object(usage.subprocess, "Popen", side_effect=spawn):
@@ -1199,6 +1203,10 @@ def collect(config):
         self.assertTrue(all(worker["env"]["GIT_CONFIG_GLOBAL"] == "/dev/null"
                             and worker["env"]["GIT_ASKPASS"] == "/usr/bin/false"
                             and "GH_TOKEN" not in worker["env"] for worker in workers))
+        for key, value in opencode_environment.items():
+            self.assertNotIn(key, workers[0]["env"])
+            self.assertNotIn(key, workers[1]["env"])
+            self.assertEqual(workers[2]["env"][key], value)
 
     def test_primary_passes_only_published_fresh_or_retained_snapshot_to_legacy_worker(self):
         target = self.root / "candidate.json"
