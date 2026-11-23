@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 
 import type { LocalAgentMember, LocalAgentState, LocalAgentTeamsResponse, LocalAgentTeam } from "../shared/local-dashboard.ts";
 import { augmentedPath } from "./env-path.ts";
+import { readOpenCodeMessages } from "./local-agent-opencode-message.ts";
 import { openCodeSessionId, openCodeUsageDatabase, readOpenCodeMemberUsage } from "./local-agent-opencode-usage.ts";
 import { codexSessionId, createLocalAgentSessionReader, dashboardText, unavailableMemberUsage } from "./local-agent-session.ts";
 import { PI_CONTEXT_KEY, parsePiContext, readPiProcessStart, type PiProcessStart } from "./local-agent-pi-context.ts";
@@ -114,13 +115,26 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
       const verifiedIds = new Set(verified.map((agent) => agent.pane_id));
       const openCodeSessions = new Map(verified.flatMap((agent) => {
         const id = openCodeSessionId(agent);
-        return id ? [[agent.pane_id, id] as const] : [];
+        return id ? [[agent.pane_id, { id, agent }] as const] : [];
       }));
-      const openCodeUsage = readOpenCodeMemberUsage(openCodeUsageDatabase(home), openCodeSessions.values(), sampledAt);
+      const openCodeIds = [...openCodeSessions.values()].map(({ id }) => id);
+      const openCodeFile = openCodeUsageDatabase(home);
+      const openCodeUsage = readOpenCodeMemberUsage(openCodeFile, openCodeIds, sampledAt);
       const [observations, roles, piSessions] = await Promise.all([
         observationsFor(agents), localAgentRoles(verified, home), piSessionsFor(verified),
       ]);
       const piContexts = await observePiContexts(verified, piSessions, run, readProcessStart, now);
+      const openCodeMessages = readOpenCodeMessages(openCodeFile, openCodeIds, "preview");
+      const liveOpenCode = openCodeMessages.size ? await run(["--session", "default", "agent", "list"])
+        .then((output) => verifiedLocalAgentMembers(herdrRows(output, "agents"))).catch(() => []) : [];
+      const openCodePreviews = new Map(liveOpenCode.flatMap((agent) => {
+        const pane = String(agent.pane_id);
+        const original = openCodeSessions.get(pane);
+        const session = openCodeSessionId(agent);
+        return original && session === original.id && agent.cwd === original.agent.cwd &&
+          localAgentOccupantId(agent, pane) === localAgentOccupantId(original.agent, pane)
+          ? [[pane, openCodeMessages.get(session)] as const] : [];
+      }));
       const sessionTeams = new Map<string, Set<string>>();
       const sessionClaims = new Map<string, number>();
       for (const agent of agents) {
@@ -140,7 +154,8 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         seen.add(id);
         const sessionId = codexSessionId(agent);
         const verifiedCodexMember = verifiedIds.has(id) && sessionId !== null && sessionClaims.get(sessionId) === 1;
-        const openCodeSession = openCodeSessions.get(id);
+        const openCodeSession = openCodeSessions.get(id)?.id;
+        const openCode = current() ? openCodePreviews.get(id) : undefined;
         const observation = sessionId ? observations.get(sessionId) : null;
         const pi = verifiedIds.has(id) ? piSessions.get(id) : null;
         if (observation?.lastActivityAt != null) team.lastActivityAt = Math.max(team.lastActivityAt ?? 0, observation.lastActivityAt);
@@ -159,11 +174,11 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         const member: LocalAgentMember = {
           id, name: dashboardText(agent.name, 100) || id, kind: dashboardText(agent.agent, 40) || "unknown",
           ...(occupantId ? { occupantId } : {}),
-          role: dashboardText(roles.get(id), 40), model: observation?.model ?? pi?.model ?? null,
-          reasoningEffort: observation?.reasoningEffort ?? pi?.reasoningEffort ?? null, contextUsed: observation?.contextUsed ?? null,
+          role: dashboardText(roles.get(id), 40), model: observation?.model ?? pi?.model ?? openCode?.model ?? null,
+          reasoningEffort: observation?.reasoningEffort ?? pi?.reasoningEffort ?? openCode?.reasoningEffort ?? null, contextUsed: observation?.contextUsed ?? null,
           contextWindow: observation?.contextWindow ?? (current() ? piContexts.get(id) : undefined) ?? null,
           state: state(agent.agent_status), taskHint: observation?.taskHint ?? null,
-          messagePreview: verifiedIds.has(id) ? observation?.messagePreview ?? pi?.preview ?? null : null,
+          messagePreview: verifiedIds.has(id) ? observation?.messagePreview ?? pi?.preview ?? openCode?.preview ?? null : null,
           tokenUsage24h: usage.tokenUsage24h,
           tokenUsage7d: usage.tokenUsage7d,
         };
