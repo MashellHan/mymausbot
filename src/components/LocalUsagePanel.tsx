@@ -4,7 +4,7 @@ import { cn } from "@/lib/cn";
 import { localUsageView, retainUsageSnapshot, type UsageTrendDay, type UsageWindow } from "@/lib/local-usage-view";
 import { tokenTrendStacks, weeklyUsageTrend, type TokenTrendMode, type TokenTrendSeries, type UsageTrendBucket } from "@/lib/local-usage-trends";
 import { usageTrendRanges, type UsageTrendRange } from "../../shared/local-usage-range";
-import { metricText, observedCountText, UsageCount, UsageChange, useUsageMetricHint, UsageSourceContext, usageMetrics as metrics, type UsageMetric as Metric } from "./LocalUsageValues";
+import { compactMetricText, metricText, observedCountText, UsageCount, UsageChange, useUsageMetricHint, UsageSourceContext, usageMetrics as metrics, type UsageMetric as Metric } from "./LocalUsageValues";
 import { UsageDailyTable, UsageRepositoryTable, shortUsagePeriods } from "./LocalUsageTables";
 import { costText, UsageModelPanel } from "./LocalUsageModels";
 import { InfoHint } from "./InfoHint";
@@ -51,8 +51,7 @@ function WindowCard({ window }: { window: UsageWindow }) {
   const rows = [
     ["prs", null, window.comparison.prs ?? window.comparison.known?.prs ?? null],
     ["commits", null, window.comparison.commits ?? window.comparison.known?.commits ?? null],
-    ["totalTokens", window.totalTokens !== null && window.totalTokens >= 1_000_000
-      ? new Intl.NumberFormat(activeLocale(), { notation: "compact", maximumFractionDigits: 1 }).format(window.totalTokens) : metricText(window.totalTokens), window.comparison.totalTokens],
+    ["totalTokens", compactMetricText(window.totalTokens), window.comparison.totalTokens],
   ] as const;
   return (
     <section className="min-w-0 rounded-xl border border-hairline/60 bg-card p-3">
@@ -79,7 +78,7 @@ function WindowCard({ window }: { window: UsageWindow }) {
         <dl data-usage-token-breakdown className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-1 text-[13px] tabular-nums">
           <div className="min-w-0 [overflow-wrap:anywhere]">
             <dt className="text-ink-secondary">{t("computer.usage.cachedInput")}</dt>
-            <dd className="text-ink">{metricText(cachedInput)}{cacheRatio === null ? null : ` (${cacheRatio})`}</dd>
+            <dd className="text-ink">{compactMetricText(cachedInput)}{cacheRatio === null ? null : ` (${cacheRatio})`}</dd>
           </div>
           <div className="min-w-0 [overflow-wrap:anywhere]">
             <dt className="text-ink-secondary">{t("computer.usage.estimatedCost")}</dt>
@@ -303,7 +302,8 @@ function TrendChart({ days, metric, weekly, range, tokenDays }: { days: UsageTre
               const amount = stack.points[activeIndex]?.[index] ?? null;
               return (series.kind === "type" || !!amount) && <div key={index} className="flex min-w-0 items-baseline justify-between gap-3">
                 <dt dir="auto" className="min-w-0 [overflow-wrap:anywhere] text-ink-secondary">{tokenSeriesLabel(series, mode)}</dt>
-                <dd className="shrink-0 text-right text-ink">{metricText(amount)}</dd>
+                <dd className="shrink-0 text-right text-ink">{series.kind === "type" && series.key === "cacheRead"
+                  ? compactMetricText(amount) : metricText(amount)}</dd>
               </div>;
             })}
           </dl>}

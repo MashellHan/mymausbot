@@ -5,7 +5,7 @@ import { cn } from "@/lib/cn";
 import { formatUsd, usdText } from "@/lib/usage";
 import { InfoHint } from "./InfoHint";
 import { UsagePeriodSection, shortUsagePeriods } from "./LocalUsageTables";
-import { metricText } from "./LocalUsageValues";
+import { compactMetricText, metricText } from "./LocalUsageValues";
 
 type Cost = NonNullable<UsageWindow["tokenDetails"]>["estimatedCost"];
 
@@ -22,7 +22,7 @@ export function costText(estimate?: Cost) {
   const units = 10 ** digits;
   const rounded = Number(usd.toFixed(digits));
   const bound = rounded <= usd ? rounded : (Math.round(rounded * units) - 1) / units;
-  return t("computer.usage.costAtLeast", { cost: formatUsd(bound) });
+  return formatUsd(bound);
 }
 
 function usableCost(estimate?: Cost): number | null {
@@ -94,7 +94,7 @@ export function UsageModelPanel({ windows }: { windows: Record<ShortPeriod, Usag
                   </>}
                 </div>
               </td>
-              <td className={numericCell}>{metricText(row.cacheRead)}</td>
+              <td className={numericCell}>{compactMetricText(row.cacheRead)}</td>
               <td className={numericCell}>{metricText(row.input)}</td>
               <td className={numericCell}>{metricText(row.output)}</td>
               <td className={numericCell}>
