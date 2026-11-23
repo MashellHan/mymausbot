@@ -102,6 +102,18 @@ describe("shared local and CI check policy", () => {
     expect(plan(["relay/src/server.ts"], { policy }).nativeRelay).toBe(true);
   });
 
+  it("routes pwa-relay's node:test suite away from Vitest and requires the pwa-relay job on fast PRs", () => {
+    const file = "pwa-relay/test/bridge.test.ts";
+    const selected = plan([file], { policy, fastPr: true });
+    expect(selected.nativePwaRelay).toBe(true);
+    expect(selected.scope.checks).toEqual(["build", "pwa-relay"]);
+    expect(selected.fastFiles).toEqual([...policy.core].sort());
+    expect(selected.deferred).toContain(file);
+    expect(selected.edit).not.toContain(file);
+    expect(selected.ready).not.toContain(file);
+    expect(plan(["pwa-relay/src/bridge.ts"], { policy, fastPr: true }).scope.checks).toEqual(["build", "pwa-relay"]);
+  });
+
   it("keeps a targeted server regression while deferring the whole entrypoint suite", () => {
     const files = ["docs/verification/tailscale.md", "server/forwarded-json.e2e.test.ts", "server/index.ts"];
     const present = (file: string) => file === "server/forwarded-json.e2e.test.ts" || existsSync(file);
