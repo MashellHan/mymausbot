@@ -75,10 +75,10 @@ interaction and critical layout; broader unchanged permutations remain QA work.
 Dev records the exact head, local receipt and remaining checks in the PR body,
 including `QA-Handoff: <40-character head SHA>`. Use the
 [PR handoff loop](../.agents/team/playbook.md#pull-request-handoffs) to route the
-current head to the assigned Reviewer or to Lead when assignment or merge order
-needs coordination. A correction starts the next handoff on its new head.
-Updating the handoff or marking a draft ready does not restart CI. Lead oversees
-the review and merge queue while Dev can take independent work.
+current head to the assigned Reviewer. In the turn that pushes a correction,
+send the new head directly to that Reviewer, including PRs held for merge order.
+Lead handles assignment and recovery, then receives accepted ordered work for
+integration. Updating the handoff or marking a draft ready does not restart CI.
 
 Freeze and hand off coherent source as soon as its focused checks pass. Start
 independent source review and CI in parallel with remaining isolated rendering

@@ -293,10 +293,11 @@ screenshots or a package to begin source review. Pending acceptance still blocks
 the corresponding delivery. Batch corrections and review only their delta.
 
 1. **Dev hands off ready source.** Send the PR, its current `QA-Handoff` SHA,
-   validation, and open review threads to the assigned Reviewer once. Send it
-   to Lead when a reviewer needs assigning or an explicit merge-order hold
-   applies. After a requested correction, reply on the original threads,
-   update `QA-Handoff` to the pushed head, and send the new SHA for delta review.
+   validation, and open review threads to the assigned Reviewer once. Lead
+   assigns the review owner and recovers failed handoffs. After a
+   requested correction, reply on the original threads and update `QA-Handoff`
+   to the pushed head. In the same turn, send that head directly to the assigned
+   Reviewer for delta review, including PRs held for merge order.
 2. **Reviewer hands off blocking findings.** Post one GitHub review on the
    reviewed SHA (`COMMENT` for single-account PRs). Send the assigned Dev one
    direct handoff with the blocking threads in the same turn. Verify each
