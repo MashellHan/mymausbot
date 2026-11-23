@@ -105,3 +105,21 @@ it("keeps historical reply lineage while hiding a generated Wait continuation ac
   expect(wireMessage("thread", continuation)).toEqual(placeholder);
   expect(continuation.text).toBe("[Wait finished: Report] Read the sample and summarize it.");
 });
+
+it("projects two queued legacy Waits when both notices arrived before either turn started", () => {
+  const first: Message = { id: "notice-a", at: 1, role: "bot", kind: "text", text: "Report: done. The report is ready.", wait: { id: "a", status: "fired" } };
+  const second: Message = { id: "notice-b", at: 2, parentId: first.id, role: "bot", kind: "text", text: "Package: done. The package is ready.", wait: { id: "b", status: "fired" } };
+  const inputA: Message = { id: "input-a", at: 3, parentId: second.id, role: "user", kind: "text", automated: true, text: "[Wait finished: Report] Read the report." };
+  const answerA: Message = { id: "answer-a", at: 4, parentId: inputA.id, role: "bot", kind: "text", text: "Summary of the report." };
+  const inputB: Message = { id: "input-b", at: 5, parentId: answerA.id, role: "user", kind: "text", automated: true, text: "[Wait finished: Package] Check the package." };
+  const byId = new Map([first, second, inputA, answerA, inputB].map((row) => [row.id, row]));
+  const lookup = (id: string) => byId.get(id);
+  expect(pageMessage(inputA, lookup)).toMatchObject({ waitContinuation: true, parentId: second.id });
+  expect(pageMessage(inputB, lookup)).toMatchObject({ waitContinuation: true, parentId: answerA.id });
+  expect(pageMessage(inputB, lookup)).not.toHaveProperty("text");
+
+  const typed = { ...inputB, automated: undefined };
+  expect(pageMessage(typed, lookup)).toBe(typed);
+  byId.set(inputA.id, { ...inputA, text: "[Wait finished: Unknown] An unrelated webhook." });
+  expect(pageMessage(inputB, lookup)).toBe(inputB);
+});

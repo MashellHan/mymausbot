@@ -23,6 +23,18 @@ it("preserves literal search, tool names, snippets, order, limits and thread sco
   }
 });
 
+it("excludes marked and historical Wait prompts before limiting results", async () => {
+  const text = "[Wait finished: Report] Read the sample.";
+  insertMessage("a", { id: "notice", at: 3, role: "bot", kind: "text", text: "Report: done. The file is ready.", wait: { id: "report", status: "fired" } });
+  insertMessage("a", { id: "typed", at: 4, parentId: "notice", role: "user", kind: "text", text });
+  insertMessage("a", { id: "older-wait", at: 5, parentId: "typed", role: "user", kind: "text", text, automated: true });
+  insertMessage("a", { id: "wait", at: 6, parentId: "older-wait", role: "user", kind: "text", text, automated: true, waitContinuation: true });
+
+  expect(await searchMessagesAsync(text, 1, "a")).toMatchObject([{ messageId: "typed", snippet: text }]);
+  expect(searchMessages(text, 1, "a")).toMatchObject([{ messageId: "typed", snippet: text }]);
+  expect(await searchMessagesAsync(text, 100, "a")).toHaveLength(1);
+});
+
 it("sees committed writes and deletions without restarting the worker", async () => {
   expect(await searchMessagesAsync("newly committed")).toEqual([]);
   insertMessage("a", { id: "new", at: 3, role: "user", kind: "text", text: "newly committed" });

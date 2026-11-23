@@ -16,7 +16,7 @@ import type { Coordinator } from "../coordinator.ts";
 import type { WorkspaceAccess } from "../enterprise.ts";
 import type { GroupUsageReader } from "../group-thread-usage.ts";
 import { readMessage, searchMessagesAsync } from "../message-db.ts";
-import { isWaitContinuation, waitContinuationPlaceholder } from "../wait-continuation.ts";
+import { waitContinuationPlaceholder } from "../wait-continuation.ts";
 import { cappedMediaRange, MessageMediaLinks, STREAMABLE_MEDIA_MIMES } from "../message-media-links.ts";
 import {
   listMessageFolder, MESSAGE_FILE_DOWNLOAD_MAX_BYTES, MESSAGE_FILE_MAX_BYTES, messageAttachmentName, messageFileDisposition, messageFileDownloadName, messageFolderEntryName,
@@ -519,12 +519,7 @@ export function createThreadRoutes(deps: ThreadRouteDeps): RouteHandler {
       const currentVisible = visibleTo(viewerFor(current.auth));
       if (threadId && !currentVisible.thread(threadId)) return json(res, 404, { error: "no such conversation" });
       const hits = found
-        .filter((hit) => {
-          if (!currentVisible.thread(hit.threadId)) return false;
-          if (hit.role !== "user" || hit.kind !== "text") return true;
-          const message = readMessage(hit.threadId, hit.messageId);
-          return message !== null && !isWaitContinuation(message, (id) => readMessage(hit.threadId, id));
-        })
+        .filter((hit) => currentVisible.thread(hit.threadId))
         .slice(0, limit)
         .map((hit) => {
           const bot = store.botByThread(hit.threadId);
