@@ -20,7 +20,9 @@ no unresolved threads or explicit Lead holds remain—do not wait for Lead on
 ordinary merges or leave findings only in local chat. Give one compact batch
 with file references and reproduction. Review corrected deltas promptly; no
 redundant full review for unchanged code. Findings need evidence, not stylistic
-churn.
+churn. Use the [PR handoff loop](../playbook.md#pull-request-handoffs) to send
+blocking findings to the assigned Dev and accepted ordered work to Lead in the
+same review turn.
 
 Accept the PRs or batches assigned to you by Lead. The three general reviewers
 have the same authority; one owns each review and its correction deltas.

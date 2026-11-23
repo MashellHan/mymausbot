@@ -6,9 +6,10 @@ import { newId, type ProviderInstance, type RuntimeEvent, type RuntimeEventListe
 import { CONTROL_BUSY } from "../control-client.ts";
 import { Handoffs, unseenMessages, type HandedState, type Handoff } from "../delta-context.ts";
 import { EventBus } from "../harness/bus.ts";
+import { createSetupRecovery } from "../host/setup-recovered.ts";
 import { LimitResetClock } from "../limit-resets.ts";
 import { QuickModelFallback } from "../quick-model-fallback.ts";
-import type { Message } from "../store.ts";
+import type { Message, Store, TaskRecord } from "../store.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { completeWindowState, windowState } from "../testing/saved-steps-fixtures.ts";
 import { SavedStepsDispatch, type DispatchDeps, type ReplayRequest } from "./dispatch.ts";
@@ -835,5 +836,141 @@ describe("SavedStepsDispatch with the quick model fallback", () => {
     expect(sent.map(({ model, text }) => ({ model, text }))).toEqual([
       { model: "quick-model", text: `${INPUT.text}\n\n${note}` }, { model: "own-model", text: `${INPUT.text}\n\n${note}` },
     ]);
+  });
+});
+
+describe("SavedStepsDispatch setup recovery routing", () => {
+  let scratch: string;
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await removeTempDir(scratch);
+  });
+
+  function makeHarness(scripts: Array<(emit: (type: string, extra?: Record<string, unknown>) => void) => void>) {
+    scratch = mkdtempSync(join(tmpdir(), "omb-saved-steps-recovery-"));
+    const tasksByBot = new Map<string, TaskRecord[]>([
+      ["b1", [
+        { threadId: "failed-thread", title: "Failed", activity: "dead", createdAt: 1, resumeCursors: {} },
+        { threadId: "t1", title: "Later", activity: "idle", createdAt: 2, resumeCursors: {} },
+      ]],
+    ]);
+    const store: Pick<Store, "tasks" | "setTaskActivity"> = {
+      tasks: (botId) => tasksByBot.get(botId) ?? [],
+      setTaskActivity: (botId, threadId, activity) => {
+        const task = (tasksByBot.get(botId) ?? []).find((entry) => entry.threadId === threadId);
+        if (task) task.activity = activity;
+        return null;
+      },
+    };
+    const recovery = createSetupRecovery(store);
+    const listeners = new Set<RuntimeEventListener>();
+    let calls = 0;
+    const adapter = {
+      provider: "claudeAgent",
+      onEvent: (listener: RuntimeEventListener) => { listeners.add(listener); return () => listeners.delete(listener); },
+      sendTurn: async (input: SendTurnInput) => {
+        const play = scripts[calls++]!;
+        const turnId = `engine-${calls}`;
+        setImmediate(() => play((type, extra = {}) => {
+          for (const listener of listeners) listener({ eventId: newId(), provider: "claudeAgent", threadId: input.threadId, turnId, createdAt: "2026-10-27T00:00:00Z", type, ...extra } as RuntimeEvent);
+        }));
+        return { turnId };
+      },
+      interruptTurn: async () => {},
+    };
+    const real = { instanceId: "claude", driverKind: "claudeAgent", adapter } as unknown as ProviderInstance;
+    let bus!: EventBus;
+    const fallbackStarts: Array<Extract<RuntimeEvent, { type: "turn.started" }>> = [];
+    const quick = new QuickModelFallback({
+      file: join(scratch, "refused.json"),
+      publish: (event) => { if (!composed.take(event)) bus.publish(event); },
+      stopped: () => false,
+    });
+    const composed = new SavedStepsDispatch({
+      ...deps,
+      publish: (event) => {
+        deps.publish(event);
+        bus.publish(event);
+      },
+      fallbackStarted: (event) => {
+        fallbackStarts.push(event);
+        recovery.started(event);
+      },
+    });
+    bus = new EventBus(() => {}, (event) => quick.take(event) || composed.take(event));
+    bus.attach([real]);
+    const delivered: RuntimeEvent[] = [];
+    bus.subscribe((event) => {
+      delivered.push(event);
+      const replayed = composed.answering(event);
+      if (event.type === "turn.started" && !replayed) recovery.started(event);
+      if (event.type === "runtime.error" && event.setup) recovery.failed("b1", event);
+      if (event.type === "turn.completed") recovery.completed("b1", event, { replayed, stopped: event.stopReason === "interrupted" });
+    });
+    const activity = (threadId = "failed-thread") => (tasksByBot.get("b1") ?? []).find((entry) => entry.threadId === threadId)?.activity;
+    return { real, composed, quick, bus, recovery, delivered, fallbackStarts, activity };
+  }
+
+  it("keeps pure replay excluded from setup recovery", async () => {
+    const { real, composed, bus, recovery, delivered, fallbackStarts, activity } = makeHarness([]);
+    recovery.failed("b1", { threadId: "failed-thread", providerInstanceId: "claude" });
+
+    const { turnId } = await composed.sendTurn(real, REQ, INPUT, (input) => real.adapter.sendTurn(input));
+    await vi.waitFor(() => expect(delivered.some((event) => event.type === "turn.completed" && event.turnId === turnId)).toBe(true));
+    bus.detachAll();
+
+    expect(fallbackStarts).toEqual([]);
+    expect(activity()).toBe("dead");
+  });
+
+  it("records the real fallback start identity and order when saved steps hand off to the engine", async () => {
+    failAt = "set_value";
+    const { real, composed, quick, bus, recovery, delivered, fallbackStarts, activity } = makeHarness([
+      (emit) => {
+        emit("turn.started");
+        emit("runtime.error", { message: "400 invalid_request_error: quick-model is not supported" });
+        emit("turn.completed", { ok: false, stopReason: "400 invalid_request_error: quick-model is not supported" });
+      },
+      (emit) => {
+        emit("turn.started");
+        emit("item.completed", { itemType: "assistant_text", text: "Recovered via fallback." });
+        emit("turn.completed", { ok: true, stopReason: "end_turn" });
+      },
+    ]);
+    recovery.failed("b1", { threadId: "failed-thread", providerInstanceId: "claude" });
+
+    const { turnId } = await composed.sendTurn(real, REQ, { ...INPUT, model: "quick-model" }, (input) =>
+      quick.sendTurn(real, input, { model: "quick-model", own: { model: "own-model" }, onFallback: () => {} }));
+    await vi.waitFor(() => expect(delivered.some((event) => event.type === "turn.completed" && event.turnId === turnId)).toBe(true));
+    bus.detachAll();
+
+    expect(delivered.filter((event) => event.type === "turn.started").map((event) => event.turnId)).toEqual([turnId]);
+    expect(fallbackStarts).toHaveLength(1);
+    expect(fallbackStarts[0]).toMatchObject({ type: "turn.started", threadId: "t1", turnId, providerInstanceId: "claude" });
+    expect(activity()).toBe("idle");
+  });
+
+  it("preserves a newer setup mark created after the fallback engine turn started", async () => {
+    failAt = "set_value";
+    let releaseCompletion!: () => void;
+    const holdCompletion = new Promise<void>((resolve) => { releaseCompletion = resolve; });
+    const { real, composed, bus, recovery, delivered, fallbackStarts, activity } = makeHarness([
+      (emit) => {
+        emit("turn.started");
+        void holdCompletion.then(() => {
+          emit("item.completed", { itemType: "assistant_text", text: "Done later." });
+          emit("turn.completed", { ok: true, stopReason: "end_turn" });
+        });
+      },
+    ]);
+
+    const { turnId } = await composed.sendTurn(real, REQ, INPUT, (input) => real.adapter.sendTurn(input));
+    await vi.waitFor(() => expect(fallbackStarts).toHaveLength(1));
+    recovery.failed("b1", { threadId: "failed-thread", providerInstanceId: "claude" });
+    releaseCompletion();
+    await vi.waitFor(() => expect(delivered.some((event) => event.type === "turn.completed" && event.turnId === turnId)).toBe(true));
+    bus.detachAll();
+
+    expect(activity()).toBe("dead");
   });
 });

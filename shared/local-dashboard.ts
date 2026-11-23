@@ -138,6 +138,7 @@ export interface LocalUsageCounts {
   prs: number | null;
   knownPrs: number | null;
   commits: number | null;
+  knownCommits?: number | null;
 }
 
 /** Null means either date is incomplete; "new" means a positive value after a verified zero. */
@@ -218,7 +219,7 @@ export interface LocalUsageTokenDetails {
   models: { coverage: LocalUsageCoverage; rows: LocalUsageModelRow[] };
 }
 
-/** Numeric values are observed totals when coverage is partial; non-null knownPrs is a lower bound when prs is null. */
+/** Numeric exact counts are complete; known counts qualify lower bounds when the exact count is null. */
 export interface LocalUsageWindow<Days extends 1 | 7 | 30 | 60 = 1 | 7 | 30> {
   days: Days;
   startDay: string;
@@ -232,6 +233,7 @@ export interface LocalUsageWindow<Days extends 1 | 7 | 30 | 60 = 1 | 7 | 30> {
   prs: number | null;
   knownPrs: number | null;
   commits: number | null;
+  knownCommits?: number | null;
   newTokens: number | null;
   cacheRead: number | null;
   totalTokens: number | null;
@@ -263,6 +265,7 @@ export interface LocalUsageTrendDay {
   prs: number | null;
   knownPrs: number | null;
   commits: number | null;
+  knownCommits?: number | null;
   newTokens: number | null;
   cacheRead: number | null;
   totalTokens: number | null;

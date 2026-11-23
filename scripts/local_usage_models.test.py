@@ -6,6 +6,7 @@ import io
 import json
 import os
 import socket
+import sqlite3
 import subprocess
 from pathlib import Path
 import tempfile
@@ -45,6 +46,123 @@ def daily(day, status="ready", *, input=10, output=2, cache=3):
 
 def snapshot(rows, at=AT):
     return {"version": 1, "timeZone": "Asia/Shanghai", "updatedAt": int(at.timestamp() * 1000), "daily": rows}
+
+
+class OpenCodeEventsTests(unittest.TestCase):
+    start = dt.datetime.fromisoformat("2026-11-18T16:00:00+00:00")
+    start_ms = int(start.timestamp() * 1000)
+    end_ms = int(AT.timestamp() * 1000)
+
+    def database(self, path, *, current=True, legacy=True):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        db = sqlite3.connect(path)
+        self.addCleanup(db.close)
+        if current:
+            db.execute("CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, time_created INTEGER, data TEXT)")
+        if legacy:
+            db.execute("CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT)")
+        return db
+
+    def payload(self, completed, model="gemini-4-hydrogen", *, legacy=False, cwd="/fixture/personal"):
+        return json.dumps({
+            "time": {"completed": completed},
+            "tokens": {"input": 10, "output": 5, "reasoning": 3, "cache": {"read": 20, "write": 4}},
+            "path": {"cwd": cwd}, "unrelated": "Synthetic private text",
+            **({"role": "assistant", "modelID": model} if legacy else {"model": {"id": model}}),
+        })
+
+    def test_completed_window_schema_precedence_classification_and_fields(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            path = home / ".local/share/opencode/opencode.db"
+            db = self.database(path)
+            self.assertEqual(db.execute("PRAGMA journal_mode = WAL").fetchone()[0], "wal")
+            db.executemany("INSERT INTO session_message VALUES (?, ?, ?, ?, ?)", [
+                ("crossing", "current", "assistant", self.start_ms - 1000, self.payload(self.start_ms)),
+                ("end", "current", "assistant", self.end_ms - 1000, self.payload(self.end_ms)),
+                ("before", "current", "assistant", self.start_ms - 2000, self.payload(self.start_ms - 1000)),
+                ("pending", "current", "assistant", self.start_ms, self.payload(None)),
+                ("user", "current", "user", self.start_ms, self.payload(self.start_ms)),
+                ("other-day-user", "migrated", "user", self.start_ms - 86400000, "{}"),
+                ("invalid-model", "current", "assistant", self.start_ms + 1000,
+                 self.payload(self.start_ms + 1000, "sk-" + "a" * 24, cwd="relative/cwd")),
+            ])
+            db.executemany("INSERT INTO message VALUES (?, ?, ?, ?)", [
+                ("crossing", "current", self.start_ms, self.payload(self.start_ms, legacy=True)),
+                ("legacy-migrated", "migrated", self.start_ms,
+                 self.payload(self.start_ms, "gemini-4-carbon", legacy=True)),
+                ("legacy-only", "legacy", self.start_ms + 1000,
+                 self.payload(self.start_ms + 1000, "mai-code-2", legacy=True, cwd="/fixture/work")),
+            ])
+            db.commit()
+            file_bytes = path.read_bytes()
+            classify = {"/fixture/personal": "personal", "/fixture/work": "work", None: "unclassified"}.__getitem__
+            events, error = models.opencode_events(home, classify, self.start, AT, env={})
+            self.assertIsNone(error)
+            self.assertEqual(path.read_bytes(), file_bytes)
+            self.assertEqual(len(events), 4)
+            indexed = {event["model"]: event for event in events}
+            valid = indexed["gemini-4-hydrogen"]
+            self.assertEqual(valid, {
+                "key": hashlib.sha256(b"opencode\0current\0crossing").hexdigest(),
+                "at": "2026-11-18T16:00:00Z", "category": "personal", "provider": "opencode",
+                "model": "gemini-4-hydrogen", "input": 14, "output": 8, "cacheRead": 20,
+                "cacheWrite": 4, "reasoning": 3,
+            })
+            self.assertEqual(indexed["mai-code-2"]["category"], "work")
+            self.assertEqual(indexed["gemini-4-carbon"]["category"], "personal")
+            self.assertEqual(indexed["unknown"]["category"], "unclassified")
+            self.assertEqual(models.opencode_events(home, classify, self.start, AT, env={}), (events, None))
+            projected = models.daily_models(collector_fixture(), [{"tokens": events}], snapshot([daily(TODAY)]))
+            self.assertEqual({row["model"] for row in projected[TODAY]},
+                             {"gemini-4-hydrogen", "gemini-4-carbon", "mai-code-2"})
+            self.assertNotIn("Synthetic private text", json.dumps(events))
+            self.assertNotIn("/fixture", json.dumps(events))
+
+    def test_database_selection_and_missing_source(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            data_home = home / "data"
+            selected = data_home / "opencode/custom.db"
+            db = self.database(selected, current=False)
+            db.execute("INSERT INTO message VALUES (?, ?, ?, ?)",
+                       ("legacy", "legacy", self.start_ms, self.payload(self.start_ms, legacy=True)))
+            db.commit()
+            classify = lambda _cwd: "unclassified"
+            read = lambda env: models.opencode_events(home, classify, self.start, AT, env=env)
+            relative = read({"XDG_DATA_HOME": str(data_home), "OPENCODE_DB": "custom.db"})
+            self.assertEqual(len(relative[0]), 1)
+            self.assertIsNone(relative[1])
+            self.assertEqual(read({"XDG_DATA_HOME": "relative", "OPENCODE_DB": str(selected)}), relative)
+            self.assertEqual(read({"OPENCODE_DB": ":memory:"}), ([], None))
+            self.assertEqual(read({}), ([], None))
+            self.assertEqual(read({"OPENCODE_DB": "missing.db"}), ([], "MissingDatabase"))
+            invalid = home / "invalid.db"
+            invalid.write_text("not a SQLite database")
+            self.assertEqual(read({"OPENCODE_DB": str(invalid)}), ([], "DatabaseReadError"))
+            with contextlib.closing(sqlite3.connect(invalid := home / "unsupported.db")) as unsupported:
+                unsupported.execute("CREATE TABLE unrelated (id TEXT)")
+            self.assertEqual(read({"OPENCODE_DB": str(invalid)}), ([], "UnsupportedSchema"))
+
+    def test_bad_rows_and_limits_preserve_good_observations(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            db = self.database(home / ".local/share/opencode/opencode.db", legacy=False)
+            db.executemany("INSERT INTO session_message VALUES (?, ?, ?, ?, ?)", [
+                ("oversize", "test", "assistant", self.start_ms + 3, "x" * 1024),
+                ("malformed", "test", "assistant", self.start_ms + 2, "{"),
+                ("last", "test", "assistant", self.start_ms + 1, self.payload(self.start_ms + 1)),
+                ("first", "test", "assistant", self.start_ms, self.payload(self.start_ms)),
+            ])
+            db.commit()
+            with patch.object(models, "MAX_OPENCODE_MESSAGE_BYTES", 512):
+                events, error = models.opencode_events(home, lambda _cwd: "work", self.start, AT, env={})
+                self.assertEqual(error, "MalformedUsage")
+                self.assertEqual(len(events), 2)
+                with patch.object(models, "MAX_OPENCODE_ROWS", 3):
+                    limited, error = models.opencode_events(home, lambda _cwd: "work", self.start, AT, env={})
+                    self.assertEqual(error, "ReadLimit")
+                    self.assertEqual(limited, events[:1])
 
 
 class ModelAggregationTests(unittest.TestCase):

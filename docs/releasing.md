@@ -7,13 +7,14 @@ exact merge commit. Review and publish the draft when it is ready.
 
 The existing **Actions → Release → Run workflow** button remains available for
 reruns and recovery. It
-builds macOS (arm64 + x64, signed, notarized, stapled), Windows, and Ubuntu
-from a single pinned commit, verifies every artifact the way a user would
-receive it, and assembles the canonical draft in
-[OpenMausBot releases](https://github.com/milind-soni/OpenMausBot/releases).
-The exact same assets are also staged in the public legacy releases repo so
-installed builds from 0.1.46 and earlier can update across the repository
-migration.
+builds macOS (arm64 + x64, signed, notarized, stapled) from a single pinned
+commit, verifies the macOS installers, updater archives, blockmaps, and
+`latest-mac.yml` feed, and assembles the canonical draft in the repository's
+releases. On `milind-soni/OpenMausBot`, the exact same assets are also staged in
+the public legacy releases repo so installed builds from 0.1.46 and earlier can
+update across the repository migration. Windows and Ubuntu installers are not
+built or published by `release.yml`; their manual **Package Windows** and
+**Package Ubuntu** workflows remain artifact-only.
 
 Tick **publish** to publish and verify the canonical release first, then make
 the identical legacy updater bridge visible. Leave it unticked to review the
@@ -23,13 +24,14 @@ verifies and publishes its legacy mirror automatically. Never publish only the
 legacy draft.
 
 The release commit needs the full macOS CI selection: the **CI passed on
-the release commit** job waits alongside platform builds for a passing `CI`
-gate and all eight macOS all-E2E shards on the pinned commit or an identical
+the release commit** job waits alongside the macOS build for a passing `CI`
+gate and all ten macOS all-E2E shards on the pinned commit or an identical
 tree. Historical macOS host-only shards and retired Linux/Windows test results
 do not establish that coverage. Without matching full evidence, the job starts
-CI on the commit in a temporary `release-ci/v<version>` branch. Windows/Linux
-build, resource, signing and publication-integrity checks retain their own
-requirements; their platform runtime test and smoke legs are retired.
+CI on the commit in a temporary `release-ci/v<version>` branch. Manual
+**Package Windows** and **Package Ubuntu** artifact builds retain their own
+resource and package-integrity checks; their platform runtime test and smoke
+legs are retired.
 After a flaky failure, re-run the failed CI jobs;
 a release still waiting picks up the new attempt, and a release that already
 stopped needs only `gh run rerun <id> --failed`. `ship_without_ci` skips the

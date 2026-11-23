@@ -6,6 +6,7 @@ import { expect, it } from "vitest";
 import { launchVerificationServer, runControlOmb } from "../scripts/control-omb.ts";
 import { WAIT_MESSAGES } from "./routes/waits.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
+import { openSse, type SseRecorder } from "./testing/sse.ts";
 
 async function scout(name: string) {
   const folder = mkdtempSync(join(tmpdir(), `omb-waits-${name}-`));
@@ -47,11 +48,12 @@ async function scout(name: string) {
   const settledTurn = () => expect.poll(busy, { timeout: 15_000 }).toBe(false);
   const transcript = async (): Promise<any[]> => (await api("GET", `/api/threads/${bot.threadId}/messages?limit=100`)).messages;
   const send = (text: string) => runControlOmb(["send", "--bot", bot.id, "--task", bot.threadId, "--text", text, "--url", fixture.info.url]);
-  return { folder, gate, api, bot, busy, settledTurn, transcript, send, turnPrompt, turnToken, close };
+  return { folder, gate, api, bot, busy, settledTurn, transcript, send, turnPrompt, turnToken, close, url: fixture.info.url };
 }
 
 it("waits for a file with no AI, posts once in the asked chat, notifies, and continues there; Cancel on its card stops another", async () => {
-  const { folder, gate, api, bot, settledTurn, transcript, send, turnToken, close } = await scout("fires");
+  const { folder, gate, api, bot, settledTurn, transcript, send, turnPrompt, turnToken, close, url } = await scout("fires");
+  let events: SseRecorder | undefined;
   const report = join(folder, "report.txt"), present = join(folder, "present.txt"), other = join(folder, "other.txt");
   try {
     await send("Tell me when the report is ready");
@@ -65,16 +67,27 @@ it("waits for a file with no AI, posts once in the asked chat, notifies, and con
     expect(cards.map((m) => m.card.title)).toEqual(["Waiting: the report", "Waiting: the other file"]);
     await api("POST", `/api/threads/${bot.threadId}/undo`, { requestId: cards[1].card.requestId }, 200);
     expect((await transcript()).find((m) => m.id === cards[1].id).card).toMatchObject({ undone: true, waitRequest: { settled: "cancelled" } });
-    writeFileSync(gate, "finish"); await settledTurn();
+    writeFileSync(gate, "finish"); await settledTurn(); unlinkSync(gate);
+    events = await openSse(`${url}/api/events`, { origin: url });
     writeFileSync(report, "done"); writeFileSync(other, "x");
     await expect.poll(async () => (await transcript()).filter((m) => m.wait?.status === "fired").map((m) => ({ text: m.text, textCode: m.textCode, textParams: m.textParams })), { timeout: 30_000 })
       .toEqual([{ text: `the report: done. ${report} is there now.`, textCode: "chat.notice.waitDone.fileExists", textParams: { label: "the report", path: report } }]);
     expect(await api("POST", `/api/threads/${bot.threadId}/undo`, { requestId: cards[0].card.requestId }, 409)).toEqual({ error: "This wait has already ended.", errorKey: "serverError.wait.alreadyEnded" });
-    await expect.poll(async () => (await transcript()).some((m) => m.role === "user" && m.text?.includes("[Wait finished: the report] Say the report is ready.")), { timeout: 40_000 }).toBe(true);
+    const prompt = "[Wait finished: the report] Say the report is ready.";
+    await expect.poll(turnPrompt, { timeout: 40_000 }).toContain(prompt);
+    const streamed = await events.until((frame) => frame.kind === "message" && frame.threadId === bot.threadId && frame.message?.waitContinuation === true);
+    expect(streamed.message).not.toHaveProperty("text");
+    expect((await transcript()).find((message) => message.id === streamed.message.id)).toEqual(streamed.message);
+    expect((await transcript()).some((message) => message.text?.includes(prompt))).toBe(false);
+    expect((await api("GET", `/api/search?q=${encodeURIComponent(prompt)}&threadId=${bot.threadId}`)).hits).toEqual([]);
+    const exported = await api("GET", `/api/threads/${bot.threadId}/export?format=json`);
+    expect(exported.messages.find((message: { id: string }) => message.id === streamed.message.id)).toEqual(streamed.message);
+    writeFileSync(gate, "finish"); await settledTurn();
     expect((await api("GET", "/api/notifications")).notifications.filter((n: any) => n.kind === "wait")).toMatchObject([{ title: "Scout's wait is over" }]);
     await new Promise((resolve) => setTimeout(resolve, 7_000));
     expect((await transcript()).filter((m) => m.wait).length).toBe(1);
   } finally {
+    events?.close();
     await close();
   }
 }, 120_000);
@@ -104,9 +117,13 @@ it("continues successive waits in the same authorized chat after each completion
     const afterTests = await turnToken();
     expect((await api("POST", "/api/internal/waits", { label: "the package", kind: "file_exists", path: packageFile }, 201, afterTests)).text).toContain("Waiting for the package");
     writeFileSync(gate, "finish"); await settledTurn();
-    expect((await transcript()).filter((m) => m.card?.waitRequest).map((m) => m.card.waitRequest)).toMatchObject([
+    const rows = await transcript();
+    expect(rows.filter((m) => m.card?.waitRequest).map((m) => m.card.waitRequest)).toMatchObject([
       { label: "the build", settled: "fired" }, { label: "the tests", settled: "fired" },
     ]);
+    const continuations = rows.filter((m) => m.waitContinuation);
+    expect(continuations).toHaveLength(2);
+    expect(continuations.every((m) => !("text" in m))).toBe(true);
   } finally {
     await close();
   }

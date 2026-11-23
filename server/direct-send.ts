@@ -29,3 +29,13 @@ export interface DirectSendInput {
 export type DirectSendReceipt =
   | { ok: true; threadId: string; message: Message; steered?: true }
   | { ok: true; queued: true; queueId: string; threadId: string; reason?: SteerQueueReason; why?: string };
+
+export class DirectSendRefused extends Error {
+  readonly status: number;
+  readonly body: Record<string, unknown>;
+  constructor(status: number, body: Record<string, unknown>) {
+    super(typeof body.error === "string" ? body.error : "send refused");
+    this.status = status;
+    this.body = body;
+  }
+}

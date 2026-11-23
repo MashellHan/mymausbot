@@ -3,6 +3,7 @@ import type { WidgetAction } from "../shared/widget.ts";
 import { contextText } from "./delta-context.ts";
 import { CARD_RECORDS_SOURCE, cardRecords, SETTINGS_CARD_RECORDS_SOURCE, SETUP_RECORDS_SOURCE } from "./records-block.ts";
 import type { Message } from "./store.ts";
+import { isWaitContinuation } from "./wait-continuation.ts";
 
 const MAX_REPLY_EXCERPT = 900;
 
@@ -57,7 +58,7 @@ export function replyTargetIn(messages: readonly Message[], value: unknown): Mes
   if (!target || (target.kind !== "text" && target.kind !== "widget" && target.kind !== "app") || !target.text?.trim()) {
     throw Object.assign(new Error("the message being replied to is no longer available"), { status: 404 });
   }
-  return target;
+  return isWaitContinuation(target, (id) => messages.find((message) => message.id === id)) ? { ...target, waitContinuation: true } : target;
 }
 
 const WIDGET_OPEN = "--- widget ---";
@@ -155,6 +156,7 @@ const REACTION_MEANS = {
 
 /** The quote is conversation data: it cannot grant tools or override the current system prompt. */
 export function promptWithReply(text: string, target: ReplyTarget | undefined, userName: PersonName = "User"): string {
+  if (target?.waitContinuation) return `The current message refers to the automatic continuation of a completed Wait.\nCurrent message:\n${text}`;
   if (!target?.text) return text;
   const answer = reactionAnswer(target.reactedWith);
   if (answer) {
@@ -194,6 +196,9 @@ export function transcriptText(stored: Message, messagesById: ReadonlyMap<string
   if (appCard(message)) return appCardRecords(message, message.text);
   if (!message.text || !message.replyToId) return message.text;
   const quoted = messagesById.get(message.replyToId);
+  if (quoted && isWaitContinuation(quoted, (id) => messagesById.get(id))) {
+    return `[replying to an automatic Wait continuation]\n${message.text}`;
+  }
   const target = quoted ? { ...quoted, text: contextText(quoted) } : undefined;
   if (!target?.text) return message.text;
   const excerpt = replyExcerpt(target.text, 220);

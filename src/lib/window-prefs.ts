@@ -21,6 +21,7 @@ import { readColorUserBubbles, setColorUserBubbles } from "./user-bubble-prefere
 import { latestWebPanels, setWebPanels } from "./web-panel-preferences";
 import { newWebPanelId, validateWebPanel, type WebPanel } from "./web-panels";
 import { onWindowPrefChanged } from "./window-pref-changes";
+import { isRemotePwaMode } from "./pwa-config";
 
 type Pref<I extends WindowPrefId> = { read(): unknown; write(value: WindowPrefValue<I>): unknown };
 const ogb = () => (typeof window === "undefined" ? undefined : window.ogb);
@@ -124,7 +125,7 @@ let universalPinsObserved = false;
 let followUpObserved = false;
 /** Tells the server the window's values, once the burst of setters at start-up has settled. */
 export function reportWindowPrefs(): void {
-  if (typeof fetch !== "function" || typeof window === "undefined") return;
+  if (typeof fetch !== "function" || typeof window === "undefined" || isRemotePwaMode()) return;
   if (!toolsLayoutObserved && typeof window.addEventListener === "function") {
     subscribeSidebarToolsLayout(() => undefined);
     toolsLayoutObserved = true;
@@ -144,6 +145,7 @@ export function reportWindowPrefs(): void {
   if (report) clearTimeout(report);
   report = setTimeout(() => {
     report = null;
+    if (isRemotePwaMode()) return;
     void windowPrefValues()
       .then((values) => fetch("/api/window-prefs", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ values }) }))
       .catch(() => undefined);

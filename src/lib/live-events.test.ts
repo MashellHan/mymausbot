@@ -479,6 +479,68 @@ describe("a Cloud home that goes to sleep", () => {
   });
 });
 
+describe("remote stream-ticket and auth termination", () => {
+  it("acquires a fresh stream ticket before initial connect and reconnect while preserving cursor", async () => {
+    const test = harness();
+    const tickets = ["tkt-1", "tkt-2"];
+    const acquireTicket = vi.fn(async () => ({ ok: true as const, ticket: tickets.shift() ?? "tkt-x" }));
+    const probeSession = vi.fn(async () => "authenticated" as const);
+    const stop = openLiveEvents(
+      { onFrame: vi.fn(), onSnapshotRequired: async () => true, retryMinMs: 50, retryMaxMs: 50 },
+      { ...test.platform, acquireTicket, probeSession },
+    );
+
+    expect(test.sources).toHaveLength(0);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(acquireTicket).toHaveBeenCalledTimes(1);
+    expect(test.sources).toHaveLength(1);
+    expect(test.sources[0].url).toBe("/api/events?screens=off&ticket=tkt-1&window=1&frames=thread");
+
+    test.sources[0].open();
+    test.sources[0].message({ kind: "message" }, "run00000:7");
+    test.sources[0].error();
+    expect(test.sources[0].close).toHaveBeenCalledOnce();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(probeSession).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(50);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(acquireTicket).toHaveBeenCalledTimes(2);
+    expect(test.sources).toHaveLength(2);
+    expect(test.sources[1].url).toBe("/api/events?since=run00000%3A7&screens=off&ticket=tkt-2&window=1&frames=thread");
+    stop();
+  });
+
+  it("halts reconnection and notifies onUnauthenticated when probe confirms session ended", async () => {
+    const test = harness();
+    const acquireTicket = vi.fn(async () => ({ ok: true as const, ticket: "tkt-1" }));
+    const probeSession = vi.fn(async () => "unauthenticated" as const);
+    const onUnauthenticated = vi.fn();
+    const stop = openLiveEvents(
+      { onFrame: vi.fn(), onSnapshotRequired: async () => true, onUnauthenticated, retryMinMs: 50, retryMaxMs: 50 },
+      { ...test.platform, acquireTicket, probeSession },
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(test.sources).toHaveLength(1);
+    test.sources[0].error();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(onUnauthenticated).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    test.windowTarget.emit("focus");
+    await Promise.resolve();
+    expect(acquireTicket).toHaveBeenCalledTimes(1);
+    expect(test.sources).toHaveLength(1);
+    stop();
+  });
+});
+
 describe("live screens", () => {
   it("leave screens out until a view that draws them listens, then reopen from the cursor both ways", async () => {
     const test = harness();

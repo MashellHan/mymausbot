@@ -1,4 +1,5 @@
 import type { Message, Store } from "../store.ts";
+import { waitContinuationPlaceholder, type MessageLookup } from "../wait-continuation.ts";
 import { toolResultPrefix } from "../tool-results.ts";
 
 const MESSAGE_PAGE_MAX = 200;
@@ -14,7 +15,9 @@ export function pageSize(raw: string | null): number | null | undefined {
   return Math.min(size, MESSAGE_PAGE_MAX);
 }
 
-export function slimMessage(message: Message): Message | Record<string, unknown> {
+function slimMessage(message: Message, lookup?: MessageLookup): Message | Record<string, unknown> {
+  const wait = waitContinuationPlaceholder(message, lookup);
+  if (wait) return wait;
   if (message.kind !== "screen" || !message.png) return message;
   const { png: _png, ...rest } = message;
   return { ...rest, hasImage: true };
@@ -23,8 +26,8 @@ export function slimMessage(message: Message): Message | Record<string, unknown>
 /** A message as a conversation page carries it: slimmed, and a plain tool step's long output cut to a preview marked
  * `clipped`. Input stays whole (labels parse it), and so do rows whose tool output is the reply itself (a teammate's
  * result, a relayed message, a handoff). */
-export function pageMessage(message: Message): Message | Record<string, unknown> {
-  const slim = slimMessage(message);
+export function pageMessage(message: Message, lookup?: MessageLookup): Message | Record<string, unknown> {
+  const slim = slimMessage(message, lookup);
   const tool = message.tool;
   if (!tool || message.kind !== "activity" || message.relay || message.roomRequest || message.comm || message.threadRef) return slim;
   const output = tool.output;
@@ -33,21 +36,29 @@ export function pageMessage(message: Message): Message | Record<string, unknown>
 }
 
 /** A conversation's messages one page at a time (newest first when `before` is absent), and the page around one message. */
-export function messagePages(store: Pick<Store, "messagesFor" | "messagesTail" | "activeLeaf">) {
+export function messagePages(store: Pick<Store, "messagesFor" | "messagesTail" | "activeLeaf">, readMessage: (threadId: string, id: string) => Message | null) {
+  const wireMessage = (threadId: string, message: Message) => slimMessage(message, (id) => readMessage(threadId, id));
+  const paged = (threadId: string, messages: Message[]) =>
+    messages.map((message) => pageMessage(message, (id) => readMessage(threadId, id)));
+
   function messagePage(threadId: string, limit: number | undefined, before?: string | null) {
     if (limit === undefined) {
-      return { messages: store.messagesFor(threadId), activeLeafId: store.activeLeaf(threadId) };
+      const lookup = (id: string) => readMessage(threadId, id);
+      return {
+        messages: store.messagesFor(threadId).map((message) => waitContinuationPlaceholder(message, lookup) ?? message),
+        activeLeafId: store.activeLeaf(threadId),
+      };
     }
     if (!before) {
       const tail = store.messagesTail(threadId, limit);
-      return { messages: tail.messages.map(pageMessage), hasMore: tail.hasMore, activeLeafId: tail.activeLeafId };
+      return { messages: paged(threadId, tail.messages), hasMore: tail.hasMore, activeLeafId: tail.activeLeafId };
     }
     const all = store.messagesFor(threadId);
     const end = all.findIndex((msg) => msg.id === before);
     const stop = end === -1 ? all.length : end;
     const start = Math.max(0, stop - limit);
     return {
-      messages: all.slice(start, stop).map(pageMessage),
+      messages: paged(threadId, all.slice(start, stop)),
       hasMore: start > 0,
       activeLeafId: store.activeLeaf(threadId),
     };
@@ -60,8 +71,8 @@ export function messagePages(store: Pick<Store, "messagesFor" | "messagesTail" |
     const before = Math.floor((limit - 1) / 2);
     const start = Math.max(0, Math.min(index - before, all.length - limit));
     const stop = Math.min(all.length, start + limit);
-    return { messages: all.slice(start, stop).map(pageMessage), hasMore: start > 0 };
+    return { messages: paged(threadId, all.slice(start, stop)), hasMore: start > 0 };
   }
 
-  return { messagePage, messageWindow };
+  return { messagePage, messageWindow, wireMessage };
 }

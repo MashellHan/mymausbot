@@ -10,7 +10,7 @@ import { integrationRange, MAIN_EVIDENCE_QUERY, MAIN_HISTORY_LIMIT } from "./ci-
 // vitest job's parts: "linux-tests", "host-tests" (Windows, and macOS where the
 // event runs it), and the subsets in VITEST_SUBSETS.
 export const SELECTABLE_JOBS = [
-  "vitest", "behavior-evals", "electron-smokes", "foss", "control-plane", "ui-smoke", "browser-identity", "browser-driver", "relay",
+  "vitest", "behavior-evals", "electron-smokes", "foss", "control-plane", "ui-smoke", "browser-identity", "browser-driver", "relay", "pwa-relay",
 ];
 
 // The server imports Electron and renderer modules, and the macOS smokes run
@@ -19,7 +19,7 @@ export const SELECTABLE_JOBS = [
 const SERVER_CHECKS = [
   "build", "host-tests", "behavior-evals", "foss", "electron-smokes", "ui-smoke", "browser-identity", "browser-driver",
 ];
-const EVERY_CHECK = [...SERVER_CHECKS, "control-plane", "relay"];
+const EVERY_CHECK = [...SERVER_CHECKS, "control-plane", "relay", "pwa-relay"];
 
 /** What a pull request's change in each area can affect. */
 export const AREA_CHECKS = {
@@ -38,6 +38,7 @@ export const AREA_CHECKS = {
   // The relay is its own package with its own lockfile; nothing outside relay/ reaches it except the shared vectors,
   // which it keeps a pinned copy of.
   relay: ["relay"],
+  "pwa-relay": ["pwa-relay"],
   "e2e-vectors": [...SERVER_CHECKS, "relay"],
   everything: EVERY_CHECK,
 };
@@ -213,6 +214,7 @@ export const SRC_OUTSIDE_RENDERER = [
   "src/components/app/app-frame-host.ts",
   "src/lib/citations.ts",
   "src/lib/composer-attachments.ts",
+  "src/lib/pwa-transport.ts",
   "src/lib/random-uuid.ts",
   "src/lib/receipts.ts",
 ];
@@ -235,6 +237,7 @@ const AREAS = [
   [/^cloudflare\/control-plane\//, "control-plane"],
   [/^announcements\//, "announcements"],
   [/^relay\//, "relay"],
+  [/^pwa-relay\//, "pwa-relay"],
 ];
 
 export function areaOf(file) {
@@ -277,8 +280,9 @@ const SETTINGS_PLACES_INPUTS = new Set([
   "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".npmrc", "vite.config.ts",
 ]);
 const RELAY_NATIVE_TEST = /^relay\/test\/.*\.test\.ts$/;
+const PWA_RELAY_NATIVE_TEST = /^pwa-relay\/test\/.*\.test\.ts$/;
 const BROKER_OWN_TEST = /^cloudflare\/composio-broker\/src\/.*\.test\.ts$/;
-const FAST_EXPENSIVE_TEST = /^(?:scripts\/testing\/.*\.e2e\.test\.ts|server\/browser\/.*\.e2e\.test\.ts|electron\/.*\.electron\.test\.mjs|server\/index\.test\.ts|relay\/test\/.*\.test\.ts)$/;
+const FAST_EXPENSIVE_TEST = /^(?:scripts\/testing\/.*\.e2e\.test\.ts|server\/browser\/.*\.e2e\.test\.ts|electron\/.*\.electron\.test\.mjs|server\/index\.test\.ts|relay\/test\/.*\.test\.ts|pwa-relay\/test\/.*\.test\.ts)$/;
 const unique = (values) => [...new Set(values)].sort();
 
 export function readCheckPolicy(text = readFileSync(POLICY_PATH, "utf8"), present = existsSync) {
@@ -312,7 +316,8 @@ export function selectCheckPlan({ files, policy, labels = [], lines = [], mode =
   const settingsPlaces = !Array.isArray(files) || changed.some((file) => SETTINGS_PLACES_INPUTS.has(file));
   const ciVerify = !Array.isArray(files) || !changed.length || changed.some((file) => CI_VERIFY_PATH.test(file));
   const nativeRelay = changed.some((file) => file.startsWith("relay/"));
-  const vitestAffected = affected.filter((file) => !RELAY_NATIVE_TEST.test(file) && !BROKER_OWN_TEST.test(file));
+  const nativePwaRelay = changed.some((file) => file.startsWith("pwa-relay/"));
+  const vitestAffected = affected.filter((file) => !RELAY_NATIVE_TEST.test(file) && !PWA_RELAY_NATIVE_TEST.test(file) && !BROKER_OWN_TEST.test(file));
   const sensitiveLine = lines.some((line) => /^[+-](?![+-]{2})/.test(line) && SENSITIVE_LINE.test(line));
   const sensitivePath = changed.some((file) => SENSITIVE_PATH.test(file));
   const reasons = [];
@@ -346,7 +351,8 @@ export function selectCheckPlan({ files, policy, labels = [], lines = [], mode =
   const fastFiles = unique([...fastCore, ...portable.slice(0, FAST_AFFECTED_LIMIT)]);
   const deferred = unique(additional.filter((file) => !fastFiles.includes(file) && !BROKER_OWN_TEST.test(file)));
   const controlPlane = changed.some((file) => ["control-plane", "broker"].includes(areaOf(file)));
-  const fastChecks = controlPlane ? ["build", "control-plane"] : ["build"];
+  const pwaRelay = changed.some((file) => areaOf(file) === "pwa-relay");
+  const fastChecks = ["build", ...(controlPlane ? ["control-plane"] : []), ...(pwaRelay ? ["pwa-relay"] : [])];
   return {
     version: policy.version, mode, files: changed, areas: baseline.areas, fastAreas: areas.map((area) => area.id),
     holdAreas: !full && mappedArea ? areas.map((area) => area.id) : ["global"],
@@ -355,7 +361,7 @@ export function selectCheckPlan({ files, policy, labels = [], lines = [], mode =
       : full ? FULL_SCOPE : reduced ? { areas: areas.map((area) => area.id), checks: ["build", "core-tests"], files: filesToRun } : baseline,
     edit: docs ? [...VITEST_SUBSETS["docs-tests"].files, ...policy.guards] : vitestAffected,
     ready: docs ? unique([...VITEST_SUBSETS["docs-tests"].files, ...policy.guards]) : unique([...filesToRun, ...policy.guards]),
-    core: filesToRun, fastFiles, deferred, nativeRelay,
+    core: filesToRun, fastFiles, deferred, nativeRelay, nativePwaRelay,
   };
 }
 

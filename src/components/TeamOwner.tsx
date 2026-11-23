@@ -6,6 +6,7 @@ import { Bell, Check } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { avatarMarks } from "@/lib/avatar-marks";
 import { t } from "@/lib/i18n";
+import { useRemoteMediaUrl } from "@/lib/use-remote-media";
 import { api, useStore, openThread, type Bot } from "@/state/store";
 import { useShowThreads } from "@/lib/thread-preferences";
 import { askingWhom, ownerChanged, ownerOf, pictureOf, refreshNeedsYou, useTeamPeople, type TeamPeople, type TeamPerson } from "@/state/team-people";
@@ -40,8 +41,9 @@ const hueOf = (email: string) => HUES[[...email].reduce((sum, char) => sum + cha
 export function PersonFace({ person, size = 18 }: { person: TeamPerson; size?: number }) {
   const picture = pictureOf(person, useTeamPeople());
   const [failed, setFailed] = useState<string | null>(null);
-  if (picture && failed !== picture) {
-    return <img {...avatarMarks("person", "picture")} src={picture} alt="" aria-hidden="true" draggable={false} data-person-picture={person.email} onError={() => setFailed(picture)}
+  const remotePicture = useRemoteMediaUrl(picture && failed !== picture ? picture : null);
+  if (picture && failed !== picture && !remotePicture.failed && remotePicture.url) {
+    return <img {...avatarMarks("person", "picture")} src={remotePicture.url} alt="" aria-hidden="true" draggable={false} data-person-picture={person.email} onError={() => setFailed(picture)}
       style={{ width: size, height: size }} className="inline-block shrink-0 rounded-full bg-raised object-cover" />;
   }
   return <span {...avatarMarks("person", "initials")} aria-hidden="true" style={{ width: size, height: size, fontSize: Math.round(size * 0.55) }}
