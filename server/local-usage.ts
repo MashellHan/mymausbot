@@ -73,7 +73,7 @@ function chinaDay(timestamp: number): string {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
-function category(raw: unknown, historical = false): DailyCategory {
+function category(raw: unknown): DailyCategory {
   const row = object(raw);
   const knownPrs = count(row.knownPrs);
   const prs = row.prs === null ? null : count(row.prs);
@@ -83,11 +83,11 @@ function category(raw: unknown, historical = false): DailyCategory {
   const totalTokens = sum([input, output, cacheRead]);
   if (prs !== null && prs !== knownPrs || count(row.cacheWrite) > input || count(row.reasoning) > output ||
       count(row.newTokens) !== input + output || row.totalTokens !== undefined && count(row.totalTokens) !== totalTokens) throw new Error("Invalid activity accounting");
-  return { prs, knownPrs, commits: row.commits === null && historical ? 0 : count(row.commits),
+  return { prs, knownPrs, commits: row.commits === null ? 0 : count(row.commits),
     commitObserved: row.commits !== null, input, output, cacheRead };
 }
 
-function rows(raw: unknown, captureDay: string, span = 31, historical = false): Map<string, DailyRow> {
+function rows(raw: unknown, captureDay: string, span = 31): Map<string, DailyRow> {
   if (!Array.isArray(raw) || raw.length > span) throw new Error("Invalid activity days");
   const daily = new Map<string, DailyRow>();
   const oldest = offsetDay(captureDay, 1 - span);
@@ -101,7 +101,7 @@ function rows(raw: unknown, captureDay: string, span = 31, historical = false): 
         row.commitStatus !== "partial" && row.commitStatus !== "unavailable") throw new Error("Invalid commit coverage");
     const rawCategories = object(row.categories);
     const categories = {} as Record<LocalUsageCategory, DailyCategory>;
-    for (const key of CATEGORIES) categories[key] = category(rawCategories[key], historical);
+    for (const key of CATEGORIES) categories[key] = category(rawCategories[key]);
     daily.set(day, { day, tokenStatus: row.tokenStatus,
       ...(row.commitStatus !== undefined ? { commitStatus: row.commitStatus } : {}), categories });
   }
@@ -299,10 +299,12 @@ function repositoryRows(raw: unknown, daily: Map<string, DailyRow>, span = 31): 
         if (typeof date !== "string" || !daily.has(date) || seen.has(date)) throw new Error("Invalid repository day");
         seen.add(date);
         const knownPrs = count(item.knownPrs), commits = count(item.commits);
+        const categoryLimit = daily.get(date)!.categories[category];
+        if (knownPrs > categoryLimit.knownPrs || categoryLimit.commitObserved && commits > categoryLimit.commits) throw new Error("Invalid repository accounting");
         const total = accounting.get(date) ?? { knownPrs: 0, commits: 0 };
         total.knownPrs = sum([total.knownPrs, knownPrs]); total.commits = sum([total.commits, commits]);
         const limit = totals(daily.get(date)!);
-        if (total.knownPrs > limit.knownPrs || limit.commits === null && commits > 0 || limit.commits !== null && commits > limit.commits) throw new Error("Invalid repository accounting");
+        if (total.knownPrs > limit.knownPrs || limit.commits !== null && commits > limit.commits) throw new Error("Invalid repository accounting");
         accounting.set(date, total);
         return { day: date, knownPrs, commits };
       });
@@ -314,7 +316,7 @@ function repositoryRows(raw: unknown, daily: Map<string, DailyRow>, span = 31): 
       if (typeof row.day !== "string" || !daily.has(row.day) || attribution.has(row.day)) throw new Error("Invalid repository attribution date");
       const knownPrs = count(row.knownPrs), commits = count(row.commits);
       const limit = totals(daily.get(row.day)!);
-      if (knownPrs > limit.knownPrs || limit.commits === null && commits > 0 || limit.commits !== null && commits > limit.commits) throw new Error("Invalid repository attribution");
+      if (knownPrs > limit.knownPrs || limit.commits !== null && commits > limit.commits) throw new Error("Invalid repository attribution");
       attribution.set(row.day, { knownPrs, commits });
     }
     for (const date of new Set([...accounting.keys(), ...attribution.keys()])) {
@@ -333,7 +335,7 @@ function localHistory(raw: unknown, endDay: string, current: Map<string, DailyRo
   try {
     const data = object(raw);
     if (data.version !== 1) throw new Error("Invalid activity history");
-    const daily = rows(data.daily, endDay, 60, true);
+    const daily = rows(data.daily, endDay, 60);
     for (const [day, historical] of daily) {
       const recent = current.get(day);
       if (!recent) continue;
