@@ -156,7 +156,7 @@ describe("local Usage panel", () => {
     expect(model.textContent).toContain("Unavailable");
     const summaries = () => [...host.querySelectorAll("section [data-usage-token-breakdown]")].slice(0, 3).map((summary) => summary.textContent);
     expect(summaries()).toEqual([
-      "Cached input50 (38.5%)Estimated cost (USD)At least $1.23",
+      "Cached input50 (38.5%)Estimated cost (USD)$1.23",
       "Cached input0 (0%)Estimated cost (USD)$0.00 priced · Partial",
       "Cached input0Estimated cost (USD)$0.00",
     ]);
@@ -178,15 +178,38 @@ describe("local Usage panel", () => {
     windows["30"].tokenDetails!.input = null;
     await renderRaw(snapshot);
     expect(summaries()).toEqual([
-      "Cached input50Estimated cost (USD)At least $1.23",
+      "Cached input50Estimated cost (USD)$1.23",
       "Cached inputUnavailableEstimated cost (USD)$0.00 priced · Partial",
       "Cached input125Estimated cost (USD)$0.00",
     ]);
   });
 
+  it("compacts large Cached input counts in the summary, model table and trend", async () => {
+    const snapshot = structuredClone(sample);
+    const cacheRead = 2_926_902_462, input = 85_000_000, output = 15_000_000;
+    const totalTokens = cacheRead + input + output;
+    const estimatedCost = { coverage: "unavailable", usd: null } as const;
+    const row = { model: "fixture", totalTokens, cacheRead, input, output, estimatedCost };
+    const tokens = { totalTokens, newTokens: input + output, cacheRead,
+      tokenDetails: { input, output, cacheRead, estimatedCost, models: { coverage: "ready", rows: [row] } } } as const;
+    Object.assign(snapshot.windows!["1"], tokens);
+    const day = snapshot.trend.at(-1)!;
+    Object.assign(day, tokens);
+    await renderRaw(snapshot);
+    expect(host.querySelector("[data-usage-token-breakdown] dd")?.textContent).toBe("2.9B (97.2%)");
+    expect(host.querySelector("[data-usage-model-table] tbody td:nth-child(3)")?.textContent).toBe("2.9B");
+    const trend = host.querySelector('[data-usage-trend="totalTokens"]')!;
+    const types = trend.querySelector<HTMLButtonElement>('[role="group"] button')!;
+    const point = trend.querySelector<HTMLButtonElement>(`[data-usage-day="${day.day}"]`)!;
+    await act(async () => { types.click(); point.focus(); });
+    const cachedLabel = [...trend.querySelectorAll('[role="tooltip"] dt')].find((label) => label.textContent === "Cached input");
+    expect(cachedLabel?.nextElementSibling?.textContent).toBe("2.9B");
+  });
+
   it("uses raw reconciled estimates for Model usage cost shares", async () => {
     const snapshot = structuredClone(sample);
     const window = snapshot.windows!["1"];
+    window.tokenCoverage = "ready";
     const row = { input: 10, output: 0, cacheRead: 0, totalTokens: 10 };
     window.tokenDetails = {
       input: 40, output: 0, estimatedCost: { coverage: "partial", usd: 0.0153 },
@@ -202,7 +225,12 @@ describe("local Usage panel", () => {
     const costShare = (name: string) => [...model.querySelectorAll("[data-usage-model-table] tbody tr")]
       .find((row) => row.querySelector("th")?.textContent === name)?.querySelector("[data-usage-cost-share]");
     expect(costShare("fixture-large")?.getAttribute("title")).toBe("97.4% of recorded estimated cost");
-    expect(costShare("fixture-large")?.parentElement?.textContent).toContain("At least $0.01");
+    expect(costShare("fixture-large")?.parentElement?.firstChild?.textContent).toBe("$0.01");
+    const partialSummary = host.querySelector('[data-usage-token-breakdown] dd span[title="Partial coverage"]');
+    expect(partialSummary?.textContent).toBe("$0.01");
+    expect(partialSummary?.getAttribute("aria-description")).toBe("Partial coverage");
+    expect(costShare("fixture-large")?.parentElement?.firstElementChild?.getAttribute("aria-description")).toBe("Partial coverage");
+    expect(costShare("fixture-small")?.parentElement?.firstElementChild?.hasAttribute("aria-description")).toBe(false);
     expect(costShare("fixture-small")?.getAttribute("title")).toBe("2.6% of recorded estimated cost");
     expect(costShare("fixture-zero")?.getAttribute("title")).toBe("0% of recorded estimated cost");
     expect(costShare("activities-unpriced-fixture")).toBeNull();
