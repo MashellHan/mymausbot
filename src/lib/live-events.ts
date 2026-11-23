@@ -1,6 +1,7 @@
 // EventSource hides SSE comment keepalives, so liveness comes from the server's visible `ping` frame.
 import type { ServerFrame } from "../../shared/wire";
 import { cloudAsleep, markCloudAsleep, onCloudPower, sleepingFrame } from "./cloud-power";
+import { isJsonResponse, isRemotePwaMode, remoteFetch, remoteUrl } from "./pwa-config";
 import { recordBotTextMessage, recordRuntimeEvent } from "./voice-latency-probe";
 import { noteTurnEvent } from "@/state/turn-status";
 import { forgetLiveReplies, noteLiveReplyEvent, noteLiveReplyMessage } from "@/state/live-reply";
@@ -39,8 +40,16 @@ interface ListenerTarget {
   removeEventListener: (type: string, listener: () => void) => void;
 }
 
+export type LiveStreamTicketResult =
+  | { ok: true; ticket: string | null }
+  | { ok: false; status?: number };
+
+export type LiveSessionProbeResult = "authenticated" | "unauthenticated" | "unreachable";
+
 export interface LiveEventsPlatform {
   createEventSource: (url: string) => LiveEventSourceLike;
+  acquireTicket?: (signal: AbortSignal) => Promise<LiveStreamTicketResult>;
+  probeSession?: () => Promise<LiveSessionProbeResult>;
   windowTarget?: ListenerTarget;
   documentTarget?: ListenerTarget;
   isVisible: () => boolean;
@@ -54,6 +63,7 @@ export interface LiveEventsHandlers {
   onSnapshotRequired: () => Promise<boolean>;
   onOpen?: () => void;
   onError?: () => void;
+  onUnauthenticated?: () => void;
   staleMs?: number;
   retryMinMs?: number;
   retryMaxMs?: number;
@@ -61,10 +71,11 @@ export interface LiveEventsHandlers {
 
 /** `screens: false` asks the server to leave out live screen frames; `window=1` tells it an app window is open;
  * `frames=thread` that this client keeps a bot's other threads when a bot frame says `tasksPartial`. */
-export function liveEventsUrl(options?: { since?: string | null; screens?: boolean }): string {
+export function liveEventsUrl(options?: { since?: string | null; screens?: boolean; ticket?: string | null }): string {
   const params = new URLSearchParams();
   if (options?.since) params.set("since", options.since);
   if (options?.screens === false) params.set("screens", "off");
+  if (options?.ticket) params.set("ticket", options.ticket);
   params.set("window", "1");
   params.set("frames", "thread");
   return `${LIVE_EVENTS_PATH}?${params}`;
@@ -173,10 +184,46 @@ function browserPlatform(overrides: Partial<LiveEventsPlatform>): LiveEventsPlat
         });
   if (!createEventSource) return null;
 
+  const defaultAcquireTicket: LiveEventsPlatform["acquireTicket"] =
+    overrides.acquireTicket ??
+    (isRemotePwaMode()
+      ? async (signal) => {
+          try {
+            const res = await remoteFetch("/api/auth/stream-ticket", { method: "POST", signal });
+            if (!res.ok) return { ok: false, status: res.status };
+            if (!isJsonResponse(res)) return { ok: false };
+            const body = (await res.json().catch(() => null)) as { ticket?: unknown } | null;
+            if (typeof body?.ticket !== "string" || !body.ticket) return { ok: false };
+            return { ok: true, ticket: body.ticket };
+          } catch {
+            return { ok: false };
+          }
+        }
+      : undefined);
+
+  const defaultProbeSession: LiveEventsPlatform["probeSession"] =
+    overrides.probeSession ??
+    (isRemotePwaMode()
+      ? async () => {
+          try {
+            const res = await remoteFetch("/api/auth/session", { cache: "no-store" });
+            if (res.status === 401 || res.status === 403) return "unauthenticated";
+            if (!res.ok || !isJsonResponse(res)) return "unreachable";
+            const body = (await res.json().catch(() => null)) as { kind?: unknown } | null;
+            if (body?.kind === "session") return "authenticated";
+            return "unreachable";
+          } catch {
+            return "unreachable";
+          }
+        }
+      : undefined);
+
   const browserWindow = globalThis.window;
   const browserDocument = globalThis.document;
   return {
     createEventSource,
+    acquireTicket: defaultAcquireTicket,
+    probeSession: defaultProbeSession,
     windowTarget:
       overrides.windowTarget ??
       (browserWindow
@@ -216,12 +263,15 @@ export function openLiveEvents(
   const staleCheckMs = Math.min(10_000, Math.max(250, staleMs / 2));
 
   let stopped = false;
+  let unauthenticated = false;
   let source: LiveEventSourceLike | null = null;
   let sourceScreens = screensWanted();
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let retryAttempt = 0;
   let cursor: string | null = null;
   let lastHeardAt = platform.now();
+  let connectGeneration = 0;
+  let ticketAbort: AbortController | null = null;
   let snapshotGeneration = 0;
   let pendingSnapshot: {
     generation: number;
@@ -234,6 +284,21 @@ export function openLiveEvents(
     if (retryTimer === null) return;
     clearTimeout(retryTimer);
     retryTimer = null;
+  };
+
+  const abortTicketFetch = () => {
+    if (!ticketAbort) return;
+    ticketAbort.abort();
+    ticketAbort = null;
+  };
+
+  const stopForUnauthenticated = () => {
+    if (unauthenticated) return;
+    unauthenticated = true;
+    clearRetry();
+    abortTicketFetch();
+    closeSource();
+    handlers.onUnauthenticated?.();
   };
 
   const closeSource = () => {
@@ -253,30 +318,49 @@ export function openLiveEvents(
   let connect: () => void;
   const scheduleReconnect = () => {
     // A Cloud home that went to sleep: reconnecting would wake it. The person's next action does (src/lib/cloud-power.ts).
-    if (stopped || retryTimer !== null || !platform.isOnline() || !platform.isVisible() || cloudAsleep()) return;
+    if (stopped || unauthenticated || retryTimer !== null || !platform.isOnline() || !platform.isVisible() || cloudAsleep()) return;
     const exponent = Math.min(retryAttempt, 20);
     const delay = Math.min(retryMaxMs, retryMinMs * 2 ** exponent);
     retryAttempt += 1;
     retryTimer = setTimeout(() => {
       retryTimer = null;
-      if (!platform.isVisible()) return;
+      if (!platform.isVisible() || unauthenticated) return;
       connect();
     }, delay);
   };
 
   const connectionLost = (current: LiveEventSourceLike) => {
     if (stopped || source !== current) return;
+    const generation = ++connectGeneration;
+    abortTicketFetch();
     closeSource();
     handlers.onError?.();
-    scheduleReconnect();
+    if (!platform.probeSession) {
+      scheduleReconnect();
+      return;
+    }
+    void platform.probeSession().then(
+      (result) => {
+        if (stopped || generation !== connectGeneration || unauthenticated) return;
+        if (result === "unauthenticated") {
+          stopForUnauthenticated();
+          return;
+        }
+        scheduleReconnect();
+      },
+      () => {
+        if (stopped || generation !== connectGeneration || unauthenticated) return;
+        scheduleReconnect();
+      },
+    );
   };
 
-  connect = () => {
-    if (stopped || source || !platform.isOnline() || cloudAsleep()) return;
+  const openStreamWithTicket = (generation: number, ticket: string | null) => {
+    if (stopped || unauthenticated || generation !== connectGeneration || source || !platform.isOnline() || cloudAsleep()) return;
     let current: LiveEventSourceLike;
     try {
       sourceScreens = screensWanted();
-      current = platform.createEventSource(liveEventsUrl({ since: cursor, screens: sourceScreens }));
+      current = platform.createEventSource(remoteUrl(liveEventsUrl({ since: cursor, screens: sourceScreens, ticket })));
     } catch {
       handlers.onError?.();
       scheduleReconnect();
@@ -364,9 +448,62 @@ export function openLiveEvents(
     };
   };
 
+  connect = () => {
+    if (stopped || unauthenticated || source || ticketAbort || !platform.isOnline() || cloudAsleep()) return;
+    const generation = ++connectGeneration;
+    if (!platform.acquireTicket) {
+      openStreamWithTicket(generation, null);
+      return;
+    }
+    const controller = new AbortController();
+    ticketAbort = controller;
+    void platform.acquireTicket(controller.signal).then(
+      (result) => {
+        if (ticketAbort === controller) ticketAbort = null;
+        if (stopped || unauthenticated || generation !== connectGeneration || controller.signal.aborted) return;
+        if (!result.ok) {
+          if (result.status === 401 || result.status === 403) {
+            if (!platform.probeSession) {
+              stopForUnauthenticated();
+              return;
+            }
+            void platform.probeSession().then(
+              (probe) => {
+                if (stopped || unauthenticated || generation !== connectGeneration) return;
+                if (probe === "unauthenticated") {
+                  stopForUnauthenticated();
+                  return;
+                }
+                handlers.onError?.();
+                scheduleReconnect();
+              },
+              () => {
+                if (stopped || unauthenticated || generation !== connectGeneration) return;
+                handlers.onError?.();
+                scheduleReconnect();
+              },
+            );
+            return;
+          }
+          handlers.onError?.();
+          scheduleReconnect();
+          return;
+        }
+        openStreamWithTicket(generation, result.ticket);
+      },
+      () => {
+        if (ticketAbort === controller) ticketAbort = null;
+        if (stopped || unauthenticated || generation !== connectGeneration || controller.signal.aborted) return;
+        handlers.onError?.();
+        scheduleReconnect();
+      },
+    );
+  };
+
   const reconnectNow = (reportDisconnect: boolean) => {
-    if (stopped || !platform.isOnline()) return;
+    if (stopped || unauthenticated || !platform.isOnline()) return;
     clearRetry();
+    abortTicketFetch();
     if (source) {
       closeSource();
       if (reportDisconnect) handlers.onError?.();
@@ -376,7 +513,8 @@ export function openLiveEvents(
 
   const recover = () => {
     // Background tabs suspend timers and network delivery: recover once on wake.
-    if (stopped || !platform.isOnline() || !platform.isVisible() || cloudAsleep()) return;
+    if (stopped || unauthenticated || !platform.isOnline() || !platform.isVisible() || cloudAsleep()) return;
+    if (ticketAbort) return;
     if (!source || shouldReconnectLiveEvents(lastHeardAt, platform.now(), staleMs)) {
       reconnectNow(source !== null);
     }
@@ -389,11 +527,11 @@ export function openLiveEvents(
     if (platform.isVisible()) recover();
   };
   const onRetry = () => {
-    if (platform.isVisible() && !cloudAsleep()) reconnectNow(true);
+    if (platform.isVisible() && !cloudAsleep() && !unauthenticated) reconnectNow(true);
   };
 
   const onScreenWish = () => queueMicrotask(() => {
-    if (source && cursor && !pendingSnapshot && screensWanted() !== sourceScreens) reconnectNow(false);
+    if (!unauthenticated && source && cursor && !pendingSnapshot && screensWanted() !== sourceScreens) reconnectNow(false);
   });
   screenWishListeners.add(onScreenWish);
   connect();
@@ -408,10 +546,12 @@ export function openLiveEvents(
   return () => {
     if (stopped) return;
     stopped = true;
+    connectGeneration += 1;
     screenWishListeners.delete(onScreenWish);
     stopPower();
     clearInterval(staleTimer);
     clearRetry();
+    abortTicketFetch();
     closeSource();
     platform.windowTarget?.removeEventListener("online", onOnline);
     platform.windowTarget?.removeEventListener("focus", onFocus);

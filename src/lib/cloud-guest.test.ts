@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { canWriteIn } from "./cloud-guest";
 import { readSessionState } from "./session";
 
-const answer = (body: unknown) => (async () => new Response(JSON.stringify(body), { status: 200 })) as unknown as typeof fetch;
+const answer = (body: unknown) => (async () => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
 
 describe("where a device may write on an OMB Cloud home", () => {
   it("a guest writes only in the conversations it opened; the owner's devices and every other server anywhere", async () => {

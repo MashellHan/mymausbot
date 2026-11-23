@@ -69,3 +69,16 @@ it("re-resolves an ID-only draft from current messages and shows missing sources
   flushSync(() => host.querySelector<HTMLButtonElement>('[data-composer-reply] button[aria-label="Cancel reply"]')!.click());
   expect(host.querySelector('[data-composer-reply]')).toBeNull();
 });
+
+it("shows a saved reply to a Wait under automation and leaves the internal row out of chat", () => {
+  const notice: Message = { id: "notice", role: "bot", kind: "text", at: 0, text: "The sample report is ready." };
+  const continuation: Message = { id: source.id, at: 1, parentId: notice.id, role: "user", kind: "text", automated: true, waitContinuation: true };
+  draw([notice, continuation, current]);
+  const quote = host.querySelector("[data-reply-quote]");
+  expect(host.textContent).toContain(notice.text);
+  expect(host.textContent).toContain(current.text);
+  expect(quote?.textContent).toContain("Automation");
+  expect(quote?.textContent).not.toContain("You");
+  expect(quote?.querySelector("button")).toBeNull();
+  expect(host.querySelector('[data-mid="source"]')).toBeNull();
+});

@@ -232,12 +232,27 @@ verified pane, session file, branch and provider/model before exposing the
 ceiling. Missing or mismatched reports, virtual models and unsupported runtimes
 leave the ceiling unavailable.
 
+OpenCode member cards use the uniquely verified Herdr session to show the last
+observed model, recognized effort and redacted visible reply. The Host checks
+the binding again before exposing the observation.
+
+Codex and OpenCode member usage is calculated from native session logs after
+the first verified seat observation. The Host caches a fingerprint and start
+time for each currently verified terminal binding in its own data directory.
+Restart the Host with the same Herdr terminal and binding to retain both usage
+windows. A replacement terminal, moved seat or ambiguous session claim starts
+a new attribution window when it is verified again.
+
 ## Per-agent activity
 
 `GET /api/local-dashboard/agents/{paneId}/activity` is the legacy local-owner
 read for a recent snapshot. It accepts a Herdr pane ID such as `w6:p1` and no
 query parameters. Codex uses a 512 KiB recent tail. Pi verifies the session
-path, header and current persisted branch. Both return at most 60 events,
+path, header and current persisted branch. OpenCode reads the verified session
+from its local read-only SQLite store with a 512 KiB recent scan budget for the
+projected message data. The current store filters tool blocks before counting
+message bytes, so a tool-heavy tail does not displace the last visible reply.
+The OpenCode reader exposes visible user and assistant text. All three return at most 60 events,
 including at most 30 tool events. Tool detail is redacted and bounded, and may
 be available, absent or withheld. Path-like values and recognized credential
 shapes are masked. System, developer and reasoning records are skipped.
@@ -260,8 +275,8 @@ await window.mausApp.dashboard.read({
 The bridge inserts `expectedRevision`. Omit `history` and `before` for the
 legacy request. History v1 accepts `before` only with `history: 1`. Every page
 revalidates the installed app, resource grant and current selected occupant.
-The history scan retains at most 360 events from a bounded tail of up to
-4 MiB for Codex or 8 MiB for Pi. Each v1 page includes up to 60 events in
+The history scan retains at most 500 events from a bounded tail of up to
+4 MiB for Codex or OpenCode, or 8 MiB for Pi. Each v1 page includes up to 100 events in
 source order, oldest first. Use `snapshot.history.nextBefore` for the next
 earlier page. A null cursor ends the available history.
 

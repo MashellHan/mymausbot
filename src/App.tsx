@@ -342,7 +342,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   const strips = <>
     <UpdateBanner sidebarIndicator={framed || (!calendarFocus && (sidebarInline || drawerOpen))} />
     <CloudAsleepStrip />
-    <LiveConnectionStrip connected={state.connected} hydrated={state.hydrated === true} />
+    <LiveConnectionStrip connected={state.connected} hydrated={state.hydrated === true} cachedHydrated={state.cachedHydrated === true} />
     <CloudSendStrip cloudHome={state.config?.cloudHome === true} />
     <HomeLine />
     <AppNotices quiet={paletteOpen || drawerOpen || Boolean(localVmWorkspaceBotId)} viewer={viewer} />

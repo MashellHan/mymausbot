@@ -1,5 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 
+import type { Message } from "./store.ts";
+import { isWaitContinuation } from "./wait-continuation.ts";
+
 export interface SearchHit {
   threadId: string;
   messageId: string;
@@ -34,11 +37,19 @@ export function searchMessagesInDatabase(database: DatabaseSync, query: string, 
   if (!needle) return [];
   // SQLite's built-in lower() folds ASCII only; match the query and snippet's Unicode lowercase rules.
   database.function("omb_search_lower", { deterministic: true }, (value) => typeof value === "string" ? value.toLowerCase() : null);
+  const parentMessage = database.prepare("SELECT json FROM messages WHERE thread_id = ? AND id = ?");
+  database.function("omb_search_wait_input", (thread, stored) => {
+    if (typeof thread !== "string" || typeof stored !== "string") return 0;
+    return isWaitContinuation(JSON.parse(stored) as Message, (id) => {
+      const parent = parentMessage.get(thread, id)?.json;
+      return typeof parent === "string" ? JSON.parse(parent) as Message : undefined;
+    }) ? 1 : 0;
+  });
   const pattern = `%${needle.replace(/([\\%_])/g, "\\$1")}%`;
   const scope = threadId ? "thread_id = ? AND " : "";
   const statement = database.prepare(
     "SELECT thread_id, id, at, role, kind, text, json_extract(json, '$.tool.name') AS tool_name, json_extract(json, '$.from.name') AS from_name FROM messages " +
-      `WHERE ${scope}((kind = 'text' AND text IS NOT NULL AND omb_search_lower(text) LIKE ? ESCAPE '\\') ` +
+      `WHERE ${scope}((kind = 'text' AND text IS NOT NULL AND omb_search_lower(text) LIKE ? ESCAPE '\\' AND (role != 'user' OR NOT omb_search_wait_input(thread_id, json))) ` +
       "   OR (kind = 'activity' AND tool_name IS NOT NULL AND omb_search_lower(tool_name) LIKE ? ESCAPE '\\')) " +
       "ORDER BY at DESC LIMIT ?",
   );

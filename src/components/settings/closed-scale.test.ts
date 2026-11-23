@@ -78,6 +78,7 @@ const FILES = [
   "src/components/keys/KeysPage.tsx",
   "src/components/settings/AdvancedSection.tsx",
   "src/components/settings/DesktopKinds.tsx",
+  "src/components/settings/PwaBridgeCard.tsx",
   "src/components/settings/SettingsDialog.tsx",
   "src/components/settings/SettingsNav.tsx",
   "src/components/settings/SettingsPageHeader.tsx",

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { codexLimitResetsAt } from "./drivers/codex-errors.ts";
 import { engineLimitFromUsage, LimitResetClock, nearLimitNote, UNNAMED_LIMIT_MS } from "./limit-resets.ts";
 import type { RuntimeEvent } from "../shared/runtime-events.ts";
-import { parseClaudeUsage, parseCodexUsage, parseOpenCodeUsage, planAccountsFromInstances, type PlanProviderRow, type PlanUsageReport, type PlanWindows } from "./plan-usage.ts";
+import { parseClaudeUsage, parseCodexUsage, parseOpenCodeUsage, planAccountsFromInstances, type PlanAccount, type PlanProviderRow, type PlanUsageReport, type PlanWindows } from "./plan-usage.ts";
 
 const NOW = Date.parse("2026-10-19T10:00:00Z");
 const HOUR = 3_600_000;
@@ -136,6 +136,7 @@ describe("LimitResetClock", () => {
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
   const accounts = [{ id: "claude", name: "Claude", driver: "claude" as const, environment: {} }];
+  const failedClaude = { ...row("claude", "claude", parseClaudeUsage({})), ok: false, error: "Claude's usage could not be reached" };
   const clock = (options: Partial<ConstructorParameters<typeof LimitResetClock>[0]> = {}) => {
     let now = NOW;
     const instance = new LimitResetClock({ accounts: () => accounts, now: () => now, ...options });
@@ -225,6 +226,111 @@ describe("LimitResetClock", () => {
     const fixture = clock().instance;
     await fixture.refresh(true);
     expect(fixture.limit("claude")).toMatchObject({ usedPercent: 91, resetsAt: NOW + 5 * HOUR });
+  });
+
+  it("keeps the last reading through a failed read, for an hour at most and only until one of its windows resets", async () => {
+    let next = report(claude([38, NOW + 3 * HOUR], [12, NOW + 90 * HOUR]));
+    const { instance, at } = clock({ loadUsage: async () => next });
+    at(NOW + 60_000);
+    await instance.refresh(true);
+    expect(instance.limit("claude")).toMatchObject({ usedPercent: 38 });
+    expect(instance.limit("claude")?.checkedAt).toBeUndefined();
+
+    next = report(failedClaude);
+    at(NOW + 10 * 60_000);
+    await instance.refresh(true);
+    expect(instance.report().checkedAt).toBe(NOW + 10 * 60_000);
+    expect(instance.limit("claude")).toMatchObject({ usedPercent: 38, window: "5-hour", checkedAt: NOW, windows: [
+      { window: "5-hour", usedPercent: 38, resetsAt: NOW + 3 * HOUR }, { window: "weekly", usedPercent: 12, resetsAt: NOW + 90 * HOUR },
+    ] });
+    at(NOW + HOUR);
+    await instance.refresh(true);
+    expect(instance.limit("claude")).toMatchObject({ usedPercent: 38, checkedAt: NOW });
+    at(NOW + HOUR + 60_000);
+    expect(instance.report().engines).toEqual([]);
+
+    next = { ...report(claude([100, NOW + 3 * HOUR], [12, NOW + 2 * HOUR])), fetchedAt: iso(NOW + HOUR + 60_000) };
+    await instance.refresh(true);
+    expect(instance.limit("claude")).toMatchObject({ usedPercent: 100, blocked: true });
+    expect(instance.blockedUntil("claude")).toBe(NOW + 3 * HOUR);
+    next = report(failedClaude);
+    await instance.refresh(true);
+    expect(instance.limit("claude")).toMatchObject({ usedPercent: 100, blocked: false, checkedAt: NOW + HOUR + 60_000 });
+    expect(instance.blockedUntil("claude")).toBeNull();
+    expect(instance.resetAt("claude")).toBeNull();
+    expect(nearLimitNote(instance.limit("claude"), "Claude", "UTC")).toBe("");
+
+    instance.noteRefusal("claude", NOW + 4 * HOUR);
+    await instance.refresh(true);
+    expect(instance.blockedUntil("claude")).toBe(NOW + 4 * HOUR);
+    expect(instance.resetAt("claude")).toBe(NOW + 4 * HOUR);
+    expect(instance.limit("claude")).toMatchObject({ held: true, blocked: true, resetsAt: NOW + 4 * HOUR });
+    expect(nearLimitNote(instance.limit("claude"), "Claude", "UTC")).toContain("Claude's usage limit is 100% used");
+    instance.release("claude");
+    instance.stop();
+
+    at(NOW + 2 * HOUR);
+    expect(instance.report().engines).toEqual([]);
+  });
+
+  it("drops a retained row when the account disappears or stops reporting usage", async () => {
+    const codexAccount = { id: "codex", name: "Codex", driver: "codex" as const, environment: {} };
+    let current: PlanAccount[] = [...accounts, codexAccount];
+    const codexUsage = codex([20, NOW + HOUR], [5, NOW + 90 * HOUR]);
+    const claudeUsage = claude([38, NOW + 3 * HOUR], [12, NOW + 90 * HOUR]);
+    let next = report(claudeUsage, codexUsage);
+    const instance = new LimitResetClock({ accounts: () => current, now: () => NOW, loadUsage: async () => next });
+    await instance.refresh(true);
+    next = report(failedClaude, codexUsage);
+    await instance.refresh(true);
+    expect(instance.limit("claude")).toMatchObject({ usedPercent: 38, checkedAt: NOW });
+    expect(instance.limit("codex")).toMatchObject({ usedPercent: 20 });
+    expect(instance.limit("codex")?.checkedAt).toBeUndefined();
+
+    current = [codexAccount];
+    expect(instance.limit("claude")).toBeUndefined();
+    current = [{ ...accounts[0]!, noUsage: true }, codexAccount];
+    expect(instance.limit("claude")).toBeUndefined();
+    await instance.refresh(true);
+    current = [...accounts, codexAccount];
+    expect(instance.limit("claude")).toBeUndefined();
+
+    next = report(claudeUsage, codexUsage);
+    await instance.refresh(true);
+    next = report(codexUsage);
+    await instance.refresh(true);
+    expect(instance.limit("claude")).toBeUndefined();
+  });
+
+  it("discards usage when a configured instance switches accounts, including an in-flight read", async () => {
+    let account: PlanAccount = { id: "codex", driver: "codex", name: "Codex", environment: { CODEX_HOME: "/fixture-first" } };
+    let finishRead!: (result: PlanUsageReport) => void;
+    const loadUsage = () => new Promise<PlanUsageReport>((resolve) => { finishRead = resolve; });
+    const instance = new LimitResetClock({ accounts: () => [account], now: () => NOW, loadUsage });
+    const read = async (result: PlanUsageReport) => {
+      const refresh = instance.refresh(true);
+      finishRead(result);
+      await refresh;
+    };
+    const first = codex([38, NOW + HOUR], [12, NOW + 90 * HOUR]);
+    const failed = { ...first, ok: false, error: "Usage could not be reached" };
+    await read(report(first));
+    await read(report(failed));
+    expect(instance.limit("codex")).toMatchObject({ usedPercent: 38, checkedAt: NOW });
+
+    account = { ...account, environment: { CODEX_HOME: "/fixture-second" } };
+    await read(report(failed));
+    expect(instance.limit("codex")).toBeUndefined();
+
+    const refresh = instance.refresh(true);
+    account = { ...account, environment: { CODEX_HOME: "/fixture-third" } };
+    finishRead(report(codex([100, NOW + HOUR], [12, NOW + 90 * HOUR])));
+    await refresh;
+    expect(instance.limit("codex")).toBeUndefined();
+    expect(instance.blockedUntil("codex")).toBeNull();
+
+    await read(report(codex([61, NOW + HOUR], [12, NOW + 90 * HOUR])));
+    expect(instance.limit("codex")).toMatchObject({ usedPercent: 61 });
   });
 
   it("reads usage once an account is added after a refresh that had none", async () => {

@@ -19,7 +19,10 @@ export type UsageTrendDay = Omit<LocalUsageTrendDay, "categories" | "repositorie
 export type UsageRepositoryWindow = Pick<UsageWindow, "startDay" | "endDay" | "repositories"> & { comparison: Pick<UsageWindow["comparison"], "startDay" | "endDay"> };
 const periods = ["1", "7", "30"] as const;
 const shiftDay = (day: string, offset: number) => new Date(Date.parse(`${day}T00:00:00Z`) + offset * 86_400_000).toISOString().slice(0, 10);
-const counts = (value?: LocalUsageMergedCounts | LocalContributionCounts): UsageCounts => value ?? { prs: null, knownPrs: null, commits: null, knownCommits: null };
+const counts = (value?: LocalUsageMergedCounts | LocalContributionCounts): UsageCounts => ({
+  prs: value?.prs ?? null, knownPrs: value?.knownPrs ?? null, commits: value?.commits ?? null,
+  knownCommits: value?.knownCommits ?? null,
+});
 const emptyComparisons = () => ({ work: { prs: null, commits: null }, personal: { prs: null, commits: null }, unclassified: { prs: null, commits: null } });
 const categoryCounts = (value?: Record<LocalUsageCategory, LocalUsageMergedCounts | LocalContributionCounts>): Categories => ({
   work: counts(value?.work), personal: counts(value?.personal), unclassified: counts(value?.unclassified),
@@ -116,7 +119,8 @@ export function mergedUsageView(snapshot: LocalUsageResponse, range: UsageTrendR
 }
 
 const repositoryCounts = (value?: LocalUsageCounts): UsageCounts => ({
-  prs: value?.prs ?? null, knownPrs: value?.knownPrs ?? null, commits: value?.commits ?? null, knownCommits: value?.commits ?? null,
+  prs: value?.prs ?? null, knownPrs: value?.knownPrs ?? null, commits: value?.commits ?? null,
+  knownCommits: value?.knownCommits !== undefined ? value.knownCommits : value?.commits ?? null,
 });
 const repositoryCategories = (value?: Record<LocalUsageCategory, LocalUsageCounts>): Categories => ({
   work: repositoryCounts(value?.work), personal: repositoryCounts(value?.personal), unclassified: repositoryCounts(value?.unclassified),

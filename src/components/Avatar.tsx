@@ -19,6 +19,7 @@ import { useFestivalDress, wornBody } from "@/lib/festival-dress";
 import { t } from "@/lib/i18n";
 import { CarvedAvatar } from "./CarvedAvatar";
 import { steelBodyImage } from "@/lib/steel-body";
+import { useRemoteMediaUrl } from "@/lib/use-remote-media";
 
 export const EYE_SCALE = 1.12;
 export const MOUTH_WEIGHT = 11;
@@ -261,10 +262,13 @@ export function BotAvatar({ bot, size = 44, label, readable = false, ...mascotPr
 
   useEffect(() => setImageFailed(false), [profile.avatarUrl]);
 
+  const wantsFlatImage = profile.avatarCrop !== "mascot" && Boolean(profile.avatarUrl);
+  const remoteAvatar = useRemoteMediaUrl(wantsFlatImage ? profile.avatarUrl : null);
+
   const outcome = resolveBotAvatarOutcome({
     avatarCrop: profile.avatarCrop,
     hasUrl: Boolean(profile.avatarUrl),
-    imageFailed,
+    imageFailed: imageFailed || remoteAvatar.failed,
   });
 
   if (outcome !== "flatImage") {
@@ -293,8 +297,8 @@ export function BotAvatar({ bot, size = 44, label, readable = false, ...mascotPr
       className="relative block shrink-0 overflow-hidden bg-raised"
       style={{ width: size, height: size, borderRadius: radius }}
     >
-      <img
-        src={profile.avatarUrl}
+      {remoteAvatar.url && <img
+        src={remoteAvatar.url}
         alt={label ?? (bot.name ? t("avatar.alt", { name: bot.name }) : t("avatar.altFallback"))}
         width={size}
         height={size}
@@ -308,7 +312,7 @@ export function BotAvatar({ bot, size = 44, label, readable = false, ...mascotPr
           transform: zoom === 1 ? undefined : `scale(${zoom})`,
           transformOrigin: origin,
         }}
-      />
+      />}
     </span>
   );
 }
@@ -331,8 +335,9 @@ export function InitialsAvatar({
 }) {
   // A picture that is gone (a restored backup carries the address, not the file) falls back to the initials.
   const [failed, setFailed] = useState<string | null>(null);
-  if (avatarUrl && failed !== avatarUrl) {
-    return <img {...avatarMarks("person", "picture")} src={avatarUrl} alt="" onError={() => setFailed(avatarUrl)} className={cn("shrink-0 rounded-full object-cover", className)} style={{ width: size, height: size }} />;
+  const remoteAvatar = useRemoteMediaUrl(avatarUrl && failed !== avatarUrl ? avatarUrl : null);
+  if (avatarUrl && failed !== avatarUrl && !remoteAvatar.failed && remoteAvatar.url) {
+    return <img {...avatarMarks("person", "picture")} src={remoteAvatar.url} alt="" onError={() => setFailed(avatarUrl)} className={cn("shrink-0 rounded-full object-cover", className)} style={{ width: size, height: size }} />;
   }
   return (
     <div
