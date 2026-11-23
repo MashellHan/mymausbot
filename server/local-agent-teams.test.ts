@@ -1,6 +1,7 @@
 import { appendFile, chmod, mkdtemp, mkdir, rename, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { removeTempDir } from "./testing/cleanup.ts";
@@ -280,6 +281,70 @@ describe("local Agent Team provider", () => {
     resetPathCache();
     const provider = createLocalAgentTeamsProvider({ codexHome: join(home, ".codex") });
     expect(await provider.get()).toMatchObject({ status: "ready", teamCount: 1, teams: [{ id: "fixture-team", agentCount: 0 }] });
+  });
+
+  it("uses completed OpenCode messages only for the uniquely verified seat and rolling window", async () => {
+    const home = await mkdtemp(join(tmpdir(), "mausbot-opencode-member-"));
+    folders.push(home);
+    const dataHome = join(home, "xdg-data");
+    const directory = join(dataHome, "opencode");
+    vi.stubEnv("XDG_DATA_HOME", dataHome);
+    vi.stubEnv("OPENCODE_DB", "fixture.sqlite");
+    await mkdir(directory, { recursive: true });
+    const file = join(directory, "fixture.sqlite");
+    const database = new DatabaseSync(file);
+    try { database.exec(`CREATE TABLE session_message (session_id TEXT, type TEXT, time_created INTEGER, data TEXT);
+      CREATE TABLE message (session_id TEXT, time_created INTEGER, data TEXT)`); }
+    finally { database.close(); }
+    const sessionId = "ses_MausbotFixture";
+    const legacyId = "ses_LegacyFixture";
+    const write = (at: number, session = sessionId, type = "assistant", completedAt: number | null = at) => {
+      const fixture = new DatabaseSync(file);
+      try {
+        const usage = {
+          time: completedAt === null ? {} : { completed: completedAt },
+          tokens: { input: 120, output: 10, reasoning: 2, cache: { read: 100, write: 3 } },
+        };
+        const providerID = "raven", modelID = "gpt-6.2-sol";
+        if (session !== legacyId) fixture.prepare("INSERT INTO session_message VALUES (?, ?, ?, ?)")
+          .run(session, type, at, JSON.stringify({ ...usage, model: { providerID, id: modelID } }));
+        fixture.prepare("INSERT INTO message VALUES (?, ?, ?)")
+          .run(session, at, JSON.stringify({ ...usage, role: type, providerID, modelID }));
+      } finally { fixture.close(); }
+    };
+    const day = 24 * 60 * 60 * 1000;
+    let time = Date.UTC(2026, 10, 9, 10);
+    const seat = {
+      pane_id: "w6:p1", workspace_id: "w6", name: "opencode-member", agent: "opencode", agent_status: "done",
+      agent_session: { kind: "id", agent: "opencode", source: "herdr:opencode", value: sessionId },
+    };
+    let agents = [seat, { ...seat, pane_id: "w6:p2", name: "unverified", agent_session: { ...seat.agent_session, source: "other:opencode" } },
+      { ...seat, pane_id: "w6:p3", name: "legacy", agent_session: { ...seat.agent_session, value: legacyId } }];
+    const provider = createLocalAgentTeamsProvider({ home, codexHome: join(home, ".codex"), now: () => time,
+      run: async (args) => args.at(-2) === "workspace" ? workspaces : JSON.stringify({ result: { agents } }) });
+    write(time - 500);
+    expect((await provider.get()).teams[0]!.agents[0]!.tokenUsage24h).toMatchObject({ coverage: "unavailable", knownTokens: null });
+
+    write(time - 500, sessionId, "assistant", time + 500);
+    write(time + 500);
+    time += 2 * day;
+    write(time - 500);
+    write(time - 500, legacyId);
+    write(time - 500, "ses_Unrelated");
+    write(time - 500, sessionId, "user");
+    write(time - 500, sessionId, "assistant", null);
+    write(time + 500);
+    const [verified, unverified, legacy] = (await provider.get()).teams[0]!.agents;
+    expect(verified!.tokenUsage24h).toMatchObject({ coverage: "partial", knownTokens: 235, estimatedCost: { coverage: "partial" } });
+    expect(verified!.tokenUsage24h!.estimatedCost.usd).toBeGreaterThan(0);
+    expect(verified!.tokenUsage7d).toMatchObject({ coverage: "partial", knownTokens: 470 });
+    expect(unverified!.tokenUsage24h).toMatchObject({ coverage: "unavailable", knownTokens: null });
+    expect(legacy!.tokenUsage24h).toMatchObject({ coverage: "partial", knownTokens: 235, estimatedCost: { coverage: "partial" } });
+
+    agents = [...agents, { ...seat, pane_id: "w6:p4", name: "duplicate" }];
+    time += 2_000;
+    const duplicate = (await provider.get()).teams[0]!.agents;
+    expect(duplicate.map((member) => member.tokenUsage24h?.coverage)).toEqual(["unavailable", "unavailable", "partial", "unavailable"]);
   });
 
   it("computes per-member 24h and 7d tokens and sub-cent USD cost across turn_context model switches", async () => {
