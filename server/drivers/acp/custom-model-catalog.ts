@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
-import type { ModelCatalog } from "../../contracts.ts";
+import type { ModelListProblem } from "../../../shared/model-selection.ts";
+import type { ModelCatalog, ProviderErrorCode } from "../../contracts.ts";
 import type { AcpConfig } from "./core.ts";
 import { killCliTree, spawnCli } from "../../procs.ts";
 import { acpModelOption, acpVariantOption } from "./config-options.ts";
@@ -39,6 +40,9 @@ export interface AcpDiscoveryOptions {
   exitGraceMs?: number;
   /** Remove what the agent kept of the discovery session, once its process has stopped, when session/delete did not. */
   forgetSession?(session: { sessionId: string; cwd: string; env: Record<string, string | undefined> }): Promise<void>;
+  /** Tests shorten the whole read's limit and each request's. */
+  timeoutMs?: number;
+  requestTimeoutMs?: number;
 }
 
 /** The agent answered a discovery request with a JSON-RPC error, so it is reachable. Its own text stays
@@ -51,6 +55,24 @@ export class AcpDiscoveryRpcError extends Error {
     this.code = code;
     this.rpcMessage = rpcMessage.slice(0, 500);
   }
+}
+
+/** A discovery request, or the whole read, ran out of time. */
+export class AcpDiscoveryTimeoutError extends Error {}
+
+class AcpDiscoveryClosedError extends Error {}
+
+const interruptedReads = new WeakMap<ModelCatalog, ReadonlySet<string>>();
+
+export function interruptedVariantReads(catalog: ModelCatalog): ReadonlySet<string> | undefined {
+  return interruptedReads.get(catalog);
+}
+
+/** Why a model list could not be read, in words the picker can say: never the agent's own text. */
+export function acpDiscoveryProblem(error: unknown, classify?: (error: unknown) => ProviderErrorCode | undefined): ModelListProblem {
+  if (error instanceof AcpDiscoveryTimeoutError) return "timedOut";
+  return error instanceof AcpDiscoveryRpcError && classify?.({ code: error.code, message: error.rpcMessage }) === "invalid_credentials"
+    ? "signedOut" : "failed";
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -123,14 +145,14 @@ export async function discoverAcpModels(
   const decoder = new StringDecoder("utf8");
   let catalog: ModelCatalog | undefined;
   let thrown: unknown;
-  const fail = (message: string) => {
-    failure ??= new Error(message);
+  const fail = (error: Error) => {
+    failure ??= error;
     for (const entry of pending.values()) { clearTimeout(entry.timer); entry.reject(failure); }
     pending.clear();
   };
   const count = (chunk: Buffer) => {
     outputBytes += chunk.length;
-    if (outputBytes > MAX_OUTPUT_BYTES) fail("ACP model discovery exceeded its output limit.");
+    if (outputBytes > MAX_OUTPUT_BYTES) fail(new Error("ACP model discovery exceeded its output limit."));
     return !failure;
   };
   const send = (message: unknown) => { if (!failure) child?.stdin.write(`${JSON.stringify(message)}\n`); };
@@ -171,16 +193,16 @@ export async function discoverAcpModels(
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(id);
-        reject(new Error("ACP model discovery request timed out."));
-      }, REQUEST_TIMEOUT_MS);
+        reject(new AcpDiscoveryTimeoutError("ACP model discovery request timed out."));
+      }, discovery.requestTimeoutMs ?? REQUEST_TIMEOUT_MS);
       pending.set(id, { resolve, reject, timer });
       send({ jsonrpc: "2.0", id, method, params });
     });
   };
   try {
     child = spawnCli(cli, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] }, "bot");
-    child.on("error", () => fail("Could not start the ACP agent for model discovery."));
-    child.on("close", () => fail("ACP agent closed during model discovery."));
+    child.on("error", () => fail(new Error("Could not start the ACP agent for model discovery.")));
+    child.on("close", () => fail(new AcpDiscoveryClosedError("ACP agent closed during model discovery.")));
     child.stdout.on("data", (chunk: Buffer) => {
       if (!count(chunk)) return;
       buffer += decoder.write(chunk);
@@ -188,13 +210,13 @@ export async function discoverAcpModels(
       while ((newline = buffer.indexOf("\n")) >= 0 && !failure) {
         const line = buffer.slice(0, newline);
         buffer = buffer.slice(newline + 1);
-        if (Buffer.byteLength(line) > MAX_LINE_BYTES) { fail("ACP model discovery exceeded its line limit."); break; }
+        if (Buffer.byteLength(line) > MAX_LINE_BYTES) { fail(new Error("ACP model discovery exceeded its line limit.")); break; }
         receive(line);
       }
-      if (Buffer.byteLength(buffer) > MAX_LINE_BYTES) fail("ACP model discovery exceeded its line limit.");
+      if (Buffer.byteLength(buffer) > MAX_LINE_BYTES) fail(new Error("ACP model discovery exceeded its line limit."));
     });
     child.stderr.on("data", (chunk: Buffer) => { count(chunk); });
-    globalTimer = setTimeout(() => fail("ACP model discovery timed out."), DISCOVERY_TIMEOUT_MS);
+    globalTimer = setTimeout(() => fail(new AcpDiscoveryTimeoutError("ACP model discovery timed out.")), discovery.timeoutMs ?? DISCOVERY_TIMEOUT_MS);
     initialized = await request("initialize", {
       protocolVersion: 1,
       clientInfo: { name: DISCOVERY_CLIENT_NAME, version: "1" },
@@ -215,15 +237,16 @@ export async function discoverAcpModels(
     const { passthrough } = discovery;
     const options: ModelCatalog["options"] = passthrough ? [{ ...passthrough, ...mark }] : [];
     let discovered = 0;
+    const interrupted = new Set<string>();
+    const switches = discovery.variants !== false && modelOption.options.length <= (discovery.variantLimit ?? Number.POSITIVE_INFINITY);
     for (const model of modelOption.options) {
       if (model.id === passthrough?.id) continue;
-      if (failure) throw failure;
       if (!usableDiscoveredId(model.id)) continue;
       discovered++;
       let confirmed: unknown;
       if (model.id === modelOption.currentValue) {
         confirmed = initial;
-      } else if (discovery.variants !== false && modelOption.options.length <= (discovery.variantLimit ?? Number.POSITIVE_INFINITY)) {
+      } else if (switches) {
         const previousUpdate = updateSequence;
         try {
           const response = modelOption.configId
@@ -231,8 +254,12 @@ export async function discoverAcpModels(
             : await request("session/set_model", { sessionId, modelId: model.id });
           if (acpModelOption(response)?.currentValue === model.id) confirmed = response;
           else if (updateSequence > previousUpdate && acpModelOption(latestUpdate)?.currentValue === model.id) confirmed = latestUpdate;
-        } catch {
-          if (failure) throw failure;
+        } catch (error) {
+          if (error instanceof AcpDiscoveryTimeoutError || error instanceof AcpDiscoveryClosedError) {
+            interrupted.add(model.id);
+          } else if (!(error instanceof AcpDiscoveryRpcError)) {
+            throw error;
+          }
         }
       }
       const variants = confirmed ? acpVariantOption(confirmed)?.options.flatMap((variant) => usableDiscoveredId(variant.id)
@@ -247,19 +274,20 @@ export async function discoverAcpModels(
         ...(variants?.length ? { variants } : {}),
       });
     }
-    if (failure) throw failure;
+    if (failure && !(failure instanceof AcpDiscoveryTimeoutError || failure instanceof AcpDiscoveryClosedError)) throw failure;
     // Only the passthrough default left means every advertised model was unusable: keeping the previous catalog
     // beats replacing it with a picker that has lost its models.
     if (!discovered) throw new Error("The ACP agent did not advertise any usable models. The previous catalog was kept.");
     const preferred = discovery.default && options.some((option) => option.id === discovery.default) ? discovery.default : undefined;
     const current = usableDiscoveredId(modelOption.currentValue) ? modelOption.currentValue : undefined;
     catalog = { default: passthrough?.id ?? preferred ?? current ?? options[0].id, options };
+    if (interrupted.size) interruptedReads.set(catalog, interrupted);
   } catch (error) {
     thrown = error;
   } finally {
     if (globalTimer) clearTimeout(globalTimer);
     const deleted = sessionId && deletesAcpSessions(initialized) ? (await deleteAcpSessions(request, [sessionId])).length > 0 : false;
-    fail("ACP model discovery finished.");
+    fail(new Error("ACP model discovery finished."));
     let stopped = false;
     try {
       stopped = await stopDiscovery(child, discovery.exitGraceMs);

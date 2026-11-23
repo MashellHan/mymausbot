@@ -7,6 +7,7 @@ import {
   TEAM_LIBRARY_RAW_ROOT,
   fetchGithubTeam,
   fetchLibraryTeam,
+  fetchTeamCatalog,
   githubManifestUrls,
   libraryTeamRoles,
   parseTeamCatalog,
@@ -63,6 +64,28 @@ describe("team library", () => {
     const unsafe = structuredClone(catalog);
     unsafe.teams[0]!.manifest = "../private.json";
     expect(() => parseTeamCatalog(unsafe)).toThrow("safe catalog path");
+  });
+
+  it("accepts 1,000 entries at the catalog byte ceiling and rejects an extra entry", async () => {
+    const entry = catalog.teams[0]!;
+    const teams = Array.from({ length: 1_001 }, (_, index) => {
+      const slug = `bot-${index}`;
+      return { ...entry, slug, manifest: `teams/${slug}/team.mausteam.json`, readme: `teams/${slug}/README.md`, skills: [] };
+    });
+    const withinLimit = JSON.stringify({ ...catalog, teams: teams.slice(0, 1_000) }).padEnd(2_000_000);
+    const loaded = await fetchTeamCatalog(async () => new Response(withinLimit));
+    expect(loaded.teams).toHaveLength(1_000);
+    await expect(fetchTeamCatalog(async () => response({ ...catalog, teams }))).rejects.toThrow("catalog is invalid");
+  });
+
+  it("rejects catalog and manifest bodies over their separate byte ceilings", async () => {
+    await expect(fetchTeamCatalog(async () => new Response(JSON.stringify(catalog).padEnd(2_000_001))))
+      .rejects.toThrow("remote team file is too large");
+
+    const fetcher: typeof fetch = async (url) => String(url) === TEAM_LIBRARY_CATALOG_URL
+      ? response(catalog)
+      : new Response(JSON.stringify(manifest).padEnd(1_000_001));
+    await expect(fetchLibraryTeam("engineering", fetcher)).rejects.toThrow("remote team file is too large");
   });
 
   it("loads only the manifest selected by the trusted catalog", async () => {
