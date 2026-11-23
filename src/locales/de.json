@@ -2912,6 +2912,8 @@
   "server.skillSwitch.enable.body": "Der Bot kann diesen Skill wieder nutzen.",
   "server.skillSwitch.enable.done": "Skill „{name}“ eingeschaltet",
   "server.skillSwitch.enable.title": "Skill „{name}“ einschalten?",
+  "server.starter.routineRanPaused": "@{bot} kümmert sich um „{routine}“ und bleibt sonst pausiert: Starter hält {limit} Bots wach. Seine Routinen und Auslöser laufen trotzdem; um mit ihm zu chatten, schreib ihm eine Nachricht und wähle, welche Bots wach bleiben.",
+  "server.starter.routineWoke": "@{bot} wurde für „{routine}“ geweckt: Starter hält {limit} Bots wach, deshalb ist @{out}, der eine Weile nichts zu tun hatte, jetzt pausiert. Um das rückgängig zu machen, schreib @{out} eine Nachricht und wähle, welche Bots wach bleiben.",
   "server.stop.nothingRunning": "Hier lief nichts, es gab also nichts zu stoppen.",
   "server.teamSlack.channel": "Slack #{channel}: {text}",
   "server.teamSlack.channelUnnamed": "Slack-Kanal: {text}",
