@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 
 import type { LocalAgentMember, LocalAgentState, LocalAgentTeamsResponse, LocalAgentTeam } from "../shared/local-dashboard.ts";
 import { augmentedPath } from "./env-path.ts";
+import { openCodeSessionId, readOpenCodeMemberUsage } from "./local-agent-opencode-usage.ts";
 import { codexSessionId, createLocalAgentSessionReader, dashboardText, unavailableMemberUsage } from "./local-agent-session.ts";
 import { PI_CONTEXT_KEY, parsePiContext, readPiProcessStart, type PiProcessStart } from "./local-agent-pi-context.ts";
 import { createPiSessionReader, type PiSessionView } from "./local-agent-pi-message.ts";
@@ -111,6 +112,11 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
       }
       const verified = verifiedLocalAgentMembers(agents);
       const verifiedIds = new Set(verified.map((agent) => agent.pane_id));
+      const openCodeSessions = new Map(verified.flatMap((agent) => {
+        const id = openCodeSessionId(agent);
+        return id ? [[agent.pane_id, id] as const] : [];
+      }));
+      const openCodeUsage = readOpenCodeMemberUsage(join(home, ".local", "share", "opencode", "opencode.db"), openCodeSessions.values(), sampledAt);
       const [observations, roles, piSessions] = await Promise.all([
         observationsFor(agents), localAgentRoles(verified, home), piSessionsFor(verified),
       ]);
@@ -134,19 +140,22 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         seen.add(id);
         const sessionId = codexSessionId(agent);
         const verifiedCodexMember = verifiedIds.has(id) && sessionId !== null && sessionClaims.get(sessionId) === 1;
+        const openCodeSession = openCodeSessions.get(id);
         const observation = sessionId ? observations.get(sessionId) : null;
         const pi = verifiedIds.has(id) ? piSessions.get(id) : null;
         if (observation?.lastActivityAt != null) team.lastActivityAt = Math.max(team.lastActivityAt ?? 0, observation.lastActivityAt);
         const occupantId = localAgentOccupantId(agent, id);
-        const bindingKey = verifiedCodexMember
-          ? JSON.stringify([agent.agent, occupantId, sessionId])
+        const boundSession = verifiedCodexMember ? sessionId : openCodeSession;
+        const bindingKey = boundSession
+          ? JSON.stringify([agent.agent, occupantId, boundSession])
           : JSON.stringify([agent.agent ?? null, occupantId ?? agent.name ?? null, null]);
         const previous = paneBindings.get(id);
         const switchedAt = previous && previous.key === bindingKey ? previous.switchedAt : sampledAt;
         nextBindings.set(id, { key: bindingKey, switchedAt });
         const usage = verifiedCodexMember && observation
           ? observation.memberUsage(switchedAt)
-          : { tokenUsage24h: unavailableMemberUsage(), tokenUsage7d: unavailableMemberUsage() };
+          : (openCodeSession ? openCodeUsage.get(openCodeSession)?.(switchedAt ?? sampledAt) : undefined)
+            ?? { tokenUsage24h: unavailableMemberUsage(), tokenUsage7d: unavailableMemberUsage() };
         const member: LocalAgentMember = {
           id, name: dashboardText(agent.name, 100) || id, kind: dashboardText(agent.agent, 40) || "unknown",
           ...(occupantId ? { occupantId } : {}),
