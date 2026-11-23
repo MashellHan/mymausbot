@@ -89,7 +89,7 @@ describe("the OMB Cloud page's \"Use in your browser\" link", () => {
 });
 
 describe("who the served UI is on its own machine", () => {
-  const answer = (body: unknown) => (async () => new Response(JSON.stringify(body), { status: 200 })) as unknown as typeof fetch;
+  const answer = (body: unknown) => (async () => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
   it("keeps the key a shared workspace gives this session's reactions, and nothing else in its place", async () => {
     const shared = { kind: "session", id: "s", label: "Ada's laptop", scopes: ["client"], expiresAt: 1 };
     expect(await readSessionState(answer({ ...shared, reactor: "p_ada" }))).toEqual({ ...shared, reactor: "p_ada" });
@@ -107,6 +107,39 @@ describe("who the served UI is on its own machine", () => {
     expect(isOwnerOrAdmin({ kind: "session", id: "s", label: "l", scopes: ["admin", "client"], expiresAt: 1 })).toBe(true);
     expect(isOwnerOrAdmin(null)).toBe(false);
   });
+  it("rejects non-JSON 200 responses and rejects loopback responses while in remote PWA mode", async () => {
+    const htmlFallback = (async () => new Response("<!doctype html><html></html>", { status: 200, headers: { "content-type": "text/html" } })) as unknown as typeof fetch;
+    expect(await readSessionState(htmlFallback)).toEqual({ kind: "unreachable", error: "Invalid session response" });
+
+    const { clearPwaAuth, resetPwaConfigForTests, setPwaAuth } = await import("./pwa-config");
+    resetPwaConfigForTests();
+    await setPwaAuth({
+      ownerKey: "https://relay.mxhan.com::env-1::ses-1",
+      relayUrl: "https://relay.mxhan.com",
+      token: "tok-123",
+      deviceId: "dev-1",
+      environmentId: "env-1",
+      sessionId: "ses-1",
+      serverName: "My Mac",
+      scopes: ["admin", "client"],
+      pairedAt: 1,
+    });
+    try {
+      const seen: Array<{ url: string; init?: RequestInit }> = [];
+      const remoteLoopback = (async (url: string, init?: RequestInit) => {
+        seen.push({ url, init });
+        return new Response(JSON.stringify({ kind: "loopback" }), { status: 200, headers: { "content-type": "application/json" } });
+      }) as unknown as typeof fetch;
+      expect(await readSessionState(remoteLoopback)).toEqual({ kind: "unreachable", error: "Remote session required" });
+      expect(seen).toHaveLength(1);
+      expect(seen[0].url).toBe("https://relay.mxhan.com/api/auth/session");
+      expect(seen[0].init?.credentials).toBe("omit");
+      expect(new Headers(seen[0].init?.headers).get("authorization")).toBe("Bearer tok-123");
+    } finally {
+      await clearPwaAuth();
+      resetPwaConfigForTests();
+    }
+  });
 });
 
 describe("the profile shown for a signed-in session", () => {
@@ -117,7 +150,7 @@ describe("the profile shown for a signed-in session", () => {
     const answer: typeof fetch = async () => new Response(JSON.stringify({
       kind: "session", id: "s", label: "Ada's iPad", email: "ada@example.test", scopes: ["client"], expiresAt: 1,
       team: { id: "team-1", name: "Shared Team", role: "member" },
-    }), { status: 200 });
+    }), { status: 200, headers: { "content-type": "application/json" } });
     expect(await readSessionState(answer)).toMatchObject({
       kind: "session", id: "s", label: "Ada's iPad", email: "ada@example.test", scopes: ["client"], expiresAt: 1,
       team: { id: "team-1", name: "Shared Team", role: "member" },

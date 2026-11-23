@@ -14,6 +14,21 @@ import { CitationBadge } from "./CitationUI";
 import type { CitationAttachment } from "@/lib/citations";
 import { t } from "@/lib/i18n";
 import { attachNoticeText, pasteSummaryText, sizeText } from "@/lib/attach-notice";
+import { useRemoteMediaUrl } from "@/lib/use-remote-media";
+
+function ComposerImagePreview({ src, alt }: { src: string | undefined; alt: string }) {
+  const remote = useRemoteMediaUrl(src);
+  if (!remote.url) return null;
+  return (
+    <img
+      src={remote.url}
+      alt={alt}
+      loading="eager"
+      fetchPriority="high"
+      className="max-h-[76px] max-w-full object-contain"
+    />
+  );
+}
 
 /** Electron 32 removed File.path — only the preload can name a file. */
 export function pathForFile(file: File): string {
@@ -181,12 +196,9 @@ export function ComposerAttachments({
                   className="relative flex h-[76px] w-full items-center justify-center overflow-hidden rounded-lg bg-inset focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:cursor-default"
                   aria-label={t("attach.previewAria", { name: a.name })}
                 >
-                  <img
+                  <ComposerImagePreview
                     src={attachmentImageUrl(a.path) ?? a.previewUrl}
                     alt={a.name}
-                    loading="eager"
-                    fetchPriority="high"
-                    className="max-h-[76px] max-w-full object-contain"
                   />
                   {a.uploading && (
                     <span className="absolute bottom-1.5 right-1.5 flex size-6 items-center justify-center rounded-full bg-black/65 text-white shadow-sm">

@@ -2,6 +2,7 @@
 // with the server through `theme` frames. Every way back lives here, outside anything a theme's CSS can hide.
 import { SAFE_LOOK_PARAM, THEME_COLOR_ROLES, themeFileSchema, type ActiveTheme, type ThemeFile } from "../../../shared/theme";
 import { readColorScheme } from "../color-scheme";
+import { isRemotePwaMode } from "../pwa-config";
 import { DEFAULT_SKIN_CHOICE, SKIN_IDS, applySkinChoice, readSkin, resolveSkin, subscribeSkin, THEME_SKINS, wearSkin, type SkinChoice } from "../skins";
 import { accentPalette, canvasPalette, modeOf } from "./palette";
 import { applyThemeCss } from "./theme-css";
@@ -122,6 +123,7 @@ function cachedTheme(): WornTheme | null {
 
 /** Asks the server which theme this person wears and wears it. A failed read keeps what is painted. */
 export async function loadTheme(): Promise<void> {
+  if (isRemotePwaMode()) return;
   try {
     const res = await fetch("/api/themes/active", { headers: { accept: "application/json" } });
     if (!res.ok) return;
@@ -140,8 +142,10 @@ export function applyThemeFrame(frame: { skin?: string }): void {
 }
 
 const wearOnServer = (id: string | null, skin?: SkinChoice) =>
-  fetch("/api/themes/active", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ id, ...(skin ? { skin } : {}) }) })
-    .then((res) => res.ok, () => false);
+  isRemotePwaMode()
+    ? Promise.resolve(false)
+    : fetch("/api/themes/active", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ id, ...(skin ? { skin } : {}) }) })
+        .then((res) => res.ok, () => false);
 
 /** Takes the custom theme off for this person, here at once and on the server for their other windows. */
 export function takeOffTheme(): void {

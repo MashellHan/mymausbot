@@ -35,7 +35,7 @@ describe("useOwnerOrAdmin", () => {
   it("looks the session up again after a failed read and shows owner controls once it answers", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>()
       .mockRejectedValueOnce(new TypeError("Failed to fetch"))
-      .mockResolvedValue(new Response(JSON.stringify({ kind: "loopback" }), { status: 200 }));
+      .mockResolvedValue(new Response(JSON.stringify({ kind: "loopback" }), { status: 200, headers: { "content-type": "application/json" } }));
     vi.stubGlobal("fetch", fetch);
 
     await mount();
@@ -49,7 +49,7 @@ describe("useOwnerOrAdmin", () => {
   it("lets controls mounted after a failed read wait for the one retry", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>()
       .mockRejectedValueOnce(new TypeError("Failed to fetch"))
-      .mockResolvedValue(new Response(JSON.stringify({ kind: "loopback" }), { status: 200 }));
+      .mockResolvedValue(new Response(JSON.stringify({ kind: "loopback" }), { status: 200, headers: { "content-type": "application/json" } }));
     vi.stubGlobal("fetch", fetch);
 
     await mount();
@@ -65,7 +65,7 @@ describe("useOwnerOrAdmin", () => {
   });
 
   it("keeps a session it read without asking the server again", async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(JSON.stringify({ kind: "loopback" }), { status: 200 }));
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(JSON.stringify({ kind: "loopback" }), { status: 200, headers: { "content-type": "application/json" } }));
     vi.stubGlobal("fetch", fetch);
 
     await mount();
