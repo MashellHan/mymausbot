@@ -56,6 +56,8 @@ interface InFlightStream {
   req: IncomingMessage;
   headersSent: boolean;
   finished: boolean;
+  hasRequestBody: boolean;
+  uploadEofSent: boolean;
   headerTimer: NodeJS.Timeout | undefined;
   bodyBytesReceived: number;
   isSse: boolean;
@@ -199,6 +201,16 @@ export async function startBridge(
   let activeHost: HostSession | null = null;
   let draining = false;
 
+  const cleanupStreamUpload = (host: HostSession, stream: InFlightStream, cancelIfUnfinished: boolean) => {
+    stream.pendingChunks.length = 0;
+    stream.pendingEof = false;
+    stream.pausedForBackpressure = false;
+    host.drainWaiters.delete(stream.onDrain);
+    if (cancelIfUnfinished && stream.hasRequestBody && !stream.uploadEofSent) {
+      sendFrame(host.ws, { type: "req.cancel", streamId: stream.streamId });
+    }
+  };
+
   const failStream = (
     host: HostSession,
     stream: InFlightStream,
@@ -209,9 +221,7 @@ export async function startBridge(
   ) => {
     if (!host.streams.delete(stream.streamId)) return;
     stream.finished = true;
-    stream.pendingChunks.length = 0;
-    stream.pendingEof = false;
-    host.drainWaiters.delete(stream.onDrain);
+    cleanupStreamUpload(host, stream, false);
     if (stream.headerTimer) clearTimeout(stream.headerTimer);
     if (cancelUpstream) {
       sendFrame(host.ws, { type: "req.cancel", streamId: stream.streamId });
@@ -270,6 +280,7 @@ export async function startBridge(
         return;
       }
       stream.pendingEof = false;
+      stream.uploadEofSent = true;
       sendSessionPayload(
         host,
         JSON.stringify({
@@ -399,6 +410,9 @@ export async function startBridge(
     }
 
     const headerTimeoutMs = isUploadPath(pathname) ? config.uploadHeaderTimeoutMs : config.upstreamHeaderTimeoutMs;
+    const hasRequestBody =
+      (typeof contentLengthHeader === "string" && Number(contentLengthHeader) > 0) ||
+      req.headers["transfer-encoding"] !== undefined;
 
     const stream: InFlightStream = {
       streamId,
@@ -406,6 +420,8 @@ export async function startBridge(
       req,
       headersSent: false,
       finished: false,
+      hasRequestBody,
+      uploadEofSent: false,
       headerTimer: undefined,
       bodyBytesReceived: 0,
       isSse: false,
@@ -448,6 +464,7 @@ export async function startBridge(
 
     req.on("data", (chunk: Buffer) => {
       if (bodyExceeded || bodyDone || stream.finished || !host.streams.has(streamId)) return;
+      if (chunk.length > 0) stream.hasRequestBody = true;
       stream.bodyBytesReceived += chunk.length;
       if (stream.bodyBytesReceived > config.maxBodyBytes) {
         bodyExceeded = true;
@@ -615,8 +632,8 @@ export async function startBridge(
         case "res.head": {
           const stream = session.streams.get(frame.streamId);
           if (!stream || stream.headersSent || stream.finished) return;
-          if (frame.status < 200 || frame.status > 599) {
-            failStream(session, stream, 502, "bad_gateway", "Upstream sent invalid response status", true);
+          if (frame.invalidMetadata || frame.status < 200 || frame.status > 599) {
+            failStream(session, stream, 502, "bad_gateway", "Upstream sent invalid response metadata", true);
             return;
           }
           const validatedHeaders = validateUpstreamHeaders(frame.headers);
@@ -640,6 +657,9 @@ export async function startBridge(
             stream.isSse = contentType.toLowerCase().startsWith("text/event-stream");
             if (stream.isSse) {
               stream.res.setHeader("X-Accel-Buffering", "no");
+            }
+            if (stream.hasRequestBody && !stream.uploadEofSent) {
+              stream.res.setHeader("Connection", "close");
             }
             stream.res.statusCode = frame.status;
             stream.res.flushHeaders();
@@ -666,15 +686,21 @@ export async function startBridge(
             return;
           }
           if (stream.res.writableEnded || stream.res.destroyed) {
+            stream.finished = true;
             session.streams.delete(stream.streamId);
+            cleanupStreamUpload(session, stream, false);
             sendFrame(session.ws, { type: "req.cancel", streamId: stream.streamId });
+            if (!stream.req.destroyed) stream.req.destroy();
             return;
           }
           if (stream.res.writableLength + chunk.length > config.maxStreamBufferBytes) {
             log({ ev: "stream_error", status: 502, reason: "stream_buffer_overflow" });
+            stream.finished = true;
             session.streams.delete(stream.streamId);
+            cleanupStreamUpload(session, stream, false);
             sendFrame(session.ws, { type: "req.cancel", streamId: stream.streamId });
             stream.res.destroy();
+            if (!stream.req.destroyed) stream.req.destroy();
             return;
           }
           if (chunk.length > 0) {
@@ -683,7 +709,15 @@ export async function startBridge(
           if (frame.eof) {
             stream.finished = true;
             session.streams.delete(stream.streamId);
-            stream.res.end();
+            const uploadUnfinished = stream.hasRequestBody && !stream.uploadEofSent;
+            cleanupStreamUpload(session, stream, uploadUnfinished);
+            if (uploadUnfinished && !stream.req.destroyed) {
+              stream.res.end(() => {
+                if (!stream.req.destroyed) stream.req.destroy();
+              });
+            } else {
+              stream.res.end();
+            }
           }
           break;
         }

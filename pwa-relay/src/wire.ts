@@ -17,7 +17,7 @@ export type BridgeFrame =
   | { type: "req.open"; streamId: string; method: string; path: string; headers: HeaderMap; remoteAddr: string }
   | { type: "req.body"; streamId: string; chunkB64: string; eof: boolean }
   | { type: "req.cancel"; streamId: string }
-  | { type: "res.head"; streamId: string; status: number; headers: HeaderMap }
+  | { type: "res.head"; streamId: string; status: number; headers: HeaderMap; invalidMetadata?: boolean }
   | { type: "res.body"; streamId: string; chunkB64: string; eof: boolean }
   | { type: "ping"; ts: number }
   | { type: "pong"; ts: number };
@@ -119,19 +119,22 @@ export function parseBridgeFrame(rawText: string, maxFrameBytes: number): Bridge
       return { type: "req.cancel", streamId: obj.streamId };
     }
     case "res.head": {
-      if (
-        typeof obj.streamId !== "string" ||
-        !STREAM_ID_RE.test(obj.streamId) ||
-        typeof obj.status !== "number" ||
-        !Number.isInteger(obj.status) ||
-        obj.status < 100 ||
-        obj.status > 599
-      ) {
+      if (typeof obj.streamId !== "string" || !STREAM_ID_RE.test(obj.streamId)) {
         return undefined;
       }
+      const validStatus =
+        typeof obj.status === "number" && Number.isInteger(obj.status) && obj.status >= 100 && obj.status <= 599;
       const headers = sanitizeHeaders(obj.headers, false);
-      if (!headers) return undefined;
-      return { type: "res.head", streamId: obj.streamId, status: obj.status, headers };
+      if (!validStatus || !headers) {
+        return {
+          type: "res.head",
+          streamId: obj.streamId,
+          status: validStatus ? (obj.status as number) : 0,
+          headers: headers ?? {},
+          invalidMetadata: true,
+        };
+      }
+      return { type: "res.head", streamId: obj.streamId, status: obj.status as number, headers };
     }
     case "ping":
     case "pong": {

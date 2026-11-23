@@ -486,6 +486,28 @@ describe("pwa-relay bridge", () => {
     assert.deepEqual(await badRes.json(), { error: "Upstream sent invalid response headers", code: "bad_gateway" });
     await mac.waitForFrame((f) => f.type === "req.cancel" && f.streamId === badOpen.streamId);
 
+    const badStatusPromise = fetch(`http://127.0.0.1:${bridge.port}/api/bots?case=bad-status`);
+    const badStatusOpen = (await mac.waitForFrame((f) => f.type === "req.open" && f.path.includes("bad-status"))) as Extract<
+      BridgeFrame,
+      { type: "req.open" }
+    >;
+    mac.ws.send(JSON.stringify({ type: "res.head", streamId: badStatusOpen.streamId, status: 999, headers: {} }));
+    const badStatusRes = await badStatusPromise;
+    assert.equal(badStatusRes.status, 502);
+    assertCorsAndNoStore(badStatusRes.headers);
+    await mac.waitForFrame((f) => f.type === "req.cancel" && f.streamId === badStatusOpen.streamId);
+
+    const badShapePromise = fetch(`http://127.0.0.1:${bridge.port}/api/bots?case=bad-shape`);
+    const badShapeOpen = (await mac.waitForFrame((f) => f.type === "req.open" && f.path.includes("bad-shape"))) as Extract<
+      BridgeFrame,
+      { type: "req.open" }
+    >;
+    mac.ws.send(JSON.stringify({ type: "res.head", streamId: badShapeOpen.streamId, status: 200, headers: { "x-num": 123 } }));
+    const badShapeRes = await badShapePromise;
+    assert.equal(badShapeRes.status, 502);
+    assertCorsAndNoStore(badShapeRes.headers);
+    await mac.waitForFrame((f) => f.type === "req.cancel" && f.streamId === badShapeOpen.streamId);
+
     // Concurrent healthy stream and tunnel remain unaffected
     assert.equal(bridge.hostConnected(), true);
     mac.sendFrame({ type: "res.head", streamId: healthyOpen.streamId, status: 200, headers: { "content-type": "application/json" } });
@@ -590,6 +612,70 @@ describe("pwa-relay bridge", () => {
 
     macSocket.resume();
     await mac.waitForFrame((f) => f.type === "req.cancel");
+    assert.equal(bridge.hostConnected(), true);
+    mac.ws.close();
+  });
+
+  it("cleans up paused upload and emits req.cancel on early terminal upstream rejection (401)", async () => {
+    const bridge = await startBridge(
+      makeConfig({ maxWsBufferedBytes: 16 * 1024, maxFrameBytes: 32 * 1024, uploadHeaderTimeoutMs: 1_500 }),
+      { log: () => {} },
+    );
+    bridges.push(bridge);
+
+    const mac = await connectMockMac(bridge.port);
+    await mac.waitForFrame((f) => f.type === "hello");
+
+    const macSocket = (mac.ws as unknown as { _socket?: { pause: () => void; resume: () => void } })._socket;
+    assert.ok(macSocket);
+    macSocket.pause();
+
+    const uploadPromise = fetch(`http://127.0.0.1:${bridge.port}/api/attachments?uploadId=bp-401`, {
+      method: "POST",
+      body: Buffer.alloc(4 * 1024 * 1024, 0x64),
+    });
+
+    // Wait until backpressure engages
+    const deadline = Date.now() + 3000;
+    let engaged = false;
+    while (Date.now() < deadline) {
+      const probe = await fetch(`http://127.0.0.1:${bridge.port}/api/bots`);
+      if (probe.status === 503) {
+        engaged = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 15));
+    }
+    assert.equal(engaged, true);
+
+    // Resume socket just enough to read req.open, then immediately reject with 401 before upload EOF
+    macSocket.resume();
+    const open = (await mac.waitForFrame((f) => f.type === "req.open" && f.path.includes("bp-401"))) as Extract<
+      BridgeFrame,
+      { type: "req.open" }
+    >;
+    mac.sendFrame({ type: "res.head", streamId: open.streamId, status: 401, headers: { "content-type": "application/json" } });
+    mac.sendFrame({
+      type: "res.body",
+      streamId: open.streamId,
+      chunkB64: Buffer.from('{"error":"Unauthorized"}').toString("base64"),
+      eof: true,
+    });
+
+    const uploadRes = await uploadPromise;
+    assert.equal(uploadRes.status, 401);
+    assertCorsAndNoStore(uploadRes.headers);
+    assert.deepEqual(await uploadRes.json(), { error: "Unauthorized" });
+
+    await mac.waitForFrame((f) => f.type === "req.cancel" && f.streamId === open.streamId);
+    assert.equal(
+      mac.frames.some((f) => f.type === "req.body" && f.streamId === open.streamId && f.eof),
+      false,
+      "Early rejection should abort upload before req.body EOF",
+    );
+
+    // Wait past uploadHeaderTimeoutMs to verify no lingering timer or stranded stream tears down the tunnel
+    await new Promise((r) => setTimeout(r, 1_100));
     assert.equal(bridge.hostConnected(), true);
     mac.ws.close();
   });
