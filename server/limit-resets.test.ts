@@ -302,6 +302,37 @@ describe("LimitResetClock", () => {
     expect(instance.limit("claude")).toBeUndefined();
   });
 
+  it("discards usage when a configured instance switches accounts, including an in-flight read", async () => {
+    let account: PlanAccount = { id: "codex", driver: "codex", name: "Codex", environment: { CODEX_HOME: "/fixture-first" } };
+    let finishRead!: (result: PlanUsageReport) => void;
+    const loadUsage = () => new Promise<PlanUsageReport>((resolve) => { finishRead = resolve; });
+    const instance = new LimitResetClock({ accounts: () => [account], now: () => NOW, loadUsage });
+    const read = async (result: PlanUsageReport) => {
+      const refresh = instance.refresh(true);
+      finishRead(result);
+      await refresh;
+    };
+    const first = codex([38, NOW + HOUR], [12, NOW + 90 * HOUR]);
+    const failed = { ...first, ok: false, error: "Usage could not be reached" };
+    await read(report(first));
+    await read(report(failed));
+    expect(instance.limit("codex")).toMatchObject({ usedPercent: 38, checkedAt: NOW });
+
+    account = { ...account, environment: { CODEX_HOME: "/fixture-second" } };
+    await read(report(failed));
+    expect(instance.limit("codex")).toBeUndefined();
+
+    const refresh = instance.refresh(true);
+    account = { ...account, environment: { CODEX_HOME: "/fixture-third" } };
+    finishRead(report(codex([100, NOW + HOUR], [12, NOW + 90 * HOUR])));
+    await refresh;
+    expect(instance.limit("codex")).toBeUndefined();
+    expect(instance.blockedUntil("codex")).toBeNull();
+
+    await read(report(codex([61, NOW + HOUR], [12, NOW + 90 * HOUR])));
+    expect(instance.limit("codex")).toMatchObject({ usedPercent: 61 });
+  });
+
   it("reads usage once an account is added after a refresh that had none", async () => {
     const load = vi.fn(async () => report(claude([50, NOW + HOUR], [5, NOW + 90 * HOUR])));
     let current: typeof accounts = [];

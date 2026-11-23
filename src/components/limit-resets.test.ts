@@ -135,6 +135,21 @@ describe("the Automations page warning", () => {
     expect(fixture.dispatch).toHaveBeenCalledWith({ type: "routinePatched", routine: moved });
   });
 
+  it("shows retained usage without a reset action and keeps genuine refusal targets", () => {
+    const before = routine("brief", NOW + HOUR);
+    fixture.state = { ...fixture.state, routines: [before] };
+    const retained = { ...claude(92), checkedAt: NOW - 10 * 60_000 };
+    serve([retained]);
+    const container = mount(createElement(LimitWarnings));
+    expect(container.textContent).toContain("Claude: 92% used · resets 3:40 PM");
+    expect(container.querySelector("button")).toBeNull();
+    expect(limits.resetMarkers([retained], NOW, NOW + 24 * HOUR, NOW)).toEqual([]);
+
+    const refusal = { ...retained, blocked: true, held: true };
+    expect(limits.dueBeforeReset([before], () => "claude", refusal, NOW)).toEqual([before]);
+    expect(limits.resetMarkers([refusal], NOW, NOW + 24 * HOUR, NOW)).toEqual([{ engine: "claude", name: "Claude", at: RESET }]);
+  });
+
   it("stays away while every engine has room", () => {
     limits.rememberLimits({ checkedAt: NOW, engines: [claude(40)] });
     fixture.api.mockImplementation(async () => ({ checkedAt: NOW, engines: [claude(40)] }));
