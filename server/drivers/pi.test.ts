@@ -1,12 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ensureDirs, NATIVE_DIR } from "../config.ts";
+import { botBox } from "../bot-box/box.ts";
+import { planBox, visibleInBox } from "../bot-box/plan.ts";
+import { DATA_DIR, ensureDirs, NATIVE_DIR } from "../config.ts";
 import type { ProviderInstance, RuntimeEvent } from "../contracts.ts";
+import { engineHomes, withEngineHomes } from "../engine-homes/engine-homes.ts";
+import { audienceHome } from "../engine-homes/layout.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
 import { publishedMessages, replyProblems } from "../harness/text-items.testkit.ts";
 import { caseTokens, LIVE_REPLY_CASES, liveReplyScripts } from "../testing/live-reply-cases.ts";
@@ -345,6 +349,31 @@ describe("PiDriver catalog (fake CLI)", () => {
       ]);
     } finally {
       await instance.dispose();
+    }
+  });
+
+  it("probes the model list with a Pi login the person makes after the instance started", async () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-pi-later-login-"));
+    const dump = join(home, "launches.jsonl");
+    const instance = await PiDriver.create({
+      instanceId: "pi-later-login",
+      displayName: undefined,
+      environment: { HOME: home, FAKE_PI_DUMP: dump },
+      enabled: true,
+      config: { cli: FAKE_CLI, fullAuto: false },
+    });
+    try {
+      mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+      writeFileSync(join(home, ".pi", "agent", "auth.json"), '{"openai":{"type":"api_key","key":"sk-later"}}');
+      writeFileSync(dump, "");
+      await instance.refreshModels?.();
+      const rows = readFileSync(dump, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { agentDir?: string | null });
+      const own = rows.at(-1)!.agentDir!;
+      expect(own.startsWith(join(DATA_DIR, "providers", "pi-own"))).toBe(true);
+      expect(statSync(join(own, "auth.json"), { bigint: true }).ino).toBe(statSync(join(home, ".pi", "agent", "auth.json"), { bigint: true }).ino);
+    } finally {
+      await instance.dispose();
+      await removeTempDir(home);
     }
   });
 
@@ -1169,9 +1198,241 @@ describe("PiDriver turns (fake CLI)", () => {
     expect(done).toMatchObject({ ok: true, stopReason: "cancelled" });
   });
 
-  it("writes models.json and set_model for a host::model inject pick", async () => {
+  it.skipIf(process.platform === "win32")("uses a named Raven profile in both the catalog and a boxed audience turn", async () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-pi-cloud-profile-"));
+    const profile = join(home, "profiles", "raven");
+    const dump = join(home, "dump.jsonl");
+    const cwd = join(DATA_DIR, "task-workspaces", "pi-bot", "alice");
+    const profileModels = '{"providers":{"raven":{"models":[{"id":"fixture"}]}}}';
+    const auth = '{"raven":{"type":"api_key","key":"fixture"}}';
+    mkdirSync(profile, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(profile, "models.json"), profileModels);
+    writeFileSync(join(profile, "auth.json"), auth);
+    writeFileSync(join(profile, "settings.json"), '{"defaultProvider":"raven","defaultModel":"fixture","extensions":["outside.ts"]}');
+    writeFileSync(join(profile, "AGENTS.md"), "Source profile instructions");
+    engineHomes.start({ dataDir: DATA_DIR, serverHome: home, env: { HOME: home }, audienceOf: (thread) => `member:${thread}`, threads: () => [] });
+    const wrap = vi.spyOn(botBox, "wrap").mockReturnValue(null);
+    try {
+      await create("profile-models", {
+        HOME: home, TMPDIR: "/tmp", PI_CODING_AGENT_DIR: "~/profiles/raven", FAKE_PI_DUMP: dump, RAVEN_FIXTURE_API_KEY: "fixture",
+      });
+      withEngineHomes(instance);
+      expect(instance.models.options).toEqual([expect.objectContaining({ id: "raven/fixture" })]);
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "alice", botId: "pi-bot", cwd, text: "hello", model: "raven/fixture" });
+      expect(await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId)).toMatchObject({ ok: true });
+
+      const [catalog, turn] = wrap.mock.calls.map(([request]) => request);
+      const dir = join(audienceHome(DATA_DIR, "member:alice"), "profiles", "raven");
+      const launches = readFileSync(dump, "utf8").trim().split("\n").map((row) => JSON.parse(row));
+      expect(launches.find((row) => row.argv?.includes("-e"))?.agentDir).toBe(dir);
+      expect(readFileSync(join(dir, "models.json"), "utf8")).toBe(profileModels);
+      expect(readFileSync(join(dir, "auth.json"), "utf8")).toBe(auth);
+      expect(readFileSync(join(dir, "settings.json"), "utf8")).not.toContain("extensions");
+      expect(readdirSync(dir)).not.toContain("AGENTS.md");
+      expect(turn?.shared).toContainEqual({ source: join(profile, "auth.json"), target: join(dir, "auth.json") });
+      expect(catalog?.rw).toEqual([catalog?.env.PI_CODING_AGENT_DIR]);
+      expect(turn?.rw).toEqual([dirname(turn!.env.OMB_MCP_CONFIG!)]);
+      expect(turn?.allowEnv).toContain("RAVEN_FIXTURE_API_KEY");
+
+      const setup = { dataDir: DATA_DIR, home, codeRoots: [], engineRoots: [], bridges: [] };
+      const plan = planBox(setup, turn!);
+      expect(visibleInBox(plan, join(dir, "models.json"))).toBe("rw");
+      expect(visibleInBox(plan, join(audienceHome(DATA_DIR, "member:bob"), "profiles", "raven", "models.json"))).toBe("none");
+      expect(visibleInBox(plan, join(DATA_DIR, "messages.db"))).toBe("none");
+      expect(visibleInBox(plan, turn!.env.OMB_MCP_CONFIG!)).toBe("rw");
+    } finally {
+      wrap.mockRestore();
+      engineHomes.stop();
+      await removeTempDir(home);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("rejects an unreachable masked-data Pi sign-in before spawning while keeping an unmasked named profile reachable", async () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-pi-box-reach-"));
+    const maskedProfile = join(DATA_DIR, "profiles", `masked-${randomUUID()}`);
+    const reachableProfile = join(home, "profiles", "raven");
+    const maskedDump = join(home, "masked-dump.jsonl");
+    const reachableDump = join(home, "reachable-dump.jsonl");
+    mkdirSync(maskedProfile, { recursive: true });
+    mkdirSync(reachableProfile, { recursive: true });
+    writeFileSync(join(maskedProfile, "auth.json"), '{"raven":{"type":"api_key","key":"masked-fixture"}}');
+    writeFileSync(join(maskedProfile, "models.json"), '{"providers":{"raven":{"models":[{"id":"fixture"}]}}}');
+    writeFileSync(join(reachableProfile, "auth.json"), '{"raven":{"type":"api_key","key":"reachable-fixture"}}');
+    writeFileSync(join(reachableProfile, "models.json"), '{"providers":{"raven":{"models":[{"id":"fixture"}]}}}');
+
+    const enabled = vi.spyOn(botBox, "enabled").mockReturnValue(true);
+    const startOptions = vi.spyOn(botBox, "startOptions").mockReturnValue({
+      dataDir: DATA_DIR,
+      home,
+      port: 0,
+      denyEnv: new Set(),
+      codeRoots: [],
+      engineRoots: [],
+    });
+    const wrap = vi.spyOn(botBox, "wrap").mockReturnValue(null);
+    let maskedInstance: ProviderInstance | null = null;
+    try {
+      maskedInstance = await PiDriver.create({
+        instanceId: `pi-masked-${randomUUID()}`,
+        displayName: "pi Masked",
+        environment: { HOME: home, TMPDIR: "/tmp", PI_CODING_AGENT_DIR: maskedProfile, FAKE_PI_DUMP: maskedDump },
+        enabled: true,
+        config: { cli: FAKE_CLI, fullAuto: false },
+      });
+      await expect(maskedInstance.snapshot()).resolves.toMatchObject({
+        state: "unavailable",
+        reason: expect.stringContaining("not reachable inside the bot box"),
+      });
+      await expect(maskedInstance.refreshModels?.()).rejects.toThrow(/not reachable inside the bot box/);
+      await expect(maskedInstance.adapter.sendTurn({ threadId: "t-masked", text: "hi" })).rejects.toThrow(/not reachable inside the bot box/);
+      expect(existsSync(maskedDump)).toBe(false);
+
+      await create("profile-models", {
+        HOME: home,
+        TMPDIR: "/tmp",
+        PI_CODING_AGENT_DIR: "~/profiles/raven",
+        FAKE_PI_DUMP: reachableDump,
+      });
+      await expect(instance.snapshot()).resolves.toMatchObject({ state: "available", authenticated: true });
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "t-reachable", text: "hi" });
+      expect(await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId)).toMatchObject({ ok: true });
+      expect(existsSync(reachableDump)).toBe(true);
+
+      const turn = wrap.mock.calls.at(-1)![0];
+      const plan = planBox({ dataDir: DATA_DIR, home, codeRoots: [], engineRoots: [], bridges: [] }, turn);
+      expect(visibleInBox(plan, join(reachableProfile, "auth.json"))).toBe("rw");
+      expect(visibleInBox(plan, join(maskedProfile, "auth.json"))).toBe("none");
+    } finally {
+      await maskedInstance?.dispose();
+      await removeTempDir(maskedProfile);
+      wrap.mockRestore();
+      startOptions.mockRestore();
+      enabled.mockRestore();
+      await removeTempDir(home);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("rejects a named Pi profile whose auth symlink passes through masked data before reaching home", async () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-pi-box-chain-"));
+    const profile = join(home, "profiles", "chained");
+    const canonicalDir = join(home, "canonical");
+    const canonicalAuth = join(canonicalDir, "auth.json");
+    const redirectDir = join(DATA_DIR, "redirects", randomUUID());
+    const redirectAuth = join(redirectDir, "auth.json");
+    const dump = join(home, "chain-dump.jsonl");
+    mkdirSync(profile, { recursive: true });
+    mkdirSync(canonicalDir, { recursive: true });
+    mkdirSync(redirectDir, { recursive: true });
+    writeFileSync(canonicalAuth, '{"raven":{"type":"api_key","key":"canonical-fixture"}}');
+    writeFileSync(join(profile, "models.json"), '{"providers":{"raven":{"models":[{"id":"fixture"}]}}}');
+    symlinkSync(canonicalAuth, redirectAuth);
+    symlinkSync(redirectAuth, join(profile, "auth.json"));
+
+    const enabled = vi.spyOn(botBox, "enabled").mockReturnValue(true);
+    const startOptions = vi.spyOn(botBox, "startOptions").mockReturnValue({
+      dataDir: DATA_DIR,
+      home,
+      port: 0,
+      denyEnv: new Set(),
+      codeRoots: [],
+      engineRoots: [],
+    });
+    const wrap = vi.spyOn(botBox, "wrap").mockReturnValue(null);
+    let chainedInstance: ProviderInstance | null = null;
+    try {
+      chainedInstance = await PiDriver.create({
+        instanceId: `pi-chained-${randomUUID()}`,
+        displayName: "pi Chained",
+        environment: { HOME: home, TMPDIR: "/tmp", PI_CODING_AGENT_DIR: "~/profiles/chained", FAKE_PI_DUMP: dump },
+        enabled: true,
+        config: { cli: FAKE_CLI, fullAuto: false },
+      });
+      await expect(chainedInstance.snapshot()).resolves.toMatchObject({
+        state: "unavailable",
+        reason: expect.stringContaining("not reachable inside the bot box"),
+      });
+      await expect(chainedInstance.refreshModels?.()).rejects.toThrow(/not reachable inside the bot box/);
+      await expect(chainedInstance.adapter.sendTurn({ threadId: "t-chained", text: "hi" })).rejects.toThrow(/not reachable inside the bot box/);
+      expect(existsSync(dump)).toBe(false);
+    } finally {
+      await chainedInstance?.dispose();
+      await removeTempDir(redirectDir);
+      wrap.mockRestore();
+      startOptions.mockRestore();
+      enabled.mockRestore();
+      await removeTempDir(home);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("rejects a relative auth symlink using '..' after a directory alias into masked data before spawning", async () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-pi-box-dotdot-"));
+    const profile = join(home, "profile");
+    const routes = join(home, "routes");
+    const redirectBase = join(DATA_DIR, "redirects", randomUUID());
+    const redirectNested = join(redirectBase, "nested");
+    const dump = join(home, "dotdot-dump.jsonl");
+    mkdirSync(profile, { recursive: true });
+    mkdirSync(routes, { recursive: true });
+    mkdirSync(redirectNested, { recursive: true });
+    writeFileSync(join(routes, "auth.json"), '{"raven":{"type":"api_key","key":"decoy-fixture"}}');
+    writeFileSync(join(redirectBase, "auth.json"), '{"raven":{"type":"api_key","key":"masked-fixture"}}');
+    writeFileSync(join(profile, "models.json"), '{"providers":{"raven":{"models":[{"id":"fixture"}]}}}');
+    symlinkSync(redirectNested, join(routes, "alias"));
+    symlinkSync("../routes/alias/../auth.json", join(profile, "auth.json"));
+
+    const enabled = vi.spyOn(botBox, "enabled").mockReturnValue(true);
+    const startOptions = vi.spyOn(botBox, "startOptions").mockReturnValue({
+      dataDir: DATA_DIR,
+      home,
+      port: 0,
+      denyEnv: new Set(),
+      codeRoots: [],
+      engineRoots: [],
+    });
+    const wrap = vi.spyOn(botBox, "wrap").mockReturnValue(null);
+    let dotdotInstance: ProviderInstance | null = null;
+    try {
+      dotdotInstance = await PiDriver.create({
+        instanceId: `pi-dotdot-${randomUUID()}`,
+        displayName: "pi DotDot",
+        environment: { HOME: home, TMPDIR: "/tmp", PI_CODING_AGENT_DIR: "~/profile", FAKE_PI_DUMP: dump },
+        enabled: true,
+        config: { cli: FAKE_CLI, fullAuto: false },
+      });
+      await expect(dotdotInstance.snapshot()).resolves.toMatchObject({
+        state: "unavailable",
+        reason: expect.stringMatching(/not reachable inside the bot box|could not be resolved for the bot box/),
+      });
+      await expect(dotdotInstance.refreshModels?.()).rejects.toThrow(/not reachable inside the bot box|could not be resolved for the bot box/);
+      await expect(dotdotInstance.adapter.sendTurn({ threadId: "t-dotdot", text: "hi" })).rejects.toThrow(/not reachable inside the bot box|could not be resolved for the bot box/);
+      expect(existsSync(dump)).toBe(false);
+    } finally {
+      await dotdotInstance?.dispose();
+      await removeTempDir(redirectBase);
+      wrap.mockRestore();
+      startOptions.mockRestore();
+      enabled.mockRestore();
+      await removeTempDir(home);
+    }
+  });
+
+  it("writes models.json and set_model for a host::model inject pick, in MausBot's own Pi folder", async () => {
     const home = mkdtempSync(join(tmpdir(), "omb-pi-turn-inject-"));
     const dump = join(home, "dump.jsonl");
+    // The person's own Pi setup: what a bot's turn must not load, and the login and providers it needs.
+    const person = join(home, ".pi", "agent");
+    mkdirSync(join(person, "extensions"), { recursive: true });
+    mkdirSync(join(person, "skills", "mine"), { recursive: true });
+    writeFileSync(join(person, "AGENTS.md"), "My own instructions\n");
+    writeFileSync(join(person, "SYSTEM.md"), "My own system prompt\n");
+    writeFileSync(join(person, "mcp.json"), '{"mcpServers":{"mine":{"command":"mine"}}}');
+    writeFileSync(join(person, "extensions", "edit.ts"), "export default () => {};\n");
+    writeFileSync(join(person, "skills", "mine", "SKILL.md"), "---\nname: mine\n---\n");
+    writeFileSync(join(person, "settings.json"), JSON.stringify({ defaultProvider: "openai", defaultModel: "gpt-4o", packages: ["npm:mine"], extensions: ["./x.ts"], skills: ["./s"] }));
+    writeFileSync(join(person, "auth.json"), '{"openai":{"type":"api_key","key":"sk-person"}}');
+    const personModels = '{"providers":{"mine":{"baseUrl":"http://127.0.0.1:9/v1","models":[{"id":"m"}]}}}';
+    writeFileSync(join(person, "models.json"), personModels);
     await create(undefined, { HOME: home, FAKE_PI_DUMP: dump });
     const { turnId } = await instance.adapter.sendTurn({
       threadId: "t-inject",
@@ -1187,11 +1448,21 @@ describe("PiDriver turns (fake CLI)", () => {
     expect(dumps.some((row) => row.setModel?.provider === "omlx" && row.setModel?.modelId === "MiniMax-M3-4bit")).toBe(
       true,
     );
-    const written = JSON.parse(readFileSync(join(home, ".pi", "agent", "models.json"), "utf8")) as {
-      providers: { omlx: { baseUrl: string; models: Array<{ id: string }> } };
+    const agentDirs = new Set(dumps.map((row) => (row as { agentDir?: string | null }).agentDir).filter((dir) => dir !== undefined));
+    expect(agentDirs.size).toBe(1);
+    const own = [...agentDirs][0]!;
+    expect(own.startsWith(join(DATA_DIR, "providers", "pi-own"))).toBe(true);
+    expect(readdirSync(own).filter((name) => !name.startsWith(".")).sort()).toEqual(["auth.json", "models.json", "settings.json"]);
+    expect(statSync(join(own, "auth.json"), { bigint: true }).ino).toBe(statSync(join(person, "auth.json"), { bigint: true }).ino);
+    expect(JSON.parse(readFileSync(join(own, "settings.json"), "utf8"))).toEqual({ defaultProvider: "openai", defaultModel: "gpt-4o" });
+    const written = JSON.parse(readFileSync(join(own, "models.json"), "utf8")) as {
+      providers: { mine: unknown; omlx: { baseUrl: string; models: Array<{ id: string }> } };
     };
+    expect(written.providers.mine).toBeDefined();
     expect(written.providers.omlx.baseUrl).toBe("http://127.0.0.1:8080/v1");
     expect(written.providers.omlx.models.some((m) => m.id === "MiniMax-M3-4bit")).toBe(true);
+    // MausBot's local model stays out of the person's own file.
+    expect(readFileSync(join(person, "models.json"), "utf8")).toBe(personModels);
   });
 });
 
@@ -1310,6 +1581,20 @@ describe("ensurePiInjectModel", () => {
       modelId: "MiniMax-M3-4bit",
     });
     expect(readFileSync(path, "utf8")).toBe("not json");
+  });
+
+  it.skipIf(process.platform === "win32")("publishes updated models.json with 0o600 permissions directly at atomic rename", () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-pi-inject-mode-"));
+    const agentDir = join(home, ".pi", "agent");
+    const modelsPath = join(agentDir, "models.json");
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(modelsPath, JSON.stringify({ providers: {} }), { mode: 0o644 });
+    chmodSync(modelsPath, 0o644);
+    expect(statSync(modelsPath).mode & 0o777).toBe(0o644);
+
+    ensurePiInjectModel("omlx::MiniMax-M3-4bit", { HOME: home });
+
+    expect(statSync(modelsPath).mode & 0o777).toBe(0o600);
   });
 });
 
