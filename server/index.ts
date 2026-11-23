@@ -638,6 +638,7 @@ import { createSetupImportRoutes } from "./routes/setup-import.ts";
 import { createComputerRoutes } from "./routes/computers.ts";
 import { createStatusRoutes } from "./routes/status.ts";
 import { findAntigravityLeftovers, removeAntigravityLeftovers } from "./drivers/antigravity-temp.ts";
+import { withAntigravityThinking } from "./drivers/antigravity-models.ts";
 import { createLiveRoutes } from "./routes/live.ts";
 import { createNotificationRoutes, notificationListedFor } from "./routes/notifications.ts";
 import { createTodayRoutes } from "./routes/today.ts"; import { createInboxRoutes } from "./routes/inbox.ts"; import { createSidebarSectionRoutes } from "./routes/sidebar-sections.ts";
@@ -2574,6 +2575,7 @@ function checkedModelSelection(
   raw: unknown,
   current?: { selection: ModelSelection; busy: boolean },
   requireAvailableModel = false,
+  namedByBot = false,
 ): { ok: true; selection: ModelSelection } | ({ ok: false; status: number } & ServerErrorBody) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return { ok: false, status: 400, error: "modelSelection must be an object" };
@@ -2585,10 +2587,7 @@ function checkedModelSelection(
   if (typeof value.model !== "string" || !value.model.trim()) {
     return { ok: false, status: 400, error: "modelSelection.model is required" };
   }
-  const selection: ModelSelection = {
-    instanceId: value.instanceId.trim(),
-    model: value.model.trim(),
-  };
+  const named: ModelSelection = { instanceId: value.instanceId.trim(), model: value.model.trim() }, selection = namedByBot ? withAntigravityThinking(registry.get(named.instanceId), named, value.effort !== undefined || value.variant !== undefined) : named;
   if (hostedModels && !hostedModels.allows(selection)) return { ok: false, status: 400, error: hostedModels.error() };
   if (value.effort !== undefined) {
     if (!isEffortLevel(value.effort)) {
@@ -14083,7 +14082,7 @@ if (await miniAppRoutes.internal({ method, path, res, json, botId: internalSende
           projectId = project.id;
         }
         const sourceTitle = owner.group ? owner.group.name : (store.taskByThread(from.id, fromThreadId)?.title ?? "");
-        const picked = body.modelSelection === undefined ? null : checkedModelSelection(body.modelSelection, undefined, true); const refused = !picked ? null : target.id !== from.id ? "model_selection is only for threads on yourself" : !picked.ok ? picked.error : ownThreads.refusal(picked.selection, from); if (refused) return json(res, 400, { error: refused });
+        const picked = body.modelSelection === undefined ? null : checkedModelSelection(body.modelSelection, undefined, true, true); const refused = !picked ? null : target.id !== from.id ? "model_selection is only for threads on yourself" : !picked.ok ? picked.error : ownThreads.refusal(picked.selection, from); if (refused) return json(res, 400, { error: refused });
         if (target.id === from.id) { const selfRefused = selfThreadRefusal({ handoff: Boolean(internalCapability.roomHandoffId), requestLine: store.activePath(fromThreadId).findLast((line) => line.role === "user" && line.kind === "text") }); if (selfRefused) return json(res, 409, { error: selfRefused });
           const inherited = picked?.ok ? { modelSelection: picked.selection, approvalMode: undefined } : ownThreads.inherited(from.id, fromThreadId);
           if (body.reportBack === true) { if (owner.group) return json(res, 400, { error: "report_back works only from your own conversation, not a room. Leave it out; the thread's result then stays in that thread." });
@@ -14152,7 +14151,7 @@ if (await miniAppRoutes.internal({ method, path, res, json, botId: internalSende
         if (body.modelSelection === undefined) {
           const copied = fields.modelSelection && checkedModelSelection(fields.modelSelection, undefined, true); selection = copied && copied.ok && !validateModelProposal(copied.selection) ? copied.selection : await defaultSelection();
         } else {
-          const checked = checkedModelSelection(body.modelSelection, undefined, true);
+          const checked = checkedModelSelection(body.modelSelection, undefined, true, true);
           if (!checked.ok) return json(res, checked.status, refusalBody(checked));
           selection = checked.selection;
         }
