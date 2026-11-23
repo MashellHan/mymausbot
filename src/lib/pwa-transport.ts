@@ -13,6 +13,23 @@ export interface PwaAuthRecord {
 }
 
 let activeAuth: PwaAuthRecord | null = null;
+let macOffline = false;
+const macOfflineListeners = new Set<() => void>();
+
+export function isMacOffline(): boolean {
+  return macOffline;
+}
+
+export function setMacOffline(value: boolean): void {
+  if (macOffline === value) return;
+  macOffline = value;
+  for (const listener of macOfflineListeners) listener();
+}
+
+export function subscribeMacOffline(listener: () => void): () => void {
+  macOfflineListeners.add(listener);
+  return () => macOfflineListeners.delete(listener);
+}
 
 export function isElectronDesktop(): boolean {
   const win = (globalThis as { window?: { ogb?: unknown } }).window;
@@ -26,6 +43,7 @@ export function getPwaAuth(): PwaAuthRecord | null {
 
 export function setActivePwaAuth(record: PwaAuthRecord | null): void {
   activeAuth = record;
+  if (!record) setMacOffline(false);
 }
 
 export function isRemotePwaMode(): boolean {
@@ -84,5 +102,19 @@ export function remoteFetch(
   if (!isRemotePwaMode() || !isRelayTarget(path)) {
     return init === undefined ? fetchImpl(path) : fetchImpl(path, init);
   }
-  return fetchImpl(remoteUrl(path), remoteFetchInit(init));
+  return fetchImpl(remoteUrl(path), remoteFetchInit(init)).then((res) => {
+    if (res.ok) {
+      setMacOffline(false);
+    } else if (res.status === 503 && isJsonResponse(res) && typeof res.clone === "function") {
+      void res.clone().json().then(
+        (body: unknown) => {
+          if (body && typeof body === "object" && (body as { code?: unknown }).code === "mac_offline") {
+            setMacOffline(true);
+          }
+        },
+        () => {},
+      );
+    }
+    return res;
+  });
 }

@@ -66,7 +66,7 @@ import { createBotPatchQueue, flushWhenLeaving, keepaliveFits, type BotUpdatePat
 import { liveCallFromFrame, nextLiveCallLookup } from "./live-call";
 import { isNoAiRefusal, useChatErrorClear } from "./chat-error";
 import { openLiveEvents, publishLiveFrame, publishMissedFrames, withoutScreenPixels } from "@/lib/live-events";
-import { remoteFetch } from "@/lib/pwa-config";
+import { remoteFetch } from "@/lib/pwa-config"; import { setMacOffline } from "@/lib/pwa-transport"; import { initialStoreStateFromPwaCache, reduceHydrateFromCache, resolveLiveResumeId, usePwaCacheSync, type HydrateFromCacheAction } from "./pwa-boot";
 import { noteRefusedRequest } from "@/lib/session-ended";
 import { unlessRefused } from "@/lib/admin-scope";
 import { olderRunsSince, ROUTINE_RUNS_WINDOW_MS, trimRoutineRuns, withOlderRoutineRuns } from "./routine-runs";
@@ -555,7 +555,7 @@ export interface AppState {
   focusMessage: { threadId: string; messageId: string; matchText?: string; nonce: number; consumed: boolean } | null;
   unreadDivider: UnreadDivider | null;
   connected: boolean;
-  hydrated?: true;
+  hydrated?: true; cachedHydrated?: boolean;
   error: string | null;
   notice: { kind: "thread-gone" | "bot-gone" | "steer-images" | "note"; botName: string | null; text?: string } | null;
   revealThread: { threadId: string; nonce: number } | null;
@@ -575,6 +575,7 @@ export interface AppState {
 export type BotAnnouncement = Omit<Bot, "messages"> & { messages?: Message[] };
 
 export type Action =
+  | HydrateFromCacheAction
   | {
       type: "hydrate";
       bots: Bot[];
@@ -749,11 +750,7 @@ export type Action =
   | { type: "cloudHowTo"; open: boolean }
   | { type: "toggleWelcome"; open?: boolean }
   | { type: "toggleTour"; open?: boolean }
-  | {
-      type: "updateBot";
-      botId: string;
-      patch: BotUpdatePatch;
-    };
+  | { type: "updateBot"; botId: string; patch: BotUpdatePatch };
 
 function reconcileModelVariantSessions(state: AppState): AppState {
   const sessions = Object.entries(state.modelVariantSessions);
@@ -881,6 +878,7 @@ export function reducer(state: AppState, action: Action): AppState {
   }
   if (isNotificationFeedAction(action)) return { ...state, notifications: reduceNotificationFeed(state.notifications, action) };
   switch (action.type) {
+    case "hydrateFromCache": return reduceHydrateFromCache(state, action);
     case "hydrate": {
       const known = (id: string) => action.bots.some((b) => b.id === id) || action.groups.some((g) => g.id === id);
       const resume = action.resumeId;
@@ -905,7 +903,7 @@ export function reducer(state: AppState, action: Action): AppState {
         sections: action.sections ?? [],
         computerControl: action.computerControl,
         selectedId,
-        hydrated: true as const,
+        hydrated: true as const, cachedHydrated: false,
         backgroundThreadEvents: {},
         loadingOlder: {},
         transcriptGeneration: {},
@@ -2063,8 +2061,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     ...bot,
     tasks: bot.tasks?.map((task) => ({ ...task, ...taskPatchFields(taskWrites.get(task.threadId)?.patch ?? {}) })),
   });
-  const [store] = useState(() => createAppStore<AppState, Action, ServerFrame>(reducer, withRememberedTrayPin(restoreBotSettingsSection(initialState))));
+  const [store] = useState(() => createAppStore<AppState, Action, ServerFrame>(reducer, initialStoreStateFromPwaCache(withRememberedTrayPin(restoreBotSettingsSection(initialState)))));
   const rawDispatch = store.dispatch, state = useSyncExternalStore(store.subscribe, store.getState, store.getState);
+  usePwaCacheSync(state);
   const stateRef = useRef(state), selectionRevision = useRef(0);
   stateRef.current = state;
   const showThreads = useShowThreads();
@@ -2878,7 +2877,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const launched = useRef(false);
   useEffect(() => {
-    if (!state.hydrated || !state.config || launched.current) return;
+    if (!state.hydrated || !state.config || state.cachedHydrated || launched.current) return;
     launched.current = true;
     const bot = state.bots.find((candidate) => candidate.id === state.selectedId);
     if (bot && state.activeView === "chat" && botOpensTo(bot, showThreads) !== bot.threadId) openBot(dispatch, bot, showThreads);
@@ -3015,7 +3014,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             preserveNavigation: selectionRevision.current !== navigationAtStart,
             navigationSince,
             taskIdsAtStart,
-            resumeId: readLastConversation() ?? undefined,
+            resumeId: resolveLiveResumeId(bots, groups ?? [], readLastConversation() ?? undefined),
           });
         });
       const peripherals = peripheralParts.map((part) => ({
@@ -3228,7 +3227,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
     };
     const stopLive = openLiveEvents({
-      onOpen: () => { rawDispatch({ type: "connected", value: true }); reportWindowPrefs(); },
+      onOpen: () => { setMacOffline(false); rawDispatch({ type: "connected", value: true }); reportWindowPrefs(); },
       onError: () => rawDispatch({ type: "connected", value: false }),
       onUnauthenticated: () => { rawDispatch({ type: "connected", value: false }); noteRefusedRequest(); },
       onSnapshotRequired: () => {

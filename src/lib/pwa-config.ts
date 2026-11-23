@@ -33,8 +33,10 @@ export function defaultDeviceLabel(userAgent: string = typeof navigator !== "und
 }
 
 export const OMB_PWA_DB_NAME = "omb-pwa-v1";
-export const OMB_PWA_DB_VERSION = 1;
+export const OMB_PWA_DB_VERSION = 2;
 export const OMB_PWA_AUTH_STORE = "auth";
+export const OMB_PWA_PREFS_STORE = "prefs";
+export const OMB_PWA_SNAPSHOT_STORE = "snapshot";
 export const OMB_PWA_AUTH_ACTIVE_KEY = "active";
 export const DEFAULT_PWA_RELAY_ORIGIN = "https://relay.mxhan.com";
 
@@ -268,6 +270,12 @@ export function openPwaDb(idbFactory?: IDBFactory): Promise<IDBDatabase | null> 
       const db = req.result;
       if (!db.objectStoreNames.contains(OMB_PWA_AUTH_STORE)) {
         db.createObjectStore(OMB_PWA_AUTH_STORE);
+      }
+      if (!db.objectStoreNames.contains(OMB_PWA_PREFS_STORE)) {
+        db.createObjectStore(OMB_PWA_PREFS_STORE);
+      }
+      if (!db.objectStoreNames.contains(OMB_PWA_SNAPSHOT_STORE)) {
+        db.createObjectStore(OMB_PWA_SNAPSHOT_STORE);
       }
     };
     req.onsuccess = () => resolve(req.result);

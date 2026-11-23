@@ -99,7 +99,7 @@ import {
   type ComposerSlashCommand,
 } from "@/lib/composer-commands";
 import { useSlashSkills } from "@/lib/use-slash-skills";
-import { randomUuid } from "@/lib/random-uuid";
+import { randomUuid } from "@/lib/random-uuid"; import { isComposerLocked, isPwaOfflineDraftBlocked } from "@/lib/pwa-composer";
 
 type ComposerDraftSnapshot = ComposerSendSnapshot & { reply: Message | null };
 
@@ -129,8 +129,8 @@ export function Composer({
   needsInputStop?: boolean;
 }) {
   const bot = profile ? currentTaskBot(profile) : undefined;
-  const locked = setupLocked || Boolean(bot?.awaitingThreadSnapshot);
-  const state = useStoreSelector((s) => ({ instances: s.instances, config: s.config, queued: s.pendingQueued[group?.threadId ?? bot?.threadId ?? ""] }), sameFields), dispatch = useStoreDispatch(), store = useStoreRef(), bots = useStoreSelector((s) => s.bots, sameDrawnBots);
+  const state = useStoreSelector((s) => ({ instances: s.instances, config: s.config, connected: s.connected, cachedHydrated: s.cachedHydrated, queued: s.pendingQueued[group?.threadId ?? bot?.threadId ?? ""] }), sameFields), dispatch = useStoreDispatch(), store = useStoreRef(), bots = useStoreSelector((s) => s.bots, sameDrawnBots);
+  const locked = isComposerLocked({ setupLocked, awaitingThreadSnapshot: bot?.awaitingThreadSnapshot, cachedHydrated: state.cachedHydrated });
   const { threads, currentBotId } = useThreadRefs();
   const advanced = useAdvancedMode();
   const raw = useRawPresentation();
@@ -544,7 +544,7 @@ export function Composer({
     }
   };
   const send = (followUp: FollowUp | undefined = followUpFor(false)) => {
-    if (locked || attachmentPending) return;
+    if (locked || attachmentPending || isPwaOfflineDraftBlocked(state)) return;
     if (unresolvedReply) {
       dispatch({ type: "error", message: t("chat.reply.cancelToSend") });
       return;
