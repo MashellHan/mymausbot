@@ -552,7 +552,7 @@ import {
 } from "./request-auth.ts";
 import { cookieMaxAgeSeconds, formatPairingCode, pairingRequest, SessionRegistry, type SessionRecord } from "./sessions.ts"; import type { PairingErrorCode } from "../shared/pairing-code.ts";
 import { ThreadStarters } from "./thread-starters.ts"; import { createConversationShares } from "./host/conversation-shares.ts"; import { createTeamMemorySaves } from "./host/team-memory-saves.ts"; import { createConversationSharing } from "./routes/conversation-share.ts";
-import { startPhoneRelay } from "./phone-relay.ts";
+import { startPhoneRelay } from "./phone-relay.ts"; import { isPwaBridgeRequest, pwaBridgePairingRefusal, startPwaBridge } from "./pwa-bridge.ts"; import { createPwaBridgeRoutes } from "./routes/pwa-bridge.ts";
 import {
   appendAdminAction,
   BOT_AUDIT_FIELDS,
@@ -12640,8 +12640,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const credential = typeof body?.credential === "string" ? body.credential : typeof body?.code === "string" ? body.code : "";
       const label = typeof body?.deviceName === "string" ? body.deviceName : "";
       const attemptId = typeof body?.pairRequestId === "string" ? body.pairRequestId : undefined;
-      const relayRefusal = phoneRelay?.pairingRefusal(req, credential); if (relayRefusal) return json(res, 400, { error: relayRefusal, code: "pairing_qr_only" satisfies PairingErrorCode });
-      const paired = sessions.exchange({ code: credential, label, attemptId, source: requestSource(req), fallbackLabel: labelFromUserAgent(req.headers["user-agent"]) });
+      const relayRefusal = phoneRelay?.pairingRefusal(req, credential) ?? pwaBridgePairingRefusal(req, credential); if (relayRefusal) return json(res, 400, { error: relayRefusal, code: "pairing_qr_only" satisfies PairingErrorCode });
+      const paired = sessions.exchange({ code: credential, label, attemptId, source: requestSource(req), fallbackLabel: labelFromUserAgent(req.headers["user-agent"]), ...(isPwaBridgeRequest(req) ? { pwa: true } : {}) });
       if (!paired.ok) {
         console.warn(`pairing refused from ${requestSource(req)}: ${paired.error}`);
         return json(res, paired.status, { ...refusalBody(paired), code: paired.code });
@@ -15397,6 +15397,7 @@ if (TUNNEL_SOCKET) {
 const phoneRelay = startPhoneRelay({ env: process.env, dataDir: DATA_DIR, sessions, handle: handleRequest, version: serverVersion(), publicOrigin: publicUrl,
   serverName: () => cfg.computerName || environmentDescriptor({ environmentId: ENVIRONMENT_ID, ...TEAM_LABEL, desktopManaged: DESKTOP_MANAGED }).label,
   refusal: CLOUD_HOME ? "a MausBot Cloud home" : HOSTED_WORKSPACE ? "a hosted workspace" : DESKTOP_MANAGED ? "the desktop app, whose companion carries phones" : null });
+const pwaBridge = startPwaBridge({ dataDir: DATA_DIR, handle: handleRequest, managedRemoteAccessRefusal: () => managedPolicy.remoteAccessRefusal(), refusal: CLOUD_HOME ? "a MausBot Cloud home" : HOSTED_WORKSPACE ? "a hosted workspace" : null }); ROUTES.push(createPwaBridgeRoutes({ bridge: () => pwaBridge, dataDir: DATA_DIR, sessions, managedRemoteAccessRefusal: () => managedPolicy.remoteAccessRefusal() }));
 
 /** A root the runtime holds is the runtime's to account for at the next start: a line here, with Retry, would start the job a second time. */
 function noteTurnsCutByShutdown(): void {
@@ -15448,7 +15449,7 @@ const gracefulShutdown = createGracefulShutdown({
       cacheKeepWarm.dispose(); warmSummaries.dispose();
       skillReview.stop();
       webhookIngress?.server.close(); webhookIngress?.socketServer?.close();
-      tunnelListener?.close(); void tailnetShare.close(); phoneRelay?.stop(); stopCloudHomeConnectedApps();
+      tunnelListener?.close(); void tailnetShare.close(); phoneRelay?.stop(); pwaBridge?.stop(); stopCloudHomeConnectedApps();
     },
     () => phoneScreen.closeAll(),
     async () => { await managedDesktop.close(); await registry.disposeAll(); },

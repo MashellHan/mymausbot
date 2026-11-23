@@ -121,6 +121,8 @@ export interface PairingCode {
   expiresAt: number;
   /** Only a browser sign-in redeems it, only by its credential, and a browser sign-in redeems no other window. */
   browser?: true;
+  /** Only a PWA bridge sign-in redeems it, only by its 256-bit credential with client scope. */
+  pwa?: true;
   owner?: string;
   /** A Team Cloud's pairing: the Admin's signed member claim, bound to the session it opens. */
   member?: TeamMember;
@@ -241,7 +243,7 @@ export class SessionRegistry {
   private tickets = new Map<string, { sessionId: string; expiresAt: number }>();
   private failures: Failures = new Map();
   private codeFailures: Failures = new Map();
-  private replays: Array<{ codeHash: string; attemptId: string; browser: boolean; result: ExchangeResult; expiresAt: number }> = [];
+  private replays: Array<{ codeHash: string; attemptId: string; browser: boolean; pwa: boolean; result: ExchangeResult; expiresAt: number }> = [];
   private readonly onRevoked = new Set<(sessionId: string) => void>();
   private readonly onIssued = new Set<(session: Pick<SessionRecord, "id" | "scopes" | "email" | "teamRole" | "membershipAuthority">) => void>();
   private lastSeenWrites = new Map<string, number>();
@@ -368,12 +370,15 @@ export class SessionRegistry {
     }
   }
 
-  openPairing(input: { scopes?: Scope[]; label?: string; ttlMs?: number; tokenTtlMs?: number; browser?: boolean; owner?: string; member?: TeamMember; memberCheckedAt?: number } = {}): { id: string; code: string; credential: string; expiresAt: number } {
+  openPairing(input: { scopes?: Scope[]; label?: string; ttlMs?: number; tokenTtlMs?: number; browser?: boolean; pwa?: boolean; owner?: string; member?: TeamMember; memberCheckedAt?: number } = {}): { id: string; code: string; credential: string; expiresAt: number } {
     this.prune();
     const now = this.now();
     const code = generatePairingCode();
     const credential = generatePairingCredential();
-    const scopes = input.scopes?.length ? [...new Set(input.scopes)] : [...SCOPES];
+    if (input.pwa && (input.browser || input.member || input.scopes?.some((scope) => scope !== "client"))) {
+      throw new Error("PWA pairing invites only allow standalone client scope.");
+    }
+    const scopes: Scope[] = input.pwa ? ["client"] : (input.scopes?.length ? [...new Set(input.scopes)] : [...SCOPES]);
     this.refusePersonal(scopes);
     const pairing: PairingCode = {
       id: randomUUID(),
@@ -384,6 +389,7 @@ export class SessionRegistry {
       createdAt: now,
       expiresAt: now + (input.ttlMs ?? PAIRING_CODE_TTL_MS),
       ...(input.browser ? { browser: true as const, ...(input.owner ? { owner: input.owner } : {}) } : {}),
+      ...(input.pwa ? { pwa: true as const } : {}),
       ...(input.member ? { member: input.member, ...(input.memberCheckedAt !== undefined ? { memberCheckedAt: input.memberCheckedAt } : {}) } : {}),
       ...(input.tokenTtlMs !== undefined && !input.browser && !input.member ? { tokenTtlMs: input.tokenTtlMs } : {}),
     };
@@ -444,20 +450,27 @@ export class SessionRegistry {
     this.recordFailure(this.codeFailures, PAIRING_LOCKOUT, UNNAMED_SOURCES);
     const entry = this.codeFailures.get(UNNAMED_SOURCES);
     if (!entry || entry.lockedUntil <= this.now()) return;
-    this.pairings = this.pairings.filter((p) => p.browser === true);
+    this.pairings = this.pairings.filter((p) => p.browser === true || p.pwa === true);
     this.codeFailures.delete(UNNAMED_SOURCES);
   }
 
-  exchange(input: { code: string; label: string; source: string; fallbackLabel?: string; attemptId?: string; browser?: boolean }): ExchangeResult {
+  exchange(input: { code: string; label: string; source: string; fallbackLabel?: string; attemptId?: string; browser?: boolean; pwa?: boolean }): ExchangeResult {
     this.prune();
     const now = this.now();
+    const browser = input.browser === true;
+    const pwa = input.pwa === true;
+    if (browser && pwa) {
+      return { ok: false, status: 400, code: "pairing_bad_request", ...userError("serverError.pair.codeWrong") };
+    }
     const read = readPairingInput(input.code);
     if (read.kind === "wrong" && read.problem !== "notACode") return { ok: false, status: 400, code: PAIRING_INPUT_PROBLEM_CODE[read.problem], ...userError(PAIRING_INPUT_PROBLEM_KEY[read.problem]) };
+    if (pwa && read.kind !== "credential") {
+      return { ok: false, status: 400, code: "pairing_qr_only", ...userError("serverError.pair.codeWrong") };
+    }
     // A credential is hashed as presented: normalizePairingCode folds 0 to O and 1 to I, which would merge distinct secrets.
     const presented = sha256(read.kind === "credential" ? read.credential : read.kind === "code" ? read.code : normalizePairingCode(input.code));
-    const browser = input.browser === true;
     const attemptId = typeof input.attemptId === "string" && /^[\w-]{8,64}$/.test(input.attemptId) ? input.attemptId : null;
-    const replay = attemptId ? this.replays.find((r) => r.attemptId === attemptId && r.browser === browser && sameDigest(r.codeHash, presented)) : undefined;
+    const replay = attemptId ? this.replays.find((r) => r.attemptId === attemptId && r.browser === browser && r.pwa === pwa && sameDigest(r.codeHash, presented)) : undefined;
     if (replay) return replay.result;
     const unnamed = unnamedSource(input.source);
     const lock = unnamed ? { locked: false, retryAfterMs: 0 } : this.lockState(this.codeFailures, input.source);
@@ -466,7 +479,8 @@ export class SessionRegistry {
       return { ok: false, status: 429, code: "pairing_too_many", ...userError("serverError.pair.tooMany", { seconds: Math.ceil(lock.retryAfterMs / 1000), until, time: utcClock(until) }) };
     }
     const index = this.pairings.findIndex((p) => (p.browser === true) === browser &&
-      (sameDigest(p.credentialHash, presented) || (!p.browser && sameDigest(p.codeHash, presented))));
+      (p.pwa === true) === pwa &&
+      (sameDigest(p.credentialHash, presented) || (!p.browser && !p.pwa && sameDigest(p.codeHash, presented))));
     if (index < 0) {
       if (unnamed) this.wrongFromUnnamed();
       else this.recordFailure(this.codeFailures, PAIRING_LOCKOUT, input.source);
@@ -496,7 +510,7 @@ export class SessionRegistry {
     this.persist();
     for (const listener of this.onIssued) listener(record);
     const result: ExchangeResult = { ok: true, token, session: publicSession(record) };
-    if (attemptId) this.replays.push({ codeHash: presented, attemptId, browser, result, expiresAt: now + EXCHANGE_REPLAY_MS });
+    if (attemptId) this.replays.push({ codeHash: presented, attemptId, browser, pwa, result, expiresAt: now + EXCHANGE_REPLAY_MS });
     return result;
   }
 
