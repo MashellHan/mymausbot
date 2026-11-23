@@ -36,6 +36,7 @@
 //   FAKE_CODEX_INSTRUCTIONS_FILE  while this file exists, config/read reports its text as developer_instructions: the
 //     person's configuration changed while the process ran (codex-cli 0.160.1 reads the files on every config/read)
 //   FAKE_CODEX_DIE_ON_TURN  this process is killed as its Nth turn/start arrives, before any reply
+//   FAKE_CODEX_FAULT_FILE  JSON { method, signal?, exitCode?, stderr?, hang?, error? } injected once when `method` arrives
 //   FAKE_CODEX_STARTUP_DELAY_MS  hold the initialize reply this long, like a loaded host
 //   FAKE_CODEX_INITIALIZE_GATE  hold the initialize reply until this fixture file exists
 //   FAKE_CODEX_STARTUP_LOG  append {pid, at, event: "initialize" | "turn/start"} per launch
@@ -535,6 +536,26 @@ process.stdin.on("data", (chunk) => {
     }
 
     if (msg.method) calls.push({ method: msg.method, params: msg.params ?? null });
+
+    const faultFile = process.env.FAKE_CODEX_FAULT_FILE;
+    if (msg.method && faultFile && existsSync(faultFile)) {
+      let fault: { method?: string; signal?: NodeJS.Signals; exitCode?: number; stderr?: string; hang?: boolean; error?: { code: number; message: string } } | null = null;
+      try {
+        fault = JSON.parse(readFileSync(faultFile, "utf8"));
+      } catch {}
+      if (fault && fault.method === msg.method) {
+        try { unlinkSync(faultFile); } catch {}
+        dump();
+        if (fault.stderr) console.error(fault.stderr);
+        if (fault.signal) process.kill(process.pid, fault.signal);
+        if (typeof fault.exitCode === "number") process.exit(fault.exitCode);
+        if (fault.hang) continue;
+        if (fault.error) {
+          out({ jsonrpc: "2.0", id: msg.id, error: fault.error });
+          continue;
+        }
+      }
+    }
 
     switch (msg.method) {
       case "initialize": {

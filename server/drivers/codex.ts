@@ -1150,8 +1150,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         const exitMessage = `codex exited ${code}${signal ? ` (signal ${signal})` : ""} before turn/completed${
           recentStderr ? `: ${recentStderr.slice(-300)}` : hadStreamedOutput && connection.stderr.trim() ? "; no stderr after the last app-server output" : ""
         }`;
-        // Relaunch only when turn/start was never acknowledged: a replay could re-run tools the user saw.
-        if (!stopRequested && codexTurnId === null && earlyNotifications.length === 0 && (reused || (verdict.transient && attempt < RETRY_MAX_ATTEMPTS - 1))) {
+        // Relaunch only when turn/start was never sent on a kept process (excluding terminal auth/provider exits), or on a transient cold exit before ack.
+        if (!stopRequested && codexTurnId === null && earlyNotifications.length === 0 && (reused ? !promptSubmitted && verdict.reason !== "auth" && verdict.reason !== "provider_safety" && verdict.reason !== "quota" && verdict.reason !== "unknown_model" : verdict.transient && attempt < RETRY_MAX_ATTEMPTS - 1)) {
           void relaunch(verdict.reason, exitMessage, "exit_before_result", Boolean(reused)).catch(() => {});
           return;
         }
@@ -1381,8 +1381,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         const reported: ReturnType<typeof codexUserFailure> = refused ? { message: codexSignInExpired(raw) } : codexUserFailure(raw, route);
         const needsAuth = refused || /(?:\b401\b|unauthorized|missing bearer|authentication required)/i.test(raw);
         const verdict = classifyError(failure);
-        if (reused && !state.settled && !abandoned && !stopRequested && codexTurnId === null && earlyNotifications.length === 0) return relaunch("", reported.message, "rpc_error", true);
-        if (!state.settled && !abandoned && !recoveredMissingSession && !stopRequested && !needsAuth && codexTurnId === null && earlyNotifications.length === 0 && verdict.transient && attempt < RETRY_MAX_ATTEMPTS - 1 && state.sawStreamDelta === false) {
+        if (reused && !promptSubmitted && !state.settled && !abandoned && !stopRequested && !needsAuth && verdict.reason !== "auth" && verdict.reason !== "provider_safety" && verdict.reason !== "quota" && verdict.reason !== "unknown_model" && codexTurnId === null && earlyNotifications.length === 0) {
+          return relaunch("", reported.message, "rpc_error", true);
+        }
+        if (!state.settled && !abandoned && !recoveredMissingSession && !stopRequested && !needsAuth && codexTurnId === null && earlyNotifications.length === 0 && (!reused || !promptSubmitted) && verdict.transient && attempt < RETRY_MAX_ATTEMPTS - 1 && state.sawStreamDelta === false) {
           return relaunch(verdict.reason, reported.message, "rpc_error");
         }
         if (!state.settled && !abandoned) {

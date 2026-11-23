@@ -3573,17 +3573,95 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
       expect(recorder.events.some((event) => event.type === "runtime.error" || event.type === "turn.retrying")).toBe(false);
     });
 
-    it("resumes in a new process when the kept one dies as the next turn reaches it", async () => {
+    it("does not resubmit a turn when the kept process dies after turn/start arrives", async () => {
       vi.stubEnv("FAKE_CODEX_DIE_ON_TURN", "2");
       await create({ mode: "resume" });
       await runTurn({ threadId: "t-race", text: "one" });
       const { pid } = seen();
       const second = await runTurn({ threadId: "t-race", text: "two", resumeCursor: "codex-thread-1" });
+      expect(second.done).toMatchObject({ ok: false, stopReason: "exit_before_result" });
+      expect(seen().pid).toBe(pid);
+      expect(methods("turn/start").map((call) => call.params.input)).toEqual([
+        [{ type: "text", text: "one" }],
+        [{ type: "text", text: "two" }],
+      ]);
+      expect(second.events.some((event) => event.type === "turn.retrying")).toBe(false);
+      expect(second.events.filter((event) => event.type === "runtime.error")).toHaveLength(1);
+    });
+
+    it.each([
+      ["killed on thread/inject_items", { method: "thread/inject_items", signal: "SIGKILL" as const }, false],
+      ["RPC error on thread/inject_items", { method: "thread/inject_items", error: { code: -32603, message: "inject failed" } }, false],
+      ["RPC error on config/read", { method: "config/read", error: { code: -32000, message: "config unavailable" } }, true],
+    ])("recovers quietly in a new process on a pre-submit warm failure (%s)", async (_label, fault, waitBackgroundConfigRead) => {
+      const faultFile = join(scratch, "pre-submit-fault.json");
+      const log = join(scratch, "pre-submit-log.ndjson");
+      vi.stubEnv("FAKE_CODEX_FAULT_FILE", faultFile);
+      if (waitBackgroundConfigRead) vi.stubEnv("FAKE_CODEX_STARTUP_LOG", log);
+      await create({ mode: "resume" });
+      await runTurn({ threadId: "t-presubmit-recover", text: "one", system: "Bot rules." });
+      const { pid } = seen();
+      if (waitBackgroundConfigRead) {
+        await expect.poll(() => readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line)).filter((entry) => entry.pid === pid && entry.event === "config/read")).toHaveLength(2);
+      }
+      writeFileSync(faultFile, JSON.stringify(fault));
+      const second = await runTurn({ threadId: "t-presubmit-recover", text: "two", system: "Updated rules.", resumeCursor: "codex-thread-1" });
       expect(second.done).toMatchObject({ ok: true });
       expect(seen().pid).not.toBe(pid);
+      expect(methods("thread/resume")).toHaveLength(1);
       expect(methods("turn/start").map((call) => call.params.input)).toEqual([[{ type: "text", text: "two" }]]);
       expect(second.events.filter((event) => event.type === "turn.started")).toHaveLength(1);
       expect(second.events.some((event) => event.type === "runtime.error" || event.type === "turn.retrying")).toBe(false);
+    });
+
+    it.each([
+      ["turn/start timeout", { method: "turn/start", hang: true }, true],
+      ["turn/start transient 503", { method: "turn/start", error: { code: -32603, message: "provider returned 503: upstream capacity exceeded" } }, false],
+      ["turn/start connection reset", { method: "turn/start", error: { code: -32603, message: "network error: connection reset by peer" } }, false],
+    ])("never retries a sent or indeterminate turn on a kept process (%s)", async (_label, fault, shortTimeout) => {
+      const faultFile = join(scratch, "sent-fault.json");
+      vi.stubEnv("FAKE_CODEX_FAULT_FILE", faultFile);
+      vi.stubEnv("FAKE_CODEX_RETRY_SCALE", "0.001");
+      if (shortTimeout) {
+        const rpcTimeout = codexProcess.codexRpcTimeoutMs;
+        vi.spyOn(codexProcess, "codexRpcTimeoutMs").mockImplementation((method) => method === "turn/start" ? 150 : rpcTimeout(method));
+      }
+      await create({ mode: "resume" });
+      await runTurn({ threadId: "t-warm-sent", text: "one" });
+      const { pid } = seen();
+      writeFileSync(faultFile, JSON.stringify(fault));
+      const second = await runTurn({ threadId: "t-warm-sent", text: "two", resumeCursor: "codex-thread-1" });
+      expect(second.done).toMatchObject({ ok: false, stopReason: "rpc_error" });
+      expect(seen().pid).toBe(pid);
+      expect(methods("turn/start").map((call) => call.params.input)).toEqual([
+        [{ type: "text", text: "one" }],
+        [{ type: "text", text: "two" }],
+      ]);
+      expect(second.events.some((event) => event.type === "turn.retrying")).toBe(false);
+      expect(second.events.filter((event) => event.type === "runtime.error")).toHaveLength(1);
+    });
+
+    it.each([
+      ["pre-submit auth", "thread/inject_items", { code: -32603, message: "unexpected status 401 Unauthorized: missing bearer" }, "auth_required", true],
+      ["pre-submit provider_safety", "thread/inject_items", { code: -32603, message: "HTTP 503: This task was blocked by our safety systems." }, "provider_safety", false],
+      ["post-submit auth", "turn/start", { code: -32603, message: "unexpected status 401 Unauthorized: missing bearer" }, "auth_required", true],
+      ["post-submit provider_safety", "turn/start", { code: -32603, message: "HTTP 503: This task was blocked by our safety systems." }, "provider_safety", false],
+    ])("preserves terminal %s on a kept process without warm restart or retry", async (_label, method, error, stopReason, expectSetup) => {
+      const faultFile = join(scratch, "terminal-fault.json");
+      vi.stubEnv("FAKE_CODEX_FAULT_FILE", faultFile);
+      await create({ mode: "resume" });
+      await runTurn({ threadId: "t-warm-terminal", text: "one", system: "Bot rules." });
+      const { pid } = seen();
+      writeFileSync(faultFile, JSON.stringify({ method, error }));
+      const second = await runTurn({ threadId: "t-warm-terminal", text: "two", system: "Updated rules.", resumeCursor: "codex-thread-1" });
+      expect(second.done).toMatchObject({ ok: false, stopReason });
+      expect(seen().pid).toBe(pid);
+      expect(second.events.some((event) => event.type === "turn.retrying")).toBe(false);
+      const errors = second.events.filter((event) => event.type === "runtime.error");
+      expect(errors).toHaveLength(1);
+      if (expectSetup) expect(errors[0]).toMatchObject({ setup: true });
+      else expect(errors[0]).not.toHaveProperty("setup");
+      expect(methods("turn/start")).toHaveLength(method === "thread/inject_items" ? 1 : 2);
     });
 
     it("ends the process when a turn on it is stopped, and the next turn resumes in a new one", async () => {
