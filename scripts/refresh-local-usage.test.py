@@ -994,6 +994,32 @@ class LegacyAdoJoinTests(unittest.TestCase):
         self.assertFalse(result["complete"])
         self.assertEqual([row["key"] for row in result["records"]], [self.ordinary])
 
+    def test_request_budget_before_pinning_retains_bound_cache_until_fresh_proof(self):
+        snapshot = self.fixture("stale")
+        source = snapshot["ado"]["sources"][0]
+        source["coverage"]["reasons"] = ["request-budget"]
+        source["provenance"]["pinnedHeads"] = {}
+        project = snapshot["ado"]["state"]["projects"]["example/project"]
+        work = project["work"]
+        work.update(repoDone={}, scanComplete=False)
+        retained = project["cache"][self.repo_id]
+
+        result = self.extract(snapshot)
+        self.assertFalse(result["complete"])
+        self.assertEqual([row["key"] for row in result["records"]], [self.ordinary])
+
+        repo = work["inventory"][0]
+        for field, value in (("defaultBranch", "refs/heads/another"), ("isDisabled", True)):
+            with self.subTest(field=field), patch.dict(repo, {field: value}):
+                self.assertEqual(self.extract(snapshot), {"records": [], "complete": False})
+
+        fresh = self.fixture()
+        fresh_project = fresh["ado"]["state"]["projects"]["example/project"]
+        proof = fresh_project["work"]["repoDone"][self.repo_id]
+        proof["items"] = [row for row in proof["items"] if row["id"] != self.ordinary]
+        fresh_project["cache"][self.repo_id] = retained
+        self.assertEqual(self.extract(fresh), {"records": [], "complete": True})
+
     def test_proof_binding_rejects_changed_head_and_author_scope(self):
         changed = self.fixture()
         changed["ado"]["sources"][0]["provenance"]["pinnedHeads"][self.repo_id] = "b" * 40

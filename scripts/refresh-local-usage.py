@@ -919,6 +919,16 @@ def legacy_ado_commits(config, repository_identity, repository_category, *, at, 
             proofs[repo_id] = prior if isinstance(prior, dict) \
                 and prior.get("head") == active.get("head") else active
         proofs.update(completed)
+        if not raw_complete:
+            for repo_id in selected:
+                if repo_id in proofs:
+                    continue
+                repository = inventory[repo_id]
+                prior = prior_cache.get(repo_id)
+                branch = repository.get("defaultBranch")
+                if (isinstance(prior, dict) and repository.get("isDisabled") is False
+                        and isinstance(branch, str) and prior.get("branch") == branch):
+                    proofs[repo_id] = prior
         pinned = provenance.get("pinnedHeads", {})
         if not isinstance(pinned, dict):
             raise ValueError("ADO raw pinned heads are invalid")
