@@ -7,9 +7,10 @@ export { GITHUB_ACTIVITY_URL, GITHUB_ACTIVITY_FRAME_NAME, githubActivityPageAllo
 export const GITHUB_ACTIVITY_APP_ID = LEGACY_MINI_APP_IDS.github_activity;
 export const GITHUB_DEEP_DIVE_FIRST_EDITION = "2026-11-20";
 const REPO_SEGMENT = /^[a-z0-9_.-]{1,100}$/;
-const SQLGLOT_DEMO_PATH = "/github/demo/sqlglot-query-lab/";
-const SQLGLOT_DEMO_EDITION_KEY = "2026-11-22";
-const SQLGLOT_DEMO_REPO = "tobymao/sqlglot";
+const STRICT_DEMO_BINDINGS = new Map<string, { readonly editionKey: string; readonly repo: string }>([
+  ["/github/demo/sqlglot-query-lab/", { editionKey: "2026-11-22", repo: "tobymao/sqlglot" }],
+  ["/github/demo/hypothesis-orders/", { editionKey: "2026-11-23", repo: "hypothesisworks/hypothesis" }],
+]);
 
 export interface GithubActivitySelection {
   editionKey: string | null;
@@ -80,15 +81,16 @@ export function selectionFromGithubPath(
     if (rawRepo !== undefined && rawRepo !== null) return { ok: false };
     return { ok: true, selection: { editionKey, repo: null } };
   }
-  if (pathname === SQLGLOT_DEMO_PATH) {
+  const demoBinding = STRICT_DEMO_BINDINGS.get(pathname);
+  if (demoBinding) {
     if (messageType === "ready") {
-      if (rawEditionKey !== SQLGLOT_DEMO_EDITION_KEY || rawRepo !== SQLGLOT_DEMO_REPO) return { ok: false };
+      if (rawEditionKey !== demoBinding.editionKey || rawRepo !== demoBinding.repo) return { ok: false };
     } else {
-      if (rawEditionKey !== undefined && rawEditionKey !== SQLGLOT_DEMO_EDITION_KEY) return { ok: false };
-      if (rawRepo !== undefined && rawRepo !== SQLGLOT_DEMO_REPO) return { ok: false };
+      if (rawEditionKey !== undefined && rawEditionKey !== demoBinding.editionKey) return { ok: false };
+      if (rawRepo !== undefined && rawRepo !== demoBinding.repo) return { ok: false };
       if ((rawEditionKey === undefined) !== (rawRepo === undefined)) return { ok: false };
     }
-    return { ok: true, selection: { editionKey: SQLGLOT_DEMO_EDITION_KEY, repo: SQLGLOT_DEMO_REPO } };
+    return { ok: true, selection: { editionKey: demoBinding.editionKey, repo: demoBinding.repo } };
   }
   const fallbackEdition = (rawEditionKey as string | null | undefined) ?? null;
   const fallbackRepo = (rawRepo as string | null | undefined) ?? null;

@@ -30,7 +30,8 @@ export function githubActivityPageAllowed(raw) {
       return false;
     }
     if (url.pathname === "/github/" || url.pathname === "/github/demo/univer-orders/"
-      || url.pathname === "/github/demo/pandera-orders/" || url.pathname === "/github/demo/sqlglot-query-lab/") return true;
+      || url.pathname === "/github/demo/pandera-orders/" || url.pathname === "/github/demo/sqlglot-query-lab/"
+      || url.pathname === "/github/demo/hypothesis-orders/") return true;
     const editionMatch = /^\/github\/(\d{8})\/$/.exec(url.pathname);
     if (editionMatch) return isValidCompactDate(editionMatch[1]);
     const repoMatch = /^\/github\/(\d{8})\/([^/]+)\/([^/]+)\/$/.exec(url.pathname);

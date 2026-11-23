@@ -154,6 +154,39 @@ it("enforces githubDeepDive handshake and route validation", () => {
   const missingContextNonce = load(retriedSite, retriedPost);
   message("ready", "/github/demo/sqlglot-query-lab/", { nonce: missingContextNonce }, "https://mxhan.com", retriedSite.contentWindow);
   expect(host.querySelector('[data-testid="github-activity-failed"]')).not.toBeNull();
+
+  act(() => host.querySelector<HTMLButtonElement>('[data-testid="github-activity-failed"] button')!.click());
+  const hypothesisSite = frame()!;
+  const hypothesisPost = watchPosts(hypothesisSite);
+  const hypothesisNonce = load(hypothesisSite, hypothesisPost);
+  message("ready", "/github/demo/hypothesis-orders/", { nonce: "stale", editionKey: "2026-11-23", repo: "hypothesisworks/hypothesis" });
+  expect(host.querySelector('[role="status"]')).not.toBeNull();
+  message("ready", "/github/demo/hypothesis-orders/", { nonce: hypothesisNonce, editionKey: "2026-11-23", repo: "hypothesisworks/hypothesis" });
+  expect(host.querySelector('[role="status"]')).toBeNull();
+  press("web", "ArrowRight");
+  expect(mockState.lastSelection).toEqual({ editionKey: "2026-11-23", repo: "hypothesisworks/hypothesis" });
+
+  press("saved", "Home");
+  const hypothesisShownSite = frame()!;
+  const hypothesisShownPost = watchPosts(hypothesisShownSite);
+  message("shown", "/github/demo/hypothesis-orders/");
+  expect(host.querySelector('[role="status"]')).not.toBeNull();
+  const hypothesisShownNonce = hypothesisShownPost.mock.calls.at(-1)![0].nonce as string;
+  message("ready", "/github/demo/hypothesis-orders/", { nonce: hypothesisShownNonce, editionKey: "2026-11-23", repo: "hypothesisworks/hypothesis" });
+  expect(host.querySelector('[role="status"]')).toBeNull();
+
+  message("leaving", "/github/demo/hypothesis-orders/");
+  expect(host.querySelector('[role="status"]')).not.toBeNull();
+  const badCaseNonce = load(hypothesisShownSite, hypothesisShownPost);
+  message("ready", "/github/demo/hypothesis-orders/", { nonce: badCaseNonce, editionKey: "2026-11-23", repo: "HypothesisWorks/hypothesis" });
+  expect(host.querySelector('[data-testid="github-activity-failed"]')).not.toBeNull();
+
+  act(() => host.querySelector<HTMLButtonElement>('[data-testid="github-activity-failed"] button')!.click());
+  const supersededPathSite = frame()!;
+  const supersededPathPost = watchPosts(supersededPathSite);
+  const supersededPathNonce = load(supersededPathSite, supersededPathPost);
+  message("ready", "/github/demo/hypothesis-orders-lab/", { nonce: supersededPathNonce, editionKey: "2026-11-23", repo: "hypothesisworks/hypothesis" });
+  expect(host.querySelector('[data-testid="github-activity-failed"]')).not.toBeNull();
 });
 
 it("syncs reading selection across Web and Saved editions tabs", () => {

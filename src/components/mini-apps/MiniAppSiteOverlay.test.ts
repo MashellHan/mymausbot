@@ -327,3 +327,33 @@ it("enforces exact SQLGlot demo edition/repo context on ready while retaining le
   f.phase(2, "failed");
   expect(f.overlay().inert).toBe(true);
 });
+
+it("enforces exact Hypothesis demo edition/repo context on ready while rejecting superseded path and uppercase repo", () => {
+  const f = reportFixture("github-activity");
+  f.send(1);
+  const remote = f.watch();
+  const firstNonce = remote.load();
+  remote.notify({ type: "ready", path: "/github/demo/hypothesis-orders/", nonce: firstNonce, editionKey: "2026-11-23", repo: "hypothesisworks/hypothesis" });
+  f.phase(1, "ready");
+  expect(f.overlay().inert).toBe(false);
+  expect(f.onGithubSelection).toHaveBeenLastCalledWith({ editionKey: "2026-11-23", repo: "hypothesisworks/hypothesis" });
+
+  remote.notify({ type: "leaving", path: "/github/demo/hypothesis-orders/" });
+  f.phase(1, "loading");
+  expect(f.overlay().inert).toBe(true);
+
+  remote.notify({ type: "shown", path: "/github/demo/hypothesis-orders/" });
+  const shownNonce = remote.load();
+  remote.notify({ type: "ready", path: "/github/demo/hypothesis-orders/", nonce: firstNonce, editionKey: "2026-11-23", repo: "hypothesisworks/hypothesis" });
+  expect(f.overlay().inert).toBe(true);
+  remote.notify({ type: "ready", path: "/github/demo/hypothesis-orders/", nonce: shownNonce, editionKey: "2026-11-23", repo: "HypothesisWorks/hypothesis" });
+  f.phase(1, "failed");
+  expect(f.overlay().inert).toBe(true);
+
+  f.send(2, { retry: true });
+  const retry = f.watch();
+  const retryNonce = retry.load();
+  retry.notify({ type: "ready", path: "/github/demo/hypothesis-orders-lab/", nonce: retryNonce, editionKey: "2026-11-23", repo: "hypothesisworks/hypothesis" });
+  f.phase(2, "failed");
+  expect(f.overlay().inert).toBe(true);
+});
