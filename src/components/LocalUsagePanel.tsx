@@ -6,7 +6,7 @@ import { tokenTrendStacks, weeklyUsageTrend, type TokenTrendMode, type TokenTren
 import { usageTrendRanges, type UsageTrendRange } from "../../shared/local-usage-range";
 import { compactMetricText, metricText, observedCountText, UsageCount, UsageChange, useUsageMetricHint, UsageSourceContext, usageMetrics as metrics, type UsageMetric as Metric } from "./LocalUsageValues";
 import { UsageDailyTable, UsageRepositoryTable, shortUsagePeriods } from "./LocalUsageTables";
-import { costText, UsageModelPanel } from "./LocalUsageModels";
+import { CostAmount, UsageModelPanel } from "./LocalUsageModels";
 import { InfoHint } from "./InfoHint";
 import { Select } from "./Select";
 import { activeLocale, t } from "@/lib/i18n";
@@ -82,7 +82,7 @@ function WindowCard({ window }: { window: UsageWindow }) {
           </div>
           <div className="min-w-0 [overflow-wrap:anywhere]">
             <dt className="text-ink-secondary">{t("computer.usage.estimatedCost")}</dt>
-            <dd className="text-ink">{costText(details?.estimatedCost)}</dd>
+            <dd className="text-ink"><CostAmount estimate={details?.estimatedCost} /></dd>
           </div>
         </dl>
       </div>

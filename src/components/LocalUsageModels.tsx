@@ -9,7 +9,7 @@ import { compactMetricText, metricText } from "./LocalUsageValues";
 
 type Cost = NonNullable<UsageWindow["tokenDetails"]>["estimatedCost"];
 
-export function costText(estimate?: Cost) {
+function costText(estimate?: Cost) {
   if (!estimate || estimate.usd === null || estimate.coverage === "unavailable") return t("computer.usage.unavailable");
   const { usd, coverage } = estimate;
   if (usd === 0) return coverage === "ready" ? usdText(0, 2) : t("computer.usage.costPartial", { cost: usdText(0, 2) });
@@ -23,6 +23,12 @@ export function costText(estimate?: Cost) {
   const rounded = Number(usd.toFixed(digits));
   const bound = rounded <= usd ? rounded : (Math.round(rounded * units) - 1) / units;
   return formatUsd(bound);
+}
+
+export function CostAmount({ estimate }: { estimate?: Cost }) {
+  const coverage = estimate?.coverage === "partial" && estimate.usd !== null
+    ? t("computer.usage.coverage.partial") : undefined;
+  return <span title={coverage} aria-description={coverage}>{costText(estimate)}</span>;
 }
 
 function usableCost(estimate?: Cost): number | null {
@@ -98,7 +104,7 @@ export function UsageModelPanel({ windows }: { windows: Record<ShortPeriod, Usag
               <td className={numericCell}>{metricText(row.input)}</td>
               <td className={numericCell}>{metricText(row.output)}</td>
               <td className={numericCell}>
-                {costText(row.estimatedCost)}
+                <CostAmount estimate={row.estimatedCost} />
                 {costShare !== null && <div data-usage-cost-share title={costShareLabel} className="mt-0.5 text-ink-secondary">
                   <span aria-hidden="true">{estimatedShare}</span><span className="sr-only">{costShareLabel}</span>
                   <ShareBar share={costShare} />

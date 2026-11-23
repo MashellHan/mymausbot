@@ -209,6 +209,7 @@ describe("local Usage panel", () => {
   it("uses raw reconciled estimates for Model usage cost shares", async () => {
     const snapshot = structuredClone(sample);
     const window = snapshot.windows!["1"];
+    window.tokenCoverage = "ready";
     const row = { input: 10, output: 0, cacheRead: 0, totalTokens: 10 };
     window.tokenDetails = {
       input: 40, output: 0, estimatedCost: { coverage: "partial", usd: 0.0153 },
@@ -225,6 +226,11 @@ describe("local Usage panel", () => {
       .find((row) => row.querySelector("th")?.textContent === name)?.querySelector("[data-usage-cost-share]");
     expect(costShare("fixture-large")?.getAttribute("title")).toBe("97.4% of recorded estimated cost");
     expect(costShare("fixture-large")?.parentElement?.firstChild?.textContent).toBe("$0.01");
+    const partialSummary = host.querySelector('[data-usage-token-breakdown] dd span[title="Partial coverage"]');
+    expect(partialSummary?.textContent).toBe("$0.01");
+    expect(partialSummary?.getAttribute("aria-description")).toBe("Partial coverage");
+    expect(costShare("fixture-large")?.parentElement?.firstElementChild?.getAttribute("aria-description")).toBe("Partial coverage");
+    expect(costShare("fixture-small")?.parentElement?.firstElementChild?.hasAttribute("aria-description")).toBe(false);
     expect(costShare("fixture-small")?.getAttribute("title")).toBe("2.6% of recorded estimated cost");
     expect(costShare("fixture-zero")?.getAttribute("title")).toBe("0% of recorded estimated cost");
     expect(costShare("activities-unpriced-fixture")).toBeNull();
