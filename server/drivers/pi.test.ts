@@ -5,8 +5,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { botBox } from "../bot-box/box.ts";
+import { planBox, visibleInBox } from "../bot-box/plan.ts";
 import { DATA_DIR, ensureDirs, NATIVE_DIR } from "../config.ts";
 import type { ProviderInstance, RuntimeEvent } from "../contracts.ts";
+import { engineHomes, withEngineHomes } from "../engine-homes/engine-homes.ts";
+import { audienceHome } from "../engine-homes/layout.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
 import { publishedMessages, replyProblems } from "../harness/text-items.testkit.ts";
 import { caseTokens, LIVE_REPLY_CASES, liveReplyScripts } from "../testing/live-reply-cases.ts";
@@ -1192,6 +1196,56 @@ describe("PiDriver turns (fake CLI)", () => {
     await instance.adapter.interruptTurn("t-interrupt");
     const done = await recorder.until((e) => e.type === "turn.completed");
     expect(done).toMatchObject({ ok: true, stopReason: "cancelled" });
+  });
+
+  it.skipIf(process.platform === "win32")("uses a named Raven profile in both the catalog and a boxed audience turn", async () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-pi-cloud-profile-"));
+    const profile = join(home, "profiles", "raven");
+    const dump = join(home, "dump.jsonl");
+    const cwd = join(DATA_DIR, "task-workspaces", "pi-bot", "alice");
+    const profileModels = '{"providers":{"raven":{"models":[{"id":"fixture"}]}}}';
+    const auth = '{"raven":{"type":"api_key","key":"fixture"}}';
+    mkdirSync(profile, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(profile, "models.json"), profileModels);
+    writeFileSync(join(profile, "auth.json"), auth);
+    writeFileSync(join(profile, "settings.json"), '{"defaultProvider":"raven","defaultModel":"fixture","extensions":["outside.ts"]}');
+    writeFileSync(join(profile, "AGENTS.md"), "Source profile instructions");
+    engineHomes.start({ dataDir: DATA_DIR, serverHome: home, env: { HOME: home }, audienceOf: (thread) => `member:${thread}`, threads: () => [] });
+    const wrap = vi.spyOn(botBox, "wrap").mockReturnValue(null);
+    try {
+      await create("profile-models", {
+        HOME: home, TMPDIR: "/tmp", PI_CODING_AGENT_DIR: "~/profiles/raven", FAKE_PI_DUMP: dump, RAVEN_FIXTURE_API_KEY: "fixture",
+      });
+      withEngineHomes(instance);
+      expect(instance.models.options).toEqual([expect.objectContaining({ id: "raven/fixture" })]);
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "alice", botId: "pi-bot", cwd, text: "hello", model: "raven/fixture" });
+      expect(await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId)).toMatchObject({ ok: true });
+
+      const [catalog, turn] = wrap.mock.calls.map(([request]) => request);
+      const dir = join(audienceHome(DATA_DIR, "member:alice"), "profiles", "raven");
+      const launches = readFileSync(dump, "utf8").trim().split("\n").map((row) => JSON.parse(row));
+      expect(launches.find((row) => row.argv?.includes("-e"))?.agentDir).toBe(dir);
+      expect(readFileSync(join(dir, "models.json"), "utf8")).toBe(profileModels);
+      expect(readFileSync(join(dir, "auth.json"), "utf8")).toBe(auth);
+      expect(readFileSync(join(dir, "settings.json"), "utf8")).not.toContain("extensions");
+      expect(readdirSync(dir)).not.toContain("AGENTS.md");
+      expect(turn?.shared).toContainEqual({ source: join(profile, "auth.json"), target: join(dir, "auth.json") });
+      expect(catalog?.rw).toEqual([catalog?.env.PI_CODING_AGENT_DIR]);
+      expect(turn?.rw).toEqual([dirname(turn!.env.OMB_MCP_CONFIG!)]);
+      expect(turn?.allowEnv).toContain("RAVEN_FIXTURE_API_KEY");
+
+      const setup = { dataDir: DATA_DIR, home, codeRoots: [], engineRoots: [], bridges: [] };
+      const plan = planBox(setup, turn!);
+      expect(visibleInBox(plan, join(dir, "models.json"))).toBe("rw");
+      expect(visibleInBox(plan, join(audienceHome(DATA_DIR, "member:bob"), "profiles", "raven", "models.json"))).toBe("none");
+      expect(visibleInBox(plan, join(DATA_DIR, "messages.db"))).toBe("none");
+      expect(visibleInBox(plan, turn!.env.OMB_MCP_CONFIG!)).toBe("rw");
+    } finally {
+      wrap.mockRestore();
+      engineHomes.stop();
+      await removeTempDir(home);
+    }
   });
 
   it("writes models.json and set_model for a host::model inject pick, in MausBot's own Pi folder", async () => {

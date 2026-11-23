@@ -3,7 +3,7 @@
 //   FAKE_STREAM_SCRIPT, FAKE_STREAM_CADENCE  a scripted reply chosen by a marker in the prompt (stream-script.ts)
 //   FAKE_PI_MODE  happy (default) | tooluse | priced | priced-stop | permission | interleave | question-select | question-input
 //     | turn-error | no-models | exit-early | compaction | compaction-recovery
-//     | compaction-recovery-upstream | prompt-reject | omp-chunk
+//     | compaction-recovery-upstream | prompt-reject | omp-chunk | profile-models
 //     | session-slow (answers new_session after FAKE_PI_SESSION_DELAY_MS, default 800, and dumps {sessionReplied})
 //   FAKE_PI_MODELS  provider/model pairs (default "ollama-cloud/glm-5.2,openai/gpt-4o")
 //   FAKE_PI_DUMP  path to append {argv, env} JSON to
@@ -11,10 +11,21 @@
 //   FAKE_PI_STEER_OUT_OF_ORDER  hold the first steer until a second arrives, then refuse the first and accept the second
 
 import { appendFileSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { playStreamScript, streamScript, type StreamScript } from "./stream-script.ts";
 
 const mode = process.env.FAKE_PI_MODE ?? "happy";
-const modelPairs = (process.env.FAKE_PI_MODELS ?? "ollama-cloud/glm-5.2,openai/gpt-4o")
+function profileModels() {
+  try {
+    const { providers } = JSON.parse(readFileSync(join(process.env.PI_CODING_AGENT_DIR ?? "", "models.json"), "utf8")) as {
+      providers: Record<string, { models: Array<{ id: string }> }>;
+    };
+    return Object.entries(providers).flatMap(([provider, { models }]) => models.map(({ id }) => ({ provider, id, name: id })));
+  } catch {
+    return [];
+  }
+}
+const modelPairs = mode === "profile-models" ? profileModels() : (process.env.FAKE_PI_MODELS ?? "ollama-cloud/glm-5.2,openai/gpt-4o")
   .split(",")
   .filter(Boolean)
   .map((pair) => {
@@ -379,6 +390,10 @@ function handle(cmd: any) {
       send({ type: "response", command: "switch_session", success: true, data: { sessionId: "s-resumed", sessionFile: currentSessionFile } });
       return;
     case "set_model": {
+      if (mode === "profile-models" && !modelPairs.some(({ provider, id }) => provider === cmd.provider && id === cmd.modelId)) {
+        send({ type: "response", command: "set_model", success: false, error: "Model missing from the effective Pi profile" });
+        return;
+      }
       if (process.env.FAKE_PI_DUMP) {
         try {
           appendFileSync(process.env.FAKE_PI_DUMP, JSON.stringify({ setModel: { provider: cmd.provider, modelId: cmd.modelId } }) + "\n");

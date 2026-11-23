@@ -3,7 +3,7 @@ import { RuntimeNoticeError, runtimeErrorText } from "./runtime-notice-error.ts"
 // The pi coding agent (@earendil-works/pi-coding-agent) over its own stdio JSON-RPC mode
 // (`pi --mode rpc --no-session`), not ACP. Pi reads auth.json from its agent folder itself, so this driver
 // holds no key; resumeCursor is pi's `sessionFile` (switch_session).
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,6 +13,7 @@ import { openStartupModelCatalog, unconfirmedModelCatalog, writeStartupModelCach
 import { augmentedPath } from "../env-path.ts";
 import { describeSpawnFailure, execCliBoxed, killCliTree, spawnCli } from "../procs.ts";
 import { instanceEnvNames } from "../bot-box/env.ts";
+import { engineHomes } from "../engine-homes/engine-homes.ts";
 import {
   deletePromptSplitReceipt,
   promptHalves,
@@ -48,7 +49,7 @@ import {
 import { appendNative } from "./native.ts";
 import { allowsTool, parseToolScope } from "../../shared/tool-scope.ts";
 import { buildMcpServers } from "./pi-mcp-servers.ts";
-import { piAgentDir, readPiDefaultModel, withOwnPiAgentDir } from "./pi-agent-dir.ts";
+import { ownPiAgentDir, piAgentDir, preparePiAgentConfig, readPiAgentFile, readPiDefaultModel } from "./pi-agent-dir.ts";
 import { noticeFailure } from "../chat-notices.ts";
 
 import { decodePiFrame, PiRpcChunks, piLineReader, readPiPromptImages } from "./pi-rpc.ts";
@@ -141,9 +142,10 @@ export function ensurePiInjectModel(
   mkdirSync(dir, { recursive: true });
   const path = join(dir, "models.json");
   let root: Record<string, unknown> = { providers: {} };
-  if (existsSync(path)) {
+  const saved = readPiAgentFile(path);
+  if (saved !== null) {
     try {
-      const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+      const parsed = JSON.parse(saved) as unknown;
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         root = parsed as Record<string, unknown>;
       } else {
@@ -206,8 +208,9 @@ export async function fetchPiModels(
   cli: string,
   env: Record<string, string | undefined>,
   allowEnv: readonly string[] = [],
+  agentDir?: string,
 ): Promise<ModelCatalog> {
-  const child = spawnCli(cli, PI_ARGS, { stdio: ["pipe", "pipe", "pipe"], env, box: { allowEnv } });
+  const child = spawnCli(cli, PI_ARGS, { stdio: ["pipe", "pipe", "pipe"], env, box: { allowEnv, rw: agentDir ? [agentDir] : [] } });
   return new Promise((resolve) => {
     let done = false;
     const fallbackDefault = readPiDefaultModel(env);
@@ -245,9 +248,10 @@ export async function updatePiModelCatalog(
   cli: string,
   env: Record<string, string | undefined>,
   allowEnv: readonly string[] = [],
+  agentDir?: string,
 ): Promise<boolean> {
   return new Promise((resolve) => {
-    execCliBoxed(cli, PI_MODEL_UPDATE_ARGS, { env, timeout: 60_000, maxBuffer: 1024 * 1024, box: { allowEnv } }, (error) => resolve(!error));
+    execCliBoxed(cli, PI_MODEL_UPDATE_ARGS, { env, timeout: 60_000, maxBuffer: 1024 * 1024, box: { allowEnv, rw: agentDir ? [agentDir] : [] } }, (error) => resolve(!error));
   });
 }
 
@@ -320,14 +324,18 @@ export const PiDriver: ProviderDriver<PiConfig> = {
   async create(input: DriverCreateInput<PiConfig>): Promise<ProviderInstance> {
     const { instanceId, config } = input;
     const sourceEnvironment = () => ({ ...process.env, ...input.environment });
-    const agentEnvironment = () => withOwnPiAgentDir(sourceEnvironment(), instanceId);
+    const localAgent = (source = sourceEnvironment()) => {
+      const dir = ownPiAgentDir(source, instanceId);
+      return { dir, env: { ...source, PI_CODING_AGENT_DIR: dir } };
+    };
     let models = EMPTY;
     const readModels = async () => {
       let base = models, listed = false;
       let catalogEnv = piEnvironment(sourceEnvironment());
       try {
-        catalogEnv = withOwnPiAgentDir(catalogEnv, instanceId);
-        const resolved = await fetchPiModels(config.cli, catalogEnv, instanceEnvNames(input.environment, catalogEnv));
+        const agent = localAgent(catalogEnv);
+        catalogEnv = agent.env;
+        const resolved = await fetchPiModels(config.cli, catalogEnv, instanceEnvNames(input.environment, catalogEnv), agent.dir);
         if (resolved.options.length) [base, listed] = [resolved, true];
       } catch {}
       try {
@@ -339,8 +347,9 @@ export const PiDriver: ProviderDriver<PiConfig> = {
       try { if (!listed) unconfirmedModelCatalog(models); writeStartupModelCache(instanceId, models); } catch {}
     };
     const refreshModels = async () => {
-      const catalogEnv = piEnvironment(agentEnvironment());
-      await updatePiModelCatalog(config.cli, catalogEnv, instanceEnvNames(input.environment, catalogEnv));
+      const agent = localAgent();
+      const catalogEnv = piEnvironment(agent.env);
+      await updatePiModelCatalog(config.cli, catalogEnv, instanceEnvNames(input.environment, catalogEnv), agent.dir);
       await readModels();
     };
     const startupModelRefresh = (await openStartupModelCatalog({
@@ -403,8 +412,27 @@ export const PiDriver: ProviderDriver<PiConfig> = {
       const images = readPiPromptImages(turn);
 
       // Before any credential-bearing temp file, so a model setup failure leaves nothing to clean up.
-      const turnEnv = agentEnvironment();
-      if (typeof turn.model === "string" && turn.model) ensurePiInjectModel(turn.model, turnEnv);
+      const source = sourceEnvironment();
+      let turnEnv: Record<string, string | undefined>;
+      let agentDir: string;
+      let writable: string[];
+      if (engineHomes.active()) {
+        const profile = piAgentDir(source);
+        turnEnv = source.PI_CODING_AGENT_DIR ? { ...source, PI_CODING_AGENT_DIR: profile } : source;
+        const homed = engineHomes.spawnLayout(turnEnv);
+        if (!homed) throw new Error("Pi turn requires a Team Cloud audience");
+        agentDir = piAgentDir(homed.env);
+        preparePiAgentConfig(profile, agentDir, homed.home);
+        writable = [];
+      } else {
+        const agent = localAgent(source);
+        turnEnv = agent.env;
+        agentDir = agent.dir;
+        writable = [agent.dir];
+      }
+      if (typeof turn.model === "string" && turn.model) {
+        ensurePiInjectModel(turn.model, { ...turnEnv, PI_CODING_AGENT_DIR: agentDir });
+      }
 
       // The MCP config carries credentials: a 0600 temp file removed at settle, never argv.
       // Written on every turn: the extension also carries ask_user.
@@ -426,10 +454,12 @@ export const PiDriver: ProviderDriver<PiConfig> = {
       // spawnCli can throw synchronously, before settle() could remove the credential file.
       const child = (() => {
         try {
+          const env = piEnvironment({ ...turnEnv, OMB_MCP_CONFIG: join(mcpTempDir, "mcp.json") });
           return spawnCli(config.cli, childArgs, {
             stdio: ["pipe", "pipe", "pipe"],
             cwd: turn.cwd,
-            env: piEnvironment({ ...turnEnv, OMB_MCP_CONFIG: join(mcpTempDir, "mcp.json") }),
+            box: { rw: [...writable, mcpTempDir], allowEnv: instanceEnvNames(input.environment, env) },
+            env,
           }, "bot");
         } catch (err) {
           try {
@@ -875,16 +905,18 @@ export const PiDriver: ProviderDriver<PiConfig> = {
     };
 
     const snapshot = async (): Promise<ProviderSnapshot> => {
-      let env;
+      let agent;
       try {
-        env = piEnvironment(agentEnvironment());
+        agent = localAgent();
       } catch (error) {
         return { state: "unavailable", reason: error instanceof Error ? error.message : String(error) };
       }
+      const env = piEnvironment(agent.env);
       const version = await new Promise<string | null>((resolve) => {
         const child = spawnCli(config.cli, ["--version"], {
           stdio: ["ignore", "pipe", "pipe"],
           env,
+          box: { allowEnv: instanceEnvNames(input.environment, env), rw: [agent.dir] },
         });
         let out = "";
         child.stdout?.setEncoding("utf8");
