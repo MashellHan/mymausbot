@@ -316,7 +316,7 @@ const serverSupervisor = createServerSupervisor({
     reportOwnListeners(proc);
     orgLibrary?.runtimeReady();
     if (managedDesktop) void managedDesktop.refresh().catch(() => {});
-    routineWake.start();
+    routineWake.start(); pwaBridgeWake.start();
     for (const win of appWindows()) {
       if (!serverUnavailableWindows.has(win) || activeRemote(environmentsState)) continue;
       void win.loadURL(`http://127.0.0.1:${SERVER_PORT}`).then(() => {
@@ -330,7 +330,7 @@ const serverSupervisor = createServerSupervisor({
     serverReady = false;
     serverProc = null;
     companyBackupSchedule?.reconcile();
-    routineWake.stop();
+    routineWake.stop(); pwaBridgeWake.stop();
   },
   onExhausted() {
     slog("server recovery paused after repeated failures; quit and reopen to retry");
@@ -476,6 +476,7 @@ import { createDesktopCompanionE2E, deviceCounts } from "./companion-e2e-desktop
 import { autoStartCompanion } from "./companion-autostart.mjs";
 import { createPhoneLinkRoutes } from "./phone-link-routes.mjs"; import { reachableForKeepAwake } from "./keep-awake.mjs";
 import { createRoutineWakeHold, rememberRoutineWake, routineWakeSettings } from "./routine-wake.mjs";
+import { createMainPwaBridgeWake } from "./pwa-bridge-wake.mjs";
 import { createWorkspaceCredentialSaver } from "./workspace-credential-saver.mjs";
 
 /** Second wall after preload's reduced bridge: computer-controlling IPC answers only the local server's UI.
@@ -512,6 +513,8 @@ const routineWake = createRoutineWakeHold({
   settings: () => routineWakeSettings(app.getPath("userData")),
   log: (line) => slog(line),
 });
+
+const pwaBridgeWake = createMainPwaBridgeWake({ port: () => SERVER_PORT, isServerReady: () => serverReady, blocker: powerSaveBlocker, dataDir: desktopDataDir, log: (line) => slog(line) });
 
 function slog(line) {
   try {
@@ -3087,7 +3090,7 @@ app.on("before-quit", (e) => {
   // Cancel a scheduled recovery before yielding.
   const stoppingServer = serverSupervisor.shutdown();
   syncCompanionKeepAwake(false, false);
-  routineWake.stop();
+  routineWake.stop(); pwaBridgeWake.stop();
   try {
     desktopCompanionRelay?.close?.();
   } catch {}
