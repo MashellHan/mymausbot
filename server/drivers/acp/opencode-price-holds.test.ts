@@ -6,10 +6,11 @@ import { afterEach, expect, it } from "vitest";
 
 import type { ModelCatalog, ProviderInstance } from "../../contracts.ts";
 import { DATA_DIR } from "../../config.ts";
-import { writeStartupModelCache } from "../../startup-model-catalog.ts";
+import { setStartupModelCacheSource, writeStartupModelCache } from "../../startup-model-catalog.ts";
 import { createLimitTakeover } from "../../host/limit-takeover.ts";
 import { removeTempDir } from "../../testing/cleanup.ts";
 import { recordEvents } from "../../testing/events.ts";
+import { acpModelCatalogSource } from "./model-catalog.ts";
 import { createOpenCodeDriver, openCodeLimitFacts, parseOpenCodeModelsOutput, resetOpenCodeModelCache } from "./opencode-go.ts";
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), "../../testing/fake-acp-cli.ts");
@@ -33,7 +34,9 @@ function savedListing(instanceId: string, checkedAt = Date.now()) {
   mkdirSync(DATA_DIR, { recursive: true });
   writeFileSync(file, JSON.stringify([{ id: "fixture" }]));
   restoreBots = () => { if (previous) writeFileSync(file, previous); else rmSync(file, { force: true }); };
-  writeStartupModelCache(instanceId, prices("free"), { checkedAt });
+  const catalog = prices("free");
+  setStartupModelCacheSource(catalog, acpModelCatalogSource("opencodeGo", CLI));
+  writeStartupModelCache(instanceId, catalog, { checkedAt });
 }
 
 function deferred<T>() {
