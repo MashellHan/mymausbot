@@ -182,7 +182,7 @@ jobs:
           security import "$RUNNER_TEMP/cert.p12" -P "$MAC_CERT_PASSWORD" -A \
             -t cert -f pkcs12 -k "$KEYCHAIN"
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security list-keychains -d user -s "$KEYCHAIN" login.keychain
+          printf 'CSC_KEYCHAIN=%s\n' "$KEYCHAIN" >> "$GITHUB_ENV"
           rm "$RUNNER_TEMP/cert.p12"
 
       - name: Package both architectures
