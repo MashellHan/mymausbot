@@ -476,6 +476,55 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False, history_d
         self.assertEqual(result["sources"], [{"device": str(i), "status": status, "tokenStatus": token_status, "commitStatus": commit_status}
                          for i, (status, _, token_status, commit_status) in enumerate(cases)])
 
+    def test_legacy_join_deduplicates_sha_and_preserves_partial_coverage(self):
+        collector = self.root / "collector-ado-join.py"
+        output = self.root / "ado-join.json"
+        collector.write_text('''import datetime as dt
+import json
+def instant(value):
+    return dt.datetime.fromisoformat(value.replace("Z", "+00:00")) if isinstance(value, str) else None
+def remote_category(remote, config):
+    return "work"
+def repository_identity(remote):
+    return {"id": "same-repository", "name": "dev.azure.com/example/project/repo"}
+def run(args, timeout=35):
+    raise AssertionError("No CLI should run in this fixture")
+def aggregate(machines, prs, at, history_days=30):
+    commits, repositories = {}, {}
+    for machine in machines:
+        for row in machine.get("commits", []):
+            commits.setdefault(row["key"], row)
+    for row in commits.values():
+        repository = row.get("repository")
+        if repository:
+            repositories.setdefault(repository["id"], {**repository, "commits": 0})["commits"] += 1
+    return {"sources": [{"device": machine["device"], "status": machine["status"]}
+                         for machine in machines], "daily": [], "commitKeys": list(commits),
+            "repositories": list(repositories.values())}
+def refresh(config, upload=False, skip_api=False, reuse_sources=False, history_days=30):
+    at = dt.datetime(2026, 11, 6, 8, tzinfo=dt.timezone.utc)
+    with open(config["result"], "w") as stream:
+        json.dump(aggregate(config["machines"], {}, at, history_days), stream)
+''')
+        config = {"azureCli": "/fixture/az", "authorEmails": [OWNER],
+                  "adoRemotes": ["https://dev.azure.com/example/project/_git/repo"],
+                  "result": str(output), "machines": [{"device": "0", "status": "ok", "commits": [
+                      {"key": "local", "at": "2026-11-06T06:00:00Z"},
+                      {"key": "shared", "at": "2026-11-06T06:10:00Z", "category": "work", "m365": False,
+                       "repository": {"id": "same-repository", "name": "dev.azure.com/example/project/repo"}}]}]}
+        repository = {"id": "same-repository", "name": "dev.azure.com/example/project/repo"}
+        events = [{"key": "shared", "at": "2026-11-06T06:10:00Z", "category": "work", "m365": False,
+                   "repository": repository},
+                  {"key": "remote", "at": "2026-11-06T06:20:00Z", "category": "work", "m365": False,
+                   "repository": repository}]
+        for complete, expected in ((True, "ready"), (False, "partial")):
+            with patch.object(usage, "legacy_ado_commits", return_value={"records": events, "complete": complete}):
+                usage.refresh(collector, config, self.root, skip_api=True, reuse_sources=True)
+            result = json.loads(output.read_text())
+            self.assertEqual(result["commitKeys"], ["local", "shared", "remote"])
+            self.assertEqual(result["repositories"], [{**repository, "commits": 2}])
+            self.assertEqual(result["sources"][0]["commitStatus"], expected)
+
     def test_remote_refresh_stays_independent_when_local_logs_fail(self):
         collector = self.root / "collector-fails.py"
         collector.write_text('''def run(args, timeout=35):
@@ -759,6 +808,115 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False, history_d
             remote.assert_called_once()
         self.assertFalse(pid_file.exists())
         self.assertFalse(lock.exists())
+
+
+class LegacyAdoJoinTests(unittest.TestCase):
+    config = {
+        "adoRemotes": ["https://dev.azure.com/example/Project/_git/Repo"],
+        "adoPrincipals": {"example": {"stableId": "11111111-2222-3333-4444-555555555555",
+                                       "alias": "owner@example.test"}},
+        "adoAuthorEmails": ["author@example.test"],
+    }
+    repo_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    ordinary = "1" * 40
+    merge = "2" * 40
+    coauthor = "3" * 40
+    later = "4" * 40
+
+    def fixture(self, status="ready"):
+        org, project, names = usage.local_usage_ado.projects(self.config)[0]
+        account = usage.local_usage_ado.principal(self.config, org)
+        scope = org.casefold() + "/" + project.casefold()
+        source_id = usage.local_usage_ado.digest("ado", "dev.azure.com", scope, account["stableId"])
+        cutoff = "2026-11-06T08:00:00Z"
+        captured = "2026-11-06T08:01:00Z"
+        items = [
+            {"id": self.ordinary, "day": "2026-11-06", "authoredAt": "2026-11-06T07:00:00Z",
+             "merge": False, "coauthor": False},
+            {"id": self.merge, "day": "2026-11-06", "authoredAt": "2026-11-06T07:01:00Z",
+             "merge": True, "coauthor": False},
+            {"id": self.coauthor, "day": "2026-11-06", "authoredAt": "2026-11-06T07:02:00Z",
+             "merge": False, "coauthor": True},
+            {"id": self.later, "day": "2026-11-06", "authoredAt": "2026-11-06T08:00:01Z",
+             "merge": False, "coauthor": False},
+        ]
+        proof = {"head": "a" * 40, "branch": "refs/heads/main", "pinnedAt": captured,
+                 "items": items, "checked": [item["id"] for item in items], "relation": "initial",
+                 "coverageStartAt": "2026-09-07T16:00:00Z"}
+        work = {"cutoff": cutoff, "firstDay": "2026-09-08", "lastDay": "2026-11-06",
+                "inventory": [{"id": self.repo_id, "name": "Repo", "defaultBranch": "refs/heads/main",
+                               "isDisabled": False}],
+                "selectedRepoIds": [self.repo_id], "repoDone": {self.repo_id: proof},
+                "progress": {}, "repoErrors": {}, "scanComplete": True}
+        state = {"schema": 3, "projects": {scope: {"account": account,
+            "emailHash": usage.local_usage_ado.digest("ado-author-aliases", sorted(self.config["adoAuthorEmails"])),
+            "remoteScopeHash": usage.local_usage_ado.digest("ado-remotes", scope, names),
+            "cache": {self.repo_id: proof}, "work": work}}}
+        source = {"id": source_id, "account": account,
+                  "scope": {"organization": org, "project": project}, "status": status,
+                  "coverage": {"identityVerified": True, "paginationComplete": status == "ready",
+                               "visibilityComplete": status == "ready", "reasons": []},
+                  "provenance": {"sourceCutoffAt": cutoff, "sourceCapturedAt": captured,
+                                 "pinnedHeads": {self.repo_id: proof["head"]}}}
+        return {"ado": {"asOfAt": cutoff, "capturedAt": captured,
+                         "operationWindow": {"startDay": "2026-09-08", "endDay": "2026-11-06"},
+                         "sources": [source], "state": state}}
+
+    def extract(self, snapshot):
+        with patch.object(usage.local_usage_contributions, "load_previous", return_value=snapshot), \
+             patch.object(usage.local_usage_contributions, "validate_seed_bindings", return_value=snapshot):
+            identity = lambda remote: {"id": usage.local_usage_ado.digest("dev.azure.com", "example/project/repo"),
+                                       "name": "dev.azure.com/example/Project/Repo"}
+            return usage.legacy_ado_commits(self.config, identity,
+                                            lambda remote, config: "work", "/fixture/usage.json")
+
+    def test_join_keeps_only_ordinary_author_commits_with_repository_identity_and_cutoff(self):
+        result = self.extract(self.fixture())
+        self.assertTrue(result["complete"])
+        self.assertEqual([row["key"] for row in result["records"]], [self.ordinary])
+        for row in result["records"]:
+            self.assertEqual(row["repository"], {
+                "id": usage.local_usage_ado.digest("dev.azure.com", "example/project/repo"),
+                "name": "dev.azure.com/example/Project/Repo"})
+            self.assertEqual((row["category"], row["m365"]), ("work", False))
+
+    def test_partial_source_retains_known_records_but_is_not_exact(self):
+        snapshot = self.fixture("partial")
+        result = self.extract(snapshot)
+        self.assertFalse(result["complete"])
+        self.assertEqual([row["key"] for row in result["records"]], [self.ordinary])
+
+    def test_partial_progress_recovers_cached_proof_at_the_same_pinned_head(self):
+        snapshot = self.fixture("partial")
+        project = snapshot["ado"]["state"]["projects"]["example/project"]
+        proof = project["work"]["repoDone"].pop(self.repo_id)
+        project["work"].update(progress={self.repo_id: {**proof, "pending": [self.merge]}}, scanComplete=False)
+        snapshot["ado"]["sources"][0]["provenance"]["pinnedHeads"] = {}
+        result = self.extract(snapshot)
+        self.assertFalse(result["complete"])
+        self.assertEqual([row["key"] for row in result["records"]], [self.ordinary])
+
+    def test_proof_binding_rejects_changed_head_and_author_scope(self):
+        changed = self.fixture()
+        changed["ado"]["sources"][0]["provenance"]["pinnedHeads"][self.repo_id] = "b" * 40
+        with self.assertRaisesRegex(ValueError, "completed repository binding"):
+            self.extract(changed)
+        changed = self.fixture()
+        project = changed["ado"]["state"]["projects"]["example/project"]
+        project["emailHash"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "project binding"):
+            self.extract(changed)
+
+    def test_unverified_source_adds_no_commit_lower_bound(self):
+        snapshot = self.fixture("unavailable")
+        snapshot["ado"]["sources"][0]["coverage"]["identityVerified"] = False
+        self.assertEqual(self.extract(snapshot), {"records": [], "complete": False})
+
+    def test_missing_legacy_cache_is_partial_and_has_no_fabricated_lower_bound(self):
+        with patch.object(usage.local_usage_contributions, "load_previous", return_value=None):
+            result = usage.legacy_ado_commits(self.config, lambda remote: {}, lambda remote, config: "work",
+                                              "/fixture/usage.json")
+        self.assertEqual(result, {"records": [], "complete": False})
 
 
 class FileAuthAndChildBoundaryTests(unittest.TestCase):
