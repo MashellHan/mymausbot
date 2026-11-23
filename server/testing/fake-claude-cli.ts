@@ -1086,7 +1086,8 @@ const playTurn = (prompt: JsonValue, late = false) => {
   }
 
   // A signed-out CLI's frames, as Claude Code 2.1.296 sends them: only the frame's own error fields mark the failure.
-  if (mode === "not-logged-in" || process.env.FAKE_CLAUDE_AUTH_AFTER_TURN === "1" && turnsPlayed > 0 || signedInAs === null) {
+  const signedOutFile = process.env.FAKE_CLAUDE_SIGNED_OUT_FILE;
+  if (mode === "not-logged-in" || (signedOutFile && existsSync(signedOutFile)) || process.env.FAKE_CLAUDE_AUTH_AFTER_TURN === "1" && turnsPlayed > 0 || signedInAs === null) {
     if (process.env.FAKE_CLAUDE_AUTH_AFTER_WORK === "1") out({
       type: "assistant", message: { model: "claude-fixture", content: [{ type: "tool_use", id: "before-sign-out", name: "Bash", input: { command: "pwd" } }] },
     });
