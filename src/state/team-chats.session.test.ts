@@ -12,12 +12,12 @@ afterEach(() => { setTeamChats(null); vi.unstubAllGlobals(); });
 
 it("a team session says which conversations its person opened, and the sidebar's rule keeps them, on any device", async () => {
   const answer = session(["admin", "client"], ["ben-1", "ben-2"]);
-  const fetched = vi.fn(async () => new Response(JSON.stringify(answer), { status: 200 }));
+  const fetched = vi.fn(async () => new Response(JSON.stringify(answer), { status: 200, headers: { "content-type": "application/json" } }));
   expect(await readSessionState(fetched as never)).toMatchObject({ kind: "session", team: { id: "team-acme" }, openedThreads: ["ben-1", "ben-2"] });
   vi.stubGlobal("fetch", fetched);
   useTeamChats({ team: { id: "team-acme" } });
   await flush();
   expect(teamChats()).toEqual({ teamId: "team-acme", member: false, opened: ["ben-1", "ben-2"] });
   const { openedThreads: _none, ...plain } = answer;
-  expect(await readSessionState((async () => new Response(JSON.stringify({ ...plain, team: undefined }), { status: 200 })) as never)).not.toHaveProperty("openedThreads");
+  expect(await readSessionState((async () => new Response(JSON.stringify({ ...plain, team: undefined }), { status: 200, headers: { "content-type": "application/json" } })) as never)).not.toHaveProperty("openedThreads");
 });

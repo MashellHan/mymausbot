@@ -1,5 +1,6 @@
 import { ApiError, api } from "@/state/store";
 import { intlLocale, t } from "@/lib/i18n";
+import { remoteFetch } from "@/lib/pwa-config";
 import { serverErrorText } from "@/lib/server-error";
 
 export const MEMORY_INDEX = "MEMORY.md";
@@ -76,7 +77,7 @@ export function fetchMemoryDoc(botId: string, path: string, mine = false): Promi
 }
 
 export async function saveMemoryDoc(botId: string, path: string, text: string, expectedHash: string | undefined, mine = false): Promise<SaveResult> {
-  const response = await fetch(`${memoryRoute(botId, mine)}/file`, {
+  const response = await remoteFetch(`${memoryRoute(botId, mine)}/file`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ path, text, expectedHash }),

@@ -1,6 +1,7 @@
 import { useState, type CSSProperties } from "react";
 import { bannerSrc, type BannerSummary } from "@/lib/place-banner";
 import { placeTint, usePlaceLook } from "@/lib/place-look";
+import { useRemoteMediaUrl } from "@/lib/use-remote-media";
 import { useStore } from "@/state/store";
 
 /** What the top of the sidebar shows, first that applies: the workspace's banner picture (kept on its own server), the
@@ -10,12 +11,13 @@ export function PlaceTop({ banner, color }: { banner: BannerSummary | null | und
   const src = bannerSrc(banner);
   const [broken, setBroken] = useState<string | null>(null);
   const picture = src && src !== broken ? src : null;
+  const remoteBanner = useRemoteMediaUrl(picture);
   const tint = placeTint(color);
   return <>
-    {picture && <div aria-hidden="true" data-place-banner className="place-banner pointer-events-none absolute inset-x-0 top-0">
-      <img src={picture} alt="" draggable={false} onError={() => setBroken(picture)} />
+    {picture && !remoteBanner.failed && <div aria-hidden="true" data-place-banner className="place-banner pointer-events-none absolute inset-x-0 top-0">
+      {remoteBanner.url && <img src={remoteBanner.url} alt="" draggable={false} onError={() => setBroken(picture)} />}
     </div>}
-    {tint && <div aria-hidden="true" data-place-tint data-under-banner={picture ? "" : undefined} className="place-tint pointer-events-none absolute inset-x-0 top-0" style={tint as CSSProperties} />}
+    {tint && <div aria-hidden="true" data-place-tint data-under-banner={picture && !remoteBanner.failed ? "" : undefined} className="place-tint pointer-events-none absolute inset-x-0 top-0" style={tint as CSSProperties} />}
   </>;
 }
 

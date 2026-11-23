@@ -16,7 +16,7 @@ export function transcriptLookups(all: readonly Message[], branch: readonly Mess
   const forks = new Map<string | null, Message[]>();
   for (const message of all) {
     byId.set(message.id, message);
-    if (message.role !== "user" || message.kind !== "text") continue;
+    if (message.role !== "user" || message.kind !== "text" || message.waitContinuation) continue;
     const parent = message.parentId ?? null;
     const siblings = forks.get(parent);
     if (siblings) siblings.push(message);

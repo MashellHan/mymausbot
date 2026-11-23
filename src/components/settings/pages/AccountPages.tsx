@@ -2,6 +2,7 @@ import { ArrowUpRight } from "lucide-react";
 import { t } from "@/lib/i18n";
 import { CLOUD_PLAN_URL } from "@/lib/app-links";
 import { productName } from "@/lib/brand";
+import { clearPwaAuth } from "@/lib/pwa-config";
 import { api, useStore } from "@/state/store";
 import { useState } from "react";
 import { InertRow, useSwitchToComputer } from "../inert";
@@ -64,7 +65,7 @@ export function AccountPage() {
             </SettingRow>
           )}
         </SettingsRows>
-        {signingOut && <SignOutConfirm browser here={place.name} onConfirm={() => api("/api/auth/logout", { method: "POST" }).finally(() => location.reload())} onClose={() => setSigningOut(false)} />}
+        {signingOut && <SignOutConfirm browser here={place.name} onConfirm={() => api("/api/auth/logout", { method: "POST" }).catch(() => undefined).finally(() => clearPwaAuth().finally(() => location.reload()))} onClose={() => setSigningOut(false)} />}
       </SettingsGroup>
     )}
     {ctx.organization ? (

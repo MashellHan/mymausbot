@@ -13,6 +13,13 @@ const running = (name: string): Message =>
   ({ id: `t${++seq}`, at: seq, role: "bot", kind: "activity", tool: { name } });
 const text = (body: string): Message => ({ id: `m${++seq}`, at: seq, role: "bot", kind: "text", text: body });
 
+it("keeps a Wait's completion notice and the person's saved reply visible without the internal input", () => {
+  const notice = { ...text("The report is ready."), wait: { status: "fired" as const, id: "report" } };
+  const continuation: Message = { ...text(""), role: "user", automated: true, waitContinuation: true, parentId: notice.id };
+  const reply: Message = { ...text("What ran?"), role: "user", replyToId: continuation.id, parentId: continuation.id };
+  expect(groupTranscript([notice, continuation, reply])).toEqual([{ kind: "message", message: notice }, { kind: "message", message: reply }]);
+});
+
 describe("a reaction's own line", () => {
   it("draws no bubble in a conversation or a room: the reaction shows on the message it answered", () => {
     const asked = text("Shall I send it?");
