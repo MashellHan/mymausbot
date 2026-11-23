@@ -1111,6 +1111,12 @@ function handle(msg: any) {
         result(msg.id, { stopReason: "end_turn", _meta: { inputTokens: 12, outputTokens: 4 } });
         return;
       }
+      const stopReasonFile = process.env.FAKE_ACP_STOP_REASON_FILE;
+      if (stopReasonFile && existsSync(stopReasonFile)) {
+        recordMethod("session/prompt.result");
+        result(msg.id, { stopReason: readFileSync(stopReasonFile, "utf8").trim() || "cancelled", _meta: {} });
+        return;
+      }
       const fullPrompt = (Array.isArray(msg.params?.prompt) ? msg.params.prompt : []).map((block: any) => block?.text ?? "").join("");
       const hangOn = process.env.FAKE_ACP_HANG_ON, hangOnce = process.env.FAKE_ACP_HANG_ONCE_FILE;
       const held = Boolean(hangOn) && fullPrompt.includes(hangOn!) && !(hangOnce && existsSync(hangOnce));

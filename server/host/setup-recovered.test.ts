@@ -54,14 +54,19 @@ describe("teammate setup recovery", () => {
   });
 
   it.each([
-    ["saved steps", { replayed: true, stopped: false }],
-    ["a stopped turn", { replayed: false, stopped: true }],
-  ] as const)("keeps a setup mark after %s", (_kind, flags) => {
-    const { bot, recovery, turn, mark, activity } = setup();
+    ["saved steps", { replayed: true, stopped: false }, "end_turn"],
+    ["a stopped turn", { replayed: false, stopped: true }, "end_turn"],
+    ["a provider-cancelled turn", { replayed: false, stopped: false }, "cancelled"],
+    ["a provider-interrupted turn", { replayed: false, stopped: false }, "interrupted"],
+  ] as const)("keeps a setup mark after %s", (_kind, flags, stopReason) => {
+    const { bot, recovery, turn, mark, complete, activity } = setup();
     mark();
     recovery.started(turn);
-    recovery.completed(bot.id, { ...turn, ok: true }, flags);
+    recovery.completed(bot.id, { ...turn, ok: true, stopReason }, flags);
     expect(activity()).toBe("dead");
+    recovery.started(turn);
+    complete();
+    expect(activity()).toBe("idle");
   });
 
   it("uses the provider that answered, including during a failover", () => {
