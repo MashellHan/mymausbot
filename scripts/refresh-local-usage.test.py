@@ -1224,6 +1224,34 @@ def collect(config):
         self.assertEqual(legacy_snapshots, [retained])
         self.assertEqual(legacy_on_disk, [retained])
 
+    def test_legacy_worker_binds_primary_cutoff_to_the_collector_clock(self):
+        cutoff = dt.datetime.fromisoformat("2026-11-23T08:00:00+00:00")
+        observed = []
+
+        class Collector:
+            def __init__(self):
+                self.run = lambda *args, **kwargs: None
+                self.original_now = self.now
+
+            def now(self):
+                return cutoff + dt.timedelta(seconds=15)
+
+            def refresh(self, config, **options):
+                observed.append(self.now())
+
+        collector = Collector()
+        request = {"stage": "legacy", "collector": "/fixture/collector.py", "config": {"authorEmails": []},
+                   "azureDir": str(self.root), "at": cutoff.isoformat(), "publish": False,
+                   "skipApi": True, "reuseSources": False, "primary": {"version": 2}}
+        with patch.object(usage.sys, "stdin", io.StringIO(json.dumps(request))), \
+             patch.object(usage, "load_collector", return_value=collector), \
+             patch.object(usage, "AzureMemorySession", return_value=types.SimpleNamespace()), \
+             patch.object(usage, "GitHubFileSession", return_value=types.SimpleNamespace()), \
+             patch.object(usage.local_usage_models, "sample_herdr", return_value=None):
+            usage._primary_worker()
+        self.assertEqual(observed, [cutoff])
+        self.assertEqual(collector.now, collector.original_now)
+
     def test_private_capture_prefers_valid_candidate_progress_over_immutable_seed(self):
         zone = dt.timezone(dt.timedelta(hours=8))
         cutoff = dt.datetime.fromisoformat("2026-11-11T01:32:36+00:00")

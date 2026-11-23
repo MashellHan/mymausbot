@@ -876,21 +876,21 @@ def legacy_ado_commits(config, repository_identity, repository_category, *, at, 
             if not isinstance(active, dict):
                 raise ValueError("ADO raw repository progress is invalid")
             prior = prior_cache.get(repo_id)
-            proofs[repo_id] = (prior, True) if isinstance(prior, dict) \
-                and prior.get("head") == active.get("head") else (active, False)
-        proofs.update((repo_id, (proof, True)) for repo_id, proof in completed.items())
+            proofs[repo_id] = prior if isinstance(prior, dict) \
+                and prior.get("head") == active.get("head") else active
+        proofs.update(completed)
         pinned = provenance.get("pinnedHeads", {})
         if not isinstance(pinned, dict):
             raise ValueError("ADO raw pinned heads are invalid")
         if raw_complete and (set(completed) != set(selected) or any(
                 pinned.get(repo_id) != completed[repo_id].get("head") for repo_id in selected)):
             raise ValueError("ADO raw completed repository binding mismatch")
-        for repo_id, (proof, retained) in proofs.items():
+        for repo_id, proof in proofs.items():
             if repo_id not in selected or not isinstance(proof, dict):
                 continue
             repo = inventory[repo_id]
             head, branch, pinned_at = proof.get("head"), proof.get("branch"), proof.get("pinnedAt")
-            coverage_start = (local_usage_ado.instant(proof.get("coverageStartAt")) if retained
+            coverage_start = (local_usage_ado.instant(proof.get("coverageStartAt")) if proof.get("coverageStartAt")
                               else local_usage_ado.window_start(ado["operationWindow"]["startDay"]))
             if (repo.get("isDisabled") is not False or repo.get("defaultBranch") != branch
                     or not isinstance(head, str) or not local_usage_ado.SHA.fullmatch(head)
@@ -940,9 +940,12 @@ def _primary_worker():
         collector_path = Path(request["collector"])
         azure_dir = Path(request["azureDir"])
         if stage == "legacy":
+            primary_at = dt.datetime.fromisoformat(request["at"])
+            if primary_at.tzinfo is None:
+                raise ValueError("ADO legacy cutoff requires an offset")
             refresh(collector_path, config, azure_dir, publish=request["publish"],
                     skip_api=request["skipApi"], reuse_sources=request["reuseSources"], force_legacy=True,
-                    legacy_diagnostics=False, primary_snapshot=request.get("primary"))
+                    legacy_diagnostics=False, primary_snapshot=request.get("primary"), primary_at=primary_at)
             return
         if stage not in ("github", "ado"):
             raise ValueError("Unknown contribution worker")
@@ -1088,7 +1091,7 @@ def refresh_primary(collector_path, config, azure_config_dir, *, publish=False, 
 
 
 def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api=False, reuse_sources=False,
-            force_legacy=False, legacy_diagnostics=True, herdr_runner=None, primary_snapshot=None):
+            force_legacy=False, legacy_diagnostics=True, herdr_runner=None, primary_snapshot=None, primary_at=None):
     if publish:
         raise ValueError("Scheduled Usage publication requires a separately reviewed transport")
     if config.get("primaryContributionSource") == "contributions-v2" and not force_legacy:
@@ -1099,6 +1102,11 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
         return refresh_primary(collector_path, config, azure_config_dir, publish=publish, reuse_sources=reuse_sources)
     collector = load_collector(collector_path)
     original_run = collector.run
+    original_now = getattr(collector, "now", None)
+    if primary_at is not None:
+        if not isinstance(primary_at, dt.datetime) or primary_at.tzinfo is None or not callable(original_now):
+            raise ValueError("ADO legacy cutoff cannot bind the collector clock")
+        collector.now = lambda: primary_at
     projects = ado_project_scopes(config)
     azure = AzureMemorySession(azure_config_dir, config["authorEmails"], projects=projects or None)
     github = GitHubFileSession(config)
@@ -1279,6 +1287,8 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
     try:
         collector.refresh(config, **options)
     finally:
+        if primary_at is not None:
+            collector.now = original_now
         if legacy_diagnostics and (config.get("githubProfiles") or config.get("mergedAdoProjects") or config.get("adoRemotes")):
             try:
                 local_usage_merged.refresh(config, collector, collector.run, ado_request=azure.request, skip_api=skip_api)
