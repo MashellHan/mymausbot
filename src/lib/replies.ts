@@ -23,6 +23,7 @@ export function replySnippet(text: string, limit = 160): string {
   return `${clean.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
 }
 export function replyAuthor(message: Message, fallback?: string): string {
+  if (message.waitContinuation) return t("routines.event.automation");
   if (message.role === "user") return peerLine(message)?.name ?? t("chat.you");
   return message.from?.name ?? fallback ?? t("chat.assistant");
 }

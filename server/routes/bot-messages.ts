@@ -1,3 +1,4 @@
+import { isWaitContinuation } from "../wait-continuation.ts";
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
@@ -527,7 +528,7 @@ export function createBotMessageRoutes(deps: BotMessageRouteDeps): RouteHandler 
       if (!text) return json(res, 400, { error: "text required" });
       const threadMessages = store.messagesFor(bot.threadId);
       const source = threadMessages.find((msg) => msg.id === messageId);
-      if (!source || source.role !== "user" || source.kind !== "text") {
+      if (!source || source.role !== "user" || source.kind !== "text" || isWaitContinuation(source, (id) => threadMessages.find((message) => message.id === id))) {
         return json(res, 404, { error: "only user messages can be edited" });
       }
       const notYoursToRetry = owners.retryRefusal(auth, bot.threadId, source.sender);
