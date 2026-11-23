@@ -53,8 +53,14 @@ it("validates and maps canonical edition/repo selections in both directions", ()
   expect(githubWebUrlForSelection({ editionKey: "2026-11-20", repo: "dream-num/univer" }))
     .toBe("https://mxhan.com/github/20261120/dream-num/univer/");
 
+  expect(parseGithubSelection({ editionKey: "2026-11-23", repo: "hypothesisworks/hypothesis" }))
+    .toEqual({ editionKey: "2026-11-23", repo: "hypothesisworks/hypothesis" });
+  expect(parseGithubSelection({ editionKey: "2026-11-23", repo: "HypothesisWorks/hypothesis" })).toBeNull();
+
   expect(githubWebUrlForSelection({ editionKey: "2026-11-22", repo: "tobymao/sqlglot" }))
     .toBe("https://mxhan.com/github/20261122/tobymao/sqlglot/");
+  expect(githubWebUrlForSelection({ editionKey: "2026-11-23", repo: "hypothesisworks/hypothesis" }))
+    .toBe("https://mxhan.com/github/20261123/hypothesisworks/hypothesis/");
 
   expect(selectionFromGithubPath("/github/20261120/dream-num/univer/", "2026-11-20", "dream-num/univer"))
     .toEqual({ ok: true, selection: { editionKey: "2026-11-20", repo: "dream-num/univer" } });
@@ -97,6 +103,39 @@ it("validates and maps canonical edition/repo selections in both directions", ()
     ["/github/demo/sqlglot-query-lab", "2026-11-22", "tobymao/sqlglot"],
   ];
   for (const args of rejectedSqlglotCases) {
+    expect(selectionFromGithubPath(...args)).toEqual({ ok: false });
+  }
+  expect(selectionFromGithubPath("/github/demo/hypothesis-orders/", "2026-11-23", "hypothesisworks/hypothesis"))
+    .toEqual({ ok: true, selection: { editionKey: "2026-11-23", repo: "hypothesisworks/hypothesis" } });
+  expect(selectionFromGithubPath("/github/demo/hypothesis-orders/#weak-property", "2026-11-23", "hypothesisworks/hypothesis"))
+    .toEqual({ ok: true, selection: { editionKey: "2026-11-23", repo: "hypothesisworks/hypothesis" } });
+  expect(selectionFromGithubPath("/github/demo/hypothesis-orders/", undefined, undefined, "leaving"))
+    .toEqual({ ok: true, selection: { editionKey: "2026-11-23", repo: "hypothesisworks/hypothesis" } });
+  expect(selectionFromGithubPath("/github/demo/hypothesis-orders/", undefined, undefined, "shown"))
+    .toEqual({ ok: true, selection: { editionKey: "2026-11-23", repo: "hypothesisworks/hypothesis" } });
+  expect(selectionFromGithubPath("/github/demo/hypothesis-orders/", "2026-11-23", "hypothesisworks/hypothesis", "shown"))
+    .toEqual({ ok: true, selection: { editionKey: "2026-11-23", repo: "hypothesisworks/hypothesis" } });
+  const rejectedHypothesisCases: ReadonlyArray<Parameters<typeof selectionFromGithubPath>> = [
+    ["/github/demo/hypothesis-orders/"],
+    ["/github/demo/hypothesis-orders/", null, null],
+    ["/github/demo/hypothesis-orders/", "2026-11-23"],
+    ["/github/demo/hypothesis-orders/", "2026-11-23", null],
+    ["/github/demo/hypothesis-orders/", null, "hypothesisworks/hypothesis"],
+    ["/github/demo/hypothesis-orders/", "2026-11-22", "hypothesisworks/hypothesis"],
+    ["/github/demo/hypothesis-orders/", "2026-11-23", "tobymao/sqlglot"],
+    ["/github/demo/hypothesis-orders/", "2026-11-23", "HypothesisWorks/hypothesis"],
+    ["/github/demo/hypothesis-orders/", "2026-11-22", "hypothesisworks/hypothesis", "leaving"],
+    ["/github/demo/hypothesis-orders/", "2026-11-23", "other/repo", "shown"],
+    ["/github/demo/hypothesis-orders/", "2026-11-23", undefined, "shown"],
+    ["/github/demo/hypothesis-orders/", null, null, "leaving"],
+    ["/github/demo/hypothesis-orders-lab/", "2026-11-23", "hypothesisworks/hypothesis"],
+    ["/github/demo/hypothesis-orders/hypothesis-orders-lab-source.zip", "2026-11-23", "hypothesisworks/hypothesis"],
+    ["/github/demo/hypothesis-orders/results.json", "2026-11-23", "hypothesisworks/hypothesis"],
+    ["/github/demo/hypothesis-orders/run_demo.py", "2026-11-23", "hypothesisworks/hypothesis"],
+    ["/github/demo/hypothesis-orders/index.html", "2026-11-23", "hypothesisworks/hypothesis"],
+    ["/github/demo/hypothesis-orders", "2026-11-23", "hypothesisworks/hypothesis"],
+  ];
+  for (const args of rejectedHypothesisCases) {
     expect(selectionFromGithubPath(...args)).toEqual({ ok: false });
   }
   expect(selectionFromGithubPath("/github/media/demo.png")).toEqual({ ok: false });

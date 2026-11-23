@@ -84,6 +84,12 @@ test("combined guards allow canonical GitHub routes and redirects while blocking
   assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/demo/sqlglot-query-lab/results.json", { initiator: frame }), true);
   assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/demo/sqlglot-query-lab/run_demo.py", { initiator: frame }), true);
   assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/demo/sqlglot-query-lab/index.html", { initiator: frame }), true);
+  assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/demo/hypothesis-orders/", { initiator: frame }), false);
+  assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/demo/hypothesis-orders-lab/", { initiator: frame }), true);
+  assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/demo/hypothesis-orders/hypothesis-orders-lab-source.zip", { initiator: frame }), true);
+  assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/demo/hypothesis-orders/results.json", { initiator: frame }), true);
+  assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/demo/hypothesis-orders/run_demo.py", { initiator: frame }), true);
+  assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/demo/hypothesis-orders/index.html", { initiator: frame }), true);
   assert.equal(emit("will-frame-navigate", "https://other.example/", { initiator: frame }), true);
   assert.equal(emit("will-redirect", "https://other.example/", { initiator: null }), true);
   assert.deepEqual(getFallbacks(), [0, 0]);
@@ -211,5 +217,50 @@ test("allows only the exact SQLGlot demo document route while rejecting lookalik
     "https://mxhan.com/github/demo/sqlglot-query-lab/sqlglot-query-lab-source.zip",
     "https://mxhan.com/github/demo/sqlglot-query-lab/results.json",
     "https://mxhan.com/github/demo/sqlglot-query-lab/preview.png",
+  ]) assert.equal(githubMediaUrlAllowed(url), false, url);
+});
+
+test("allows only the exact Hypothesis demo document route while rejecting superseded/lookalike/ZIP/subfile/media/query/dot/encoded/other-origin URLs", () => {
+  for (const url of [
+    "https://mxhan.com/github/demo/hypothesis-orders/",
+    "https://mxhan.com/github/demo/hypothesis-orders/#weak-property",
+  ]) assert.equal(githubActivityPageAllowed(url), true, url);
+
+  for (const url of [
+    "https://mxhan.com/github/demo/hypothesis-orders",
+    "https://mxhan.com/github/demo/hypothesis-orders-lab/",
+    "https://mxhan.com/github/demo/hypothesis-orders-lab",
+    "https://mxhan.com/github/demo/hypothesis-orders-2/",
+    "https://mxhan.com/github/demo/hypothesis-orders/extra/",
+    "https://mxhan.com/github/demo/hypothesis/",
+    "https://mxhan.com/github/demo/hypothesis-orders/index.html",
+    "https://mxhan.com/github/demo/hypothesis-orders/results.json",
+    "https://mxhan.com/github/demo/hypothesis-orders/run_demo.py",
+    "https://mxhan.com/github/demo/hypothesis-orders/requirements.lock",
+    "https://mxhan.com/github/demo/hypothesis-orders/README.md",
+    "https://mxhan.com/github/demo/hypothesis-orders/LICENSE",
+    "https://mxhan.com/github/demo/hypothesis-orders/hypothesis-orders-lab-source.zip",
+    "https://mxhan.com/github/demo/hypothesis-orders.zip",
+    "https://mxhan.com/github/demo/hypothesis-orders/demo.js",
+    "https://mxhan.com/github/demo/hypothesis-orders/app.mjs",
+    "https://mxhan.com/github/demo/hypothesis-orders/preview.png",
+    "https://mxhan.com/github/demo/hypothesis-orders/?q=1",
+    "https://mxhan.com/github/demo/hypothesis-orders/../sqlglot-query-lab/",
+    "https://mxhan.com/github/demo/./hypothesis-orders/",
+    "https://mxhan.com/github/demo/hypothesis%2dorders/",
+    "https://mxhan.com/github/demo/%2e%2e/hypothesis-orders/",
+    "https://other.example/github/demo/hypothesis-orders/",
+    "http://mxhan.com/github/demo/hypothesis-orders/",
+    "https://www.mxhan.com/github/demo/hypothesis-orders/",
+    "https://mxhan.com:443/github/demo/hypothesis-orders/",
+    "https://user:pass@mxhan.com/github/demo/hypothesis-orders/",
+  ]) assert.equal(githubActivityPageAllowed(url), false, url);
+
+  for (const url of [
+    "https://mxhan.com/github/demo/hypothesis-orders/",
+    "https://mxhan.com/github/demo/hypothesis-orders/hypothesis-orders-lab-source.zip",
+    "https://mxhan.com/github/demo/hypothesis-orders/results.json",
+    "https://mxhan.com/github/demo/hypothesis-orders/preview.png",
+    "https://mxhan.com/github/demo/hypothesis-orders-lab/",
   ]) assert.equal(githubMediaUrlAllowed(url), false, url);
 });
