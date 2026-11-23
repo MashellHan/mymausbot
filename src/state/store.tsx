@@ -629,6 +629,7 @@ export type Action =
       type: "sendGroup";
       groupId: string;
       text: string;
+      outboxAttachments?: import("./pwa-outbox-types").OutboxImageAttachment[];
       sendId?: string;
       replyToId?: string;
       threadId?: string;
@@ -662,6 +663,7 @@ export type Action =
       type: "send";
       botId: string;
       text: string;
+      outboxAttachments?: import("./pwa-outbox-types").OutboxImageAttachment[];
       sendId?: string;
       replyToId?: string;
       threadId?: string;
@@ -2368,7 +2370,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const threadId =
             action.threadId ?? stateRef.current.bots.find((bot) => bot.id === action.botId)?.threadId;
           const sendId = action.sendId ?? randomUuid();
-          if (threadId && isRemotePwaMode() && getPwaAuth() && enqueuePwaBotSend({ sendId, threadId, targetId: action.botId, text: action.text, replyToId: action.replyToId, dataContext: action.dataContext, pointed: action.pointed, openPage: action.openPage, mode: action.mode, followUp: action.followUp, mentions: action.mentions }, () => waitForExecutionSettings(botBeforeSend ? [botBeforeSend] : [], threadId))) break;
+          if (threadId && isRemotePwaMode() && getPwaAuth() && enqueuePwaBotSend({ sendId, threadId, targetId: action.botId, text: action.text, ...(action.outboxAttachments?.length ? { rawText: action.text, attachments: action.outboxAttachments } : {}), replyToId: action.replyToId, dataContext: action.dataContext, pointed: action.pointed, openPage: action.openPage, mode: action.mode, followUp: action.followUp, mentions: action.mentions }, () => waitForExecutionSettings(botBeforeSend ? [botBeforeSend] : [], threadId))) break;
           const arrived = () => {
             const panel = stateRef.current.forkPanel;
             return sendArrived(panel?.kind === "bot" && panel.ownerId === action.botId && panel.threadId === threadId
@@ -2610,7 +2612,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const threadId =
             action.threadId ?? stateRef.current.groups.find((group) => group.id === action.groupId)?.threadId;
           const sendId = action.sendId ?? randomUuid();
-          if (threadId && isRemotePwaMode() && getPwaAuth() && enqueuePwaGroupSend({ sendId, threadId, targetId: action.groupId, text: action.text, replyToId: action.replyToId, mode: action.mode, mentions: action.mentions, pointed: action.pointed, pointedChips: action.pointedChips }, () => waitForExecutionSettings(executionBotsBeforeAction))) break;
+          if (threadId && isRemotePwaMode() && getPwaAuth() && enqueuePwaGroupSend({ sendId, threadId, targetId: action.groupId, text: action.text, ...(action.outboxAttachments?.length ? { rawText: action.text, attachments: action.outboxAttachments } : {}), replyToId: action.replyToId, mode: action.mode, mentions: action.mentions, pointed: action.pointed, pointedChips: action.pointedChips }, () => waitForExecutionSettings(executionBotsBeforeAction))) break;
           const arrived = () => {
             const panel = stateRef.current.forkPanel;
             return sendArrived(panel?.kind === "group" && panel.ownerId === action.groupId && panel.threadId === threadId

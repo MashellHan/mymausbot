@@ -8,6 +8,7 @@ import { optimisticMessageId } from "./optimistic-send";
 import type { Action, AppState, Message } from "./store";
 
 export const OUTBOX_TEXT_POST_TIMEOUT_MS = 5_000;
+export const OUTBOX_ATTACHMENT_UPLOAD_TIMEOUT_MS = 30_000;
 export const OUTBOX_LEASE_TTL_MS = 15_000;
 export const OUTBOX_AUTO_RETRY_DELAYS_MS = [1_000, 3_000, 8_000] as const;
 export const OUTBOX_MAX_AUTO_ATTEMPTS = OUTBOX_AUTO_RETRY_DELAYS_MS.length;
@@ -18,6 +19,14 @@ export type OutboxStatus = "queued" | "sending" | "failed" | "resending" | "reje
 export type OutboxTargetKind = "bot" | "group";
 export type QueuedPointedChip = PointedElement & { id: string; title: string };
 
+export interface OutboxImageAttachment {
+  uploadId: string;
+  name: string;
+  mime: string;
+  compressedBlob: Blob;
+  uploadedPath?: string;
+}
+
 export interface OutboxRecord {
   sendId: string;
   ownerKey: string;
@@ -26,6 +35,9 @@ export interface OutboxRecord {
   targetId: string;
   seq: number;
   text: string;
+  rawText?: string;
+  composedText?: string;
+  attachments?: OutboxImageAttachment[];
   replyToId?: string;
   dataContext?: DataContext;
   pointed?: PointedElement[];
@@ -77,6 +89,8 @@ export interface EnqueueOutboxInput {
   targetKind: OutboxTargetKind;
   targetId: string;
   text: string;
+  rawText?: string;
+  attachments?: OutboxImageAttachment[];
   replyToId?: string;
   dataContext?: DataContext;
   pointed?: PointedElement[];
@@ -221,7 +235,7 @@ export function outboxRecordToOptimisticMessage(record: OutboxRecord, parentId: 
     id: optimisticMessageId(record.sendId),
     role: "user",
     kind: "text",
-    text: record.text,
+    text: record.composedText ?? record.text,
     at: record.createdAt,
     parentId,
     replyToId: record.replyToId,

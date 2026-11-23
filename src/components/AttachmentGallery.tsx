@@ -3,17 +3,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { ChevronDown, ChevronUp, Download, Film, LoaderCircle, Music, Play, X } from "lucide-react";
-import { attachmentBasename, PREVIEW_MAX_BYTES, type TranscriptFileAttachment, type TranscriptImageAttachment } from "@/lib/composer-attachments";
+import { attachmentBasename, PREVIEW_MAX_BYTES, splitTranscriptAttachments, type TranscriptAttachments, type TranscriptFileAttachment, type TranscriptImageAttachment } from "@/lib/composer-attachments";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import { downloadRemoteUrl, isRelayMediaPath, isRemotePwaMode } from "@/lib/pwa-config";
 import { useRemoteMediaUrl } from "@/lib/use-remote-media";
+import { useOutboxRecord } from "@/state/pwa-outbox";
+import { mergeOutboxUserAttachments } from "@/state/pwa-outbox-attachments";
 import { windowsPathDestinations } from "../../shared/markdown-windows-paths";
 import { localFilePath } from "./ChatMarkdown";
 import {
   AttachedFileChip,
   AttachmentPreviewDialog,
   AttachmentThumbnail,
+  canonicalDownloadFilename,
   previewImage,
   requestMessageFile,
   safeDownloadFilename,
@@ -458,6 +461,19 @@ type GalleryItem = { key: string; source?: string } & (
 
 const BENEATH_LIMIT = 6;
 
+export function useUserMessageAttachments(
+  text: string | undefined,
+  sendId: string | undefined,
+  active: boolean,
+): TranscriptAttachments | null {
+  const outboxRecord = useOutboxRecord(active ? sendId : undefined);
+  return useMemo(() => {
+    if (!active) return null;
+    const base = splitTranscriptAttachments(text ?? "");
+    return mergeOutboxUserAttachments(base, outboxRecord);
+  }, [active, text, outboxRecord]);
+}
+
 export function AttachmentGallery({ images = [], files = [], originals, message, eager = false, beneath = false, className }: {
   images?: Array<string | TranscriptImageAttachment>;
   files?: GalleryFile[];
@@ -477,9 +493,16 @@ export function AttachmentGallery({ images = [], files = [], originals, message,
       const key = fileIdentity(path);
       if (seen.has(key)) continue;
       seen.add(key);
-      const image = typeof reference === "string" || reference.private
-        ? previewImage(path, typeof reference === "string" ? undefined : reference.name)
-        : null;
+      const image = typeof reference !== "string" && reference.previewUrl?.startsWith("blob:")
+        ? {
+            src: reference.previewUrl,
+            name: reference.name,
+            downloadUrl: reference.previewUrl,
+            downloadName: canonicalDownloadFilename({ fallback: reference.name, source: path }),
+          }
+        : typeof reference === "string" || reference.private
+          ? previewImage(path, typeof reference === "string" ? undefined : reference.name)
+          : null;
       const source = originalOf(originals, path);
       if (image) result.push({ key, source, kind: "image", image });
       else result.push({ key, source, kind: "file", file: typeof reference === "string" ? { path, name: attachmentBasename(path) } : reference });
