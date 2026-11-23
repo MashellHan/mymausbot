@@ -558,7 +558,7 @@ describe("PWA bridge unit, config, and route enforcement", () => {
 
     const dir2 = mkdtempSync(join(tmpdir(), "pwa-bridge-connecting-"));
     dirs.push(dir2);
-    const bridge2 = startPwaBridge({ dataDir: dir2 })!;
+    const bridge2 = startPwaBridge({ dataDir: dir2, handle: () => {} })!;
     bridge2.applyConfig({
       enabled: true,
       relayUrl: `http://127.0.0.1:${stalledPort}`,
