@@ -354,8 +354,9 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         support.transformEnv?.(env, activeConfig, instanceId, input.environment);
         return env;
       };
+      const source = createHash("sha256").update(JSON.stringify([DRIVER_KIND, config.cli])).digest("hex");
       const catalog = acpModelCatalog({
-        instanceId,
+        instanceId, source,
         fixed: support.models,
         startFromSaved: Boolean(support.resolveModels) && support.resolveModelsOnCreate === false,
         resolve: support.resolveModels && ((fresh) => { const env = childEnv(); return support.resolveModels!(env, config, instanceId, fresh, instanceEnvNames(input.environment, env)); }),
@@ -365,7 +366,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
       let startupModelRefresh: Promise<void> | null = null;
       if (support.resolveModels && support.resolveModelsOnCreate !== false) {
         startupModelRefresh = (await openStartupModelCatalog({
-          instanceId,
+          instanceId, source,
           use: (saved) => { catalog.models = saved; },
           current: () => catalog.models,
           refresh: refreshModels,

@@ -1,6 +1,8 @@
 import type { ModelListProblem } from "../../../shared/model-selection.ts";
 import type { ModelCatalog } from "../../contracts.ts";
-import { readStartupModelCacheEntry, unconfirmedModelCatalog, writeStartupModelCache } from "../../startup-model-catalog.ts";
+import {
+  readStartupModelCacheEntry, setStartupModelCacheSource, startupModelCacheSource, unconfirmedModelCatalog, writeStartupModelCache,
+} from "../../startup-model-catalog.ts";
 import { interruptedVariantReads } from "./custom-model-catalog.ts";
 
 export interface AcpModelCatalog {
@@ -18,18 +20,20 @@ export interface AcpModelCatalog {
 
 export function acpModelCatalog(input: {
   instanceId: string;
+  source: string;
   fixed: ModelCatalog;
   startFromSaved: boolean;
   resolve?: (fresh: boolean) => ModelCatalog | Promise<ModelCatalog>;
   /** Names why a read failed; without it a failure is "failed". */
   explain?: (error: unknown) => ModelListProblem;
 }): AcpModelCatalog {
-  const { instanceId, resolve } = input;
-  const saved = resolve ? readStartupModelCacheEntry(instanceId) : null;
+  const { instanceId, source, resolve } = input;
+  const saved = resolve ? readStartupModelCacheEntry(instanceId, source) : null;
   let models = input.startFromSaved ? saved?.catalog ?? input.fixed : input.fixed;
   // A previous run's checkedAt only lets the file stand in. This process confirms the ids when its own read returns them.
   let readFromEngine = false;
-  let accountModels: ReadonlySet<string> | null = saved?.checkedAt ? idsOf(saved.catalog) : null;
+  let accountModels: ReadonlySet<string> | null = saved?.checkedAt && startupModelCacheSource(saved.catalog) === source
+    ? idsOf(saved.catalog) : null;
   let current: { fresh: boolean; done: Promise<void> } | null = null;
   let problem: ModelListProblem | undefined;
 
@@ -39,7 +43,9 @@ export function acpModelCatalog(input: {
       const resolved = await resolve(fresh);
       if (resolved.options.length) {
         const interrupted = interruptedVariantReads(resolved);
-        models = interrupted ? withEarlierVariants(resolved, models, interrupted) : resolved;
+        models = interrupted && startupModelCacheSource(models) === source
+          ? withEarlierVariants(resolved, models, interrupted) : { ...resolved };
+        setStartupModelCacheSource(models, source);
         if (interrupted) unconfirmedModelCatalog(models);
         readFromEngine = true;
         accountModels = idsOf(resolved);

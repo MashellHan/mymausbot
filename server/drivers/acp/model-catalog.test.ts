@@ -3,11 +3,12 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import type { ModelCatalog } from "../../contracts.ts";
-import { readStartupModelCacheEntry } from "../../startup-model-catalog.ts";
+import { readStartupModelCacheEntry, startupModelCacheSource, writeStartupModelCache } from "../../startup-model-catalog.ts";
 import { acpDiscoveryProblem, AcpDiscoveryTimeoutError, discoverAcpModels } from "./custom-model-catalog.ts";
 import { acpModelCatalog } from "./model-catalog.ts";
 
 const FAKE_ACP_CLI = join(dirname(fileURLToPath(import.meta.url)), "../../testing/fake-acp-cli.ts");
+const SOURCE = "a".repeat(64);
 const MODELS = Array.from({ length: 5 }, (_, index) => `fixture-model-${index}`);
 const FIXED: ModelCatalog = { default: "agent-default", options: [{ id: "agent-default", label: "Default" }] };
 const efforts = (value: string) => ({ currentValue: value, options: [{ value, name: value }] });
@@ -25,10 +26,11 @@ describe("ACP model catalog reads", () => {
   it("keeps an earlier read's efforts for the models a cut-short read did not reach, and reads again at the next start", async () => {
     const instanceId = `catalog-cut-${Math.random().toString(36).slice(2)}`;
     let next = () => read("high");
-    const catalog = acpModelCatalog({ instanceId, fixed: FIXED, startFromSaved: true, resolve: () => next() });
-    await catalog.refresh(true);
+    const open = () => acpModelCatalog({ instanceId, source: SOURCE, fixed: FIXED, startFromSaved: true, resolve: () => next() });
+    await open().refresh(true);
     expect(readStartupModelCacheEntry(instanceId)?.checkedAt).toBeGreaterThan(0);
 
+    const catalog = open();
     next = () => read("low", {
       FAKE_ACP_EXIT_ON_MODEL: MODELS[2],
       FAKE_ACP_VARIANTS: JSON.stringify({ [MODELS[0]]: efforts("low") }),
@@ -45,10 +47,33 @@ describe("ACP model catalog reads", () => {
     expect(readStartupModelCacheEntry(instanceId)?.checkedAt).toBe(0);
   });
 
+  it("does not bind a legacy fallback after a failed read or inherit its efforts", async () => {
+    const instanceId = "catalog-legacy-efforts";
+    const legacy = await read("first-only");
+    writeStartupModelCache(instanceId, legacy);
+    const unconfirmed = acpModelCatalog({
+      instanceId, source: SOURCE, fixed: FIXED, startFromSaved: true,
+      resolve: () => Promise.reject(new Error("No list returned")),
+    });
+    expect(unconfirmed.models).toEqual(legacy);
+    expect(unconfirmed.accountModels).toBeNull();
+    await unconfirmed.refresh(true);
+    const cached = readStartupModelCacheEntry(instanceId)!;
+    expect(cached.checkedAt).toBe(0);
+    expect(startupModelCacheSource(cached.catalog)).toBeUndefined();
+
+    const reopened = acpModelCatalog({ instanceId, source: SOURCE, fixed: FIXED, startFromSaved: true,
+      resolve: () => read("low", { FAKE_ACP_EXIT_ON_MODEL: MODELS[1] }) });
+    await reopened.refresh(true);
+    expect(reopened.models.options.map((option) => option.id)).toEqual(["agent-default", ...MODELS]);
+    expect(effortsOf(reopened.models)[MODELS[1]]).toBeUndefined();
+    expect(startupModelCacheSource(readStartupModelCacheEntry(instanceId)!.catalog)).toBe(SOURCE);
+  });
+
   it("says why a read failed while the list is unconfirmed, and forgets it once a read succeeds", async () => {
     let next: () => Promise<ModelCatalog> = () => Promise.reject(new AcpDiscoveryTimeoutError("ACP model discovery timed out."));
     const catalog = acpModelCatalog({
-      instanceId: `catalog-why-${Math.random().toString(36).slice(2)}`, fixed: FIXED, startFromSaved: false,
+      instanceId: `catalog-why-${Math.random().toString(36).slice(2)}`, source: SOURCE, fixed: FIXED, startFromSaved: false,
       resolve: () => next(), explain: (error) => {
         if (!(error instanceof AcpDiscoveryTimeoutError)) throw new Error("classifier failed");
         return acpDiscoveryProblem(error);
