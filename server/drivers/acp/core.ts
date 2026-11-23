@@ -13,7 +13,7 @@ import { createHash } from "node:crypto";
 
 import { PROVIDER_CREDENTIAL_ENV, stripControlPlaneEnv, WORKSPACE_CREDENTIAL_ENV } from "../../config.ts";
 import { openStartupModelCatalog } from "../../startup-model-catalog.ts";
-import { acpModelCatalog } from "./model-catalog.ts";
+import { acpModelCatalog, acpModelCatalogSource } from "./model-catalog.ts";
 import { acpDiscoveryProblem } from "./custom-model-catalog.ts";
 import { decodeInjectId } from "../local-inject.ts";
 import { DeviceAuthController, deviceAuthInstanceSurface, type DeviceSignIn } from "../device-auth.ts";
@@ -354,7 +354,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         support.transformEnv?.(env, activeConfig, instanceId, input.environment);
         return env;
       };
-      const source = createHash("sha256").update(JSON.stringify([DRIVER_KIND, config.cli])).digest("hex");
+      const source = acpModelCatalogSource(DRIVER_KIND, config.cli);
       const catalog = acpModelCatalog({
         instanceId, source,
         fixed: support.models,

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type { ModelListProblem } from "../../../shared/model-selection.ts";
 import type { ModelCatalog } from "../../contracts.ts";
 import {
@@ -16,6 +18,10 @@ export interface AcpModelCatalog {
   readonly unreadable: ModelListProblem | undefined;
   /** A read already under way is shared; a fresh one waits for a cached one under way, then reads again. */
   refresh(fresh?: boolean): Promise<void>;
+}
+
+export function acpModelCatalogSource(driverKind: string, cli: string): string {
+  return createHash("sha256").update(JSON.stringify([driverKind, cli])).digest("hex");
 }
 
 export function acpModelCatalog(input: {
