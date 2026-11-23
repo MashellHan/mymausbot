@@ -8,6 +8,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
 
 import { launchVerificationServer, type VerificationServer } from "../scripts/control-omb.ts";
+import { startBridge } from "../pwa-relay/src/bridge.ts";
+import { loadConfig as loadRelayConfig } from "../pwa-relay/src/config.ts";
 import type { PwaPairingPayload } from "../shared/pwa-bridge.ts";
 import { json, readBody } from "./harness/http.ts";
 import { PWA_BRIDGE_SUBPROTOCOL, isPwaBridgeRequest, pwaBridgePairingRefusal, startPwaBridge } from "./pwa-bridge.ts";
@@ -105,8 +107,9 @@ class MockBridgeRelay {
     path: string;
     headers?: Record<string, string | string[]>;
     body?: string | Buffer;
+    bodyFrames?: Array<{ chunkB64: string; eof: boolean }>;
     remoteAddr?: string;
-    sendEmptyEof?: boolean;
+    omitEof?: boolean;
   }): Promise<{ status: number; headers: Record<string, string | string[]>; bodyText: string; json: any }> {
     const stream = this.openStream(input);
     const head = await stream.head;
@@ -126,8 +129,9 @@ class MockBridgeRelay {
     path: string;
     headers?: Record<string, string | string[]>;
     body?: string | Buffer;
+    bodyFrames?: Array<{ chunkB64: string; eof: boolean }>;
     remoteAddr?: string;
-    sendEmptyEof?: boolean;
+    omitEof?: boolean;
   }): {
     streamId: string;
     head: Promise<{ status: number; headers: Record<string, string | string[]> }>;
@@ -166,7 +170,16 @@ class MockBridgeRelay {
       remoteAddr: input.remoteAddr ?? "203.0.113.42",
     }));
 
-    if (input.body !== undefined) {
+    if (input.bodyFrames) {
+      for (const frame of input.bodyFrames) {
+        this.ws.send(JSON.stringify({
+          type: "req.body",
+          streamId,
+          chunkB64: frame.chunkB64,
+          eof: frame.eof,
+        }));
+      }
+    } else if (input.body !== undefined) {
       const buf = typeof input.body === "string" ? Buffer.from(input.body, "utf8") : input.body;
       this.ws.send(JSON.stringify({
         type: "req.body",
@@ -174,7 +187,7 @@ class MockBridgeRelay {
         chunkB64: buf.toString("base64"),
         eof: true,
       }));
-    } else if (input.sendEmptyEof) {
+    } else if (!input.omitEof) {
       this.ws.send(JSON.stringify({
         type: "req.body",
         streamId,
@@ -573,6 +586,143 @@ describe("PWA bridge unit, config, and route enforcement", () => {
     for (const sock of stalledSockets) sock.destroy();
     await new Promise<void>((r) => stalledTcp.close(() => r()));
   });
+
+  it("completes framing before origin dispatch and interoperates end-to-end with the Stage 1 relay", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pwa-bridge-framing-"));
+    dirs.push(dir);
+    const mockRelay = await MockBridgeRelay.start();
+    relays.push(mockRelay);
+
+    let mutationCount = 0;
+    const seenPosts: unknown[] = [];
+    const bridge = startPwaBridge({
+      dataDir: dir,
+      handle: async (req, res) => {
+        const url = new URL(req.url ?? "/", "http://pwa-bridge.invalid");
+        if (req.method === "POST" && url.pathname === "/api/bots/bot-acct/messages") {
+          mutationCount += 1;
+          const body = await readBody(req);
+          seenPosts.push(body);
+          json(res, 201, { ok: true, count: mutationCount });
+          return;
+        }
+        if (req.method === "GET" && url.pathname === "/api/bots") {
+          json(res, 200, { bots: [{ id: "bot-acct" }] });
+          return;
+        }
+        if (req.method === "GET" && url.pathname === "/api/events") {
+          res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
+          res.write("event: ready\ndata: {\"ok\":true}\n\n");
+          res.end();
+          return;
+        }
+        json(res, 404, { error: "not found" });
+      },
+    })!;
+    bridges.push(bridge);
+
+    const secret = "omb_bridge_stage1_interop_secret_123456";
+    bridge.applyConfig({
+      enabled: true,
+      relayUrl: mockRelay.url,
+      hostId: "mac-mini",
+      bridgeSecret: secret,
+      pwaOrigin: "https://mausbot.mxhan.com",
+      defaultBotId: null,
+    });
+    await mockRelay.waitForHost();
+
+    // Full Content-Length body in frame 1 followed by malformed terminal frame must fail 400 BEFORE handler runs.
+    const payload = JSON.stringify({ text: "should not mutate" });
+    const badTerminal = await mockRelay.request({
+      method: "POST",
+      path: "/api/bots/bot-acct/messages",
+      headers: {
+        "content-type": "application/json",
+        "content-length": String(Buffer.byteLength(payload)),
+      },
+      bodyFrames: [
+        { chunkB64: Buffer.from(payload, "utf8").toString("base64"), eof: false },
+        { chunkB64: "!", eof: true },
+      ],
+    });
+    expect(badTerminal.status).toBe(400);
+    expect(mutationCount).toBe(0);
+
+    // Body on GET must be rejected 400 before origin handler runs.
+    const badGetBody = await mockRelay.request({
+      method: "GET",
+      path: "/api/bots",
+      bodyFrames: [{ chunkB64: Buffer.from("x", "utf8").toString("base64"), eof: true }],
+    });
+    expect(badGetBody.status).toBe(400);
+
+    // Valid Stage 1 pattern (data frame + separate empty EOF frame) dispatches cleanly once.
+    const goodSplit = await mockRelay.request({
+      method: "POST",
+      path: "/api/bots/bot-acct/messages",
+      headers: {
+        "content-type": "application/json",
+        "content-length": String(Buffer.byteLength(payload)),
+      },
+      bodyFrames: [
+        { chunkB64: Buffer.from(payload, "utf8").toString("base64"), eof: false },
+        { chunkB64: "", eof: true },
+      ],
+    });
+    expect(goodSplit.status).toBe(201);
+    expect(mutationCount).toBe(1);
+    expect(seenPosts).toEqual([{ text: "should not mutate" }]);
+
+    // Now wire the actual Stage 1 relay (pwa-relay/src/bridge.ts) to Stage 2 bridge and verify bodyless GET, SSE, and POST.
+    const realRelay = await startBridge(
+      loadRelayConfig({
+        BRIDGE_PORT: "0",
+        BRIDGE_HOST: "127.0.0.1",
+        PINNED_HOST_ID: "mac-mini",
+        HOST_TOKEN_HASHES: createHash("sha256").update(secret, "utf8").digest("hex"),
+        PWA_ORIGIN: "https://mausbot.mxhan.com",
+      }),
+      { log: () => {} },
+    );
+    try {
+      bridge.applyConfig({
+        enabled: true,
+        relayUrl: `http://127.0.0.1:${realRelay.port}`,
+        hostId: "mac-mini",
+        bridgeSecret: secret,
+        pwaOrigin: "https://mausbot.mxhan.com",
+        defaultBotId: null,
+      });
+
+      const deadline = Date.now() + 5_000;
+      while (!realRelay.hostConnected()) {
+        if (Date.now() > deadline) throw new Error("timed out waiting for real Stage 1 relay connection");
+        await new Promise((r) => setTimeout(r, 20));
+      }
+
+      const relayBase = `http://127.0.0.1:${realRelay.port}`;
+      const botsRes = await fetch(`${relayBase}/api/bots`);
+      expect(botsRes.status).toBe(200);
+      expect(await botsRes.json()).toEqual({ bots: [{ id: "bot-acct" }] });
+
+      const sseRes = await fetch(`${relayBase}/api/events?ticket=t1`);
+      expect(sseRes.status).toBe(200);
+      expect(await sseRes.text()).toContain("event: ready");
+
+      const postRes = await fetch(`${relayBase}/api/bots/bot-acct/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text: "via real relay" }),
+      });
+      expect(postRes.status).toBe(201);
+      expect(mutationCount).toBe(2);
+      expect(seenPosts[1]).toEqual({ text: "via real relay" });
+    } finally {
+      bridge.stop();
+      await realRelay.close();
+    }
+  });
 });
 
 describe("PWA bridge real handleRequest integration", () => {
@@ -772,7 +922,6 @@ describe("PWA bridge real handleRequest integration", () => {
       method: "POST",
       path: "/api/auth/stream-ticket",
       headers: { authorization: `Bearer ${token}` },
-      sendEmptyEof: true,
     });
     expect(ticketRes.status).toBe(200);
     const ticket = String(ticketRes.json.ticket);
@@ -802,7 +951,6 @@ describe("PWA bridge real handleRequest integration", () => {
       method: "POST",
       path: "/api/auth/logout",
       headers: { authorization: `Bearer ${token}` },
-      sendEmptyEof: true,
     });
     expect(logout.status).toBe(200);
 
