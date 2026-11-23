@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 
 import type { LocalAgentMember, LocalAgentState, LocalAgentTeamsResponse, LocalAgentTeam } from "../shared/local-dashboard.ts";
 import { augmentedPath } from "./env-path.ts";
-import { openCodeSessionId, readOpenCodeMemberUsage } from "./local-agent-opencode-usage.ts";
+import { openCodeSessionId, openCodeUsageDatabase, readOpenCodeMemberUsage } from "./local-agent-opencode-usage.ts";
 import { codexSessionId, createLocalAgentSessionReader, dashboardText, unavailableMemberUsage } from "./local-agent-session.ts";
 import { PI_CONTEXT_KEY, parsePiContext, readPiProcessStart, type PiProcessStart } from "./local-agent-pi-context.ts";
 import { createPiSessionReader, type PiSessionView } from "./local-agent-pi-message.ts";
@@ -116,7 +116,7 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         const id = openCodeSessionId(agent);
         return id ? [[agent.pane_id, id] as const] : [];
       }));
-      const openCodeUsage = readOpenCodeMemberUsage(join(home, ".local", "share", "opencode", "opencode.db"), openCodeSessions.values(), sampledAt);
+      const openCodeUsage = readOpenCodeMemberUsage(openCodeUsageDatabase(home), openCodeSessions.values(), sampledAt);
       const [observations, roles, piSessions] = await Promise.all([
         observationsFor(agents), localAgentRoles(verified, home), piSessionsFor(verified),
       ]);

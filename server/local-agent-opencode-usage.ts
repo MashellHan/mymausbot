@@ -1,4 +1,5 @@
 import { lstatSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import type { LocalAgentMemberTokenUsageWindow } from "../shared/local-dashboard.ts";
@@ -33,6 +34,13 @@ export function openCodeSessionId(agent: Record<string, unknown>): string | null
     && session.source === "herdr:opencode" && typeof id === "string" && SESSION_ID.test(id) ? id : null;
 }
 
+export function openCodeUsageDatabase(home: string, env: NodeJS.ProcessEnv = process.env): string | null {
+  const { XDG_DATA_HOME: dataHome, OPENCODE_DB: database } = env;
+  if (database === ":memory:") return null;
+  const root = join(dataHome && isAbsolute(dataHome) ? dataHome : join(home, ".local", "share"), "opencode");
+  return database && isAbsolute(database) ? database : join(root, database || "opencode.db");
+}
+
 function sample(row: Record<string, unknown>, now: number): Sample | null {
   const { startedAt, completed, input, output, reasoning, cacheRead, cacheWrite, provider, model } = row;
   if (!whole(startedAt) || !whole(completed) || completed < startedAt || completed <= now - 7 * DAY_MS || completed > now ||
@@ -59,17 +67,17 @@ function usage(samples: Sample[], cutoff: number, verifiedSince: number,
   };
 }
 
-export function readOpenCodeMemberUsage(file: string, ids: Iterable<string>, now: number): Map<string, MemberUsage> {
+export function readOpenCodeMemberUsage(file: string | null, ids: Iterable<string>, now: number): Map<string, MemberUsage> {
   const sessions = [...new Set(ids)].filter((id) => SESSION_ID.test(id));
   const result = new Map<string, MemberUsage>();
-  if (!sessions.length) return result;
+  if (!file || !sessions.length) return result;
   let database: DatabaseSync | undefined;
   try {
     if (!lstatSync(file).isFile()) return result;
-    database = new DatabaseSync(file, { readOnly: true });
-    // OpenCode 2 stores completed assistant usage in session_message. Cache writes
-    // count toward tokens, with their cost left outside the standard price estimate.
-    const messages = database.prepare(`SELECT
+    const db = new DatabaseSync(file, { readOnly: true });
+    database = db;
+    const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('session_message', 'message')").all().map(({ name }) => name));
+    const prepare = (table: "session_message" | "message") => db.prepare(`SELECT
       time_created AS startedAt,
       json_extract(data, '$.time.completed') AS completed,
       json_extract(data, '$.tokens.input') AS input,
@@ -77,14 +85,22 @@ export function readOpenCodeMemberUsage(file: string, ids: Iterable<string>, now
       json_extract(data, '$.tokens.reasoning') AS reasoning,
       json_extract(data, '$.tokens.cache.read') AS cacheRead,
       json_extract(data, '$.tokens.cache.write') AS cacheWrite,
-      json_extract(data, '$.model.providerID') AS provider,
-      json_extract(data, '$.model.id') AS model
-      FROM session_message
-      WHERE session_id = ? AND type = 'assistant' AND json_valid(data)
+      json_extract(data, '${table === "session_message" ? "$.model.providerID" : "$.providerID"}') AS provider,
+      json_extract(data, '${table === "session_message" ? "$.model.id" : "$.modelID"}') AS model
+      FROM ${table}
+      WHERE session_id = ? AND time_created BETWEEN ? AND ?
+        AND length(CAST(data AS BLOB)) <= 1048576
+        AND CASE WHEN json_valid(data) THEN ${table === "session_message" ? "type" : "json_extract(data, '$.role')"} = 'assistant' ELSE 0 END
       ORDER BY time_created DESC LIMIT 10000`);
+    const current = tables.has("session_message") ? prepare("session_message") : null;
+    const legacy = tables.has("message") ? prepare("message") : null;
+    // OpenCode 1.19 can have both stores. Use one store per session to avoid counting migrated messages twice.
+    const hasCurrent = current && legacy ? db.prepare("SELECT 1 FROM session_message WHERE session_id = ? LIMIT 1") : null;
     const project = createLocalTokenProjector(new Date(now));
     for (const id of sessions) {
-      const observed = messages.all(id).flatMap((row) => {
+      const messages = hasCurrent && !hasCurrent.get(id) ? legacy : current ?? legacy;
+      if (!messages) continue;
+      const observed = messages.all(id, now - 7 * DAY_MS, now).flatMap((row) => {
         const parsed = sample(row, now);
         return parsed ? [parsed] : [];
       });
