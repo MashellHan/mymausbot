@@ -252,11 +252,16 @@ export class BrowserService {
     try {
       this.#stillWanted(profile, epoch);
       // A Chrome that dies before any tab runs says so at once, not when the wait ends.
-      const firstTab = browser.waitForPage(() => true, FIRST_TAB_MS);
+      const firstTabWait = new AbortController();
+      const firstTab = browser.waitForPage(() => true, FIRST_TAB_MS, firstTabWait.signal);
       const died = opened.exited.then(() => { throw new Error("Chrome closed before its first tab opened."); });
       firstTab.catch(() => undefined);
       died.catch(() => undefined);
-      await Promise.race([firstTab, died]);
+      try {
+        await Promise.race([firstTab, died]);
+      } finally {
+        firstTabWait.abort();
+      }
       for (const page of browser.pages()) await page.ready.then(() => adopt(page, "restored"), () => undefined);
       if (fresh) await this.#onlyBlankTab(profile, browser);
       this.#stillWanted(profile, epoch);
