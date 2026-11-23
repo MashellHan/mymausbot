@@ -7,7 +7,7 @@ import { removeTempDir } from "../testing/cleanup.ts";
 import { forbiddenCommand } from "./cdp/testing/real-chrome.ts";
 import { BROWSER_CONTROL_REFUSAL } from "./control.ts";
 import { REDDIT_REFUSAL } from "./egress/reddit.ts";
-import { BrowserService, type BrowserServiceOptions } from "./service.ts";
+import { BROWSER_STARTING, BrowserService, type BrowserServiceOptions } from "./service.ts";
 import type { Backend } from "./backends.ts";
 import { FakeBackend, FakeChrome, type FakeDocument, type FakePage } from "./testing/fake-chrome.ts";
 import { TOOL_LIST } from "./tools.ts";
@@ -471,6 +471,105 @@ describe("browsers on one computer", () => {
       expect(result).not.toBeNull();
       expect(text(result!)).not.toContain("No matching tab opened");
       expect(text(result!)).toContain("Opened https://example.com/form in t1.");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never tears down a start that outlasts a call's budget: the bot hears it is still starting, and its next call takes that browser", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      let ready = false;
+      const slow = new FakeBackend(() => {
+        const chrome = new FakeChrome({ documents });
+        // The first tab runs 20 s in; later tabs at once.
+        chrome.delay = (method) => (method === "Page.enable" && !ready ? (ready = true, 20_000) : 0);
+        return chrome;
+      });
+      backends.push(slow);
+      const { call, text } = setup({ backend: () => slow, callBudgetMs: 30_000 });
+      const answer = async (name: string, args: Record<string, unknown>) => {
+        let result: Awaited<ReturnType<typeof call>> | null = null;
+        void call(name, args).then((value) => { result = value; });
+        for (let waited = 0; result === null && waited < 120_000; waited += 1_000) await vi.advanceTimersByTimeAsync(1_000);
+        return result!;
+      };
+      const first = await answer("agent_browser_open", { url: "https://example.com/form" });
+      // 30 s budget, 15 s kept back: the call answers at 15 s, while the first tab runs at 20 s.
+      expect(first).toMatchObject({ isError: true });
+      expect(text(first)).toBe(BROWSER_STARTING);
+      const next = await answer("agent_browser_open", { url: "https://example.com/swap" });
+      expect(next.isError).toBeUndefined();
+      expect(text(next)).toContain("Opened https://example.com/swap");
+      expect(slow.chromes, "one Chrome, never torn down and started again").toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says at once that the browser could not start when Chrome dies before its first tab runs", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let waitSignal: AbortSignal | undefined;
+      let waitPromise: Promise<unknown> | null = null;
+      let activePageListeners = 0;
+      const dying = new FakeBackend(() => {
+        const chrome = new FakeChrome({ documents });
+        let scheduled = false;
+        chrome.hang = (method) => {
+          if (method !== "Page.enable") return false;
+          if (!scheduled) {
+            scheduled = true;
+            setTimeout(() => chrome.exit("Chrome crashed"), 1_000);
+          }
+          return true;
+        };
+        return chrome;
+      });
+      backends.push(dying);
+      const tracked: Backend = {
+        kind: dying.kind,
+        get caps() { return dying.caps; },
+        open: async (request) => {
+          const opened = await dying.open(request);
+          const origOnPage = opened.browser.onPage.bind(opened.browser);
+          vi.spyOn(opened.browser, "onPage").mockImplementation((listener) => {
+            activePageListeners++;
+            const off = origOnPage(listener);
+            let removed = false;
+            return () => {
+              if (!removed) {
+                removed = true;
+                activePageListeners--;
+              }
+              return off();
+            };
+          });
+          const origWaitForPage = opened.browser.waitForPage.bind(opened.browser);
+          vi.spyOn(opened.browser, "waitForPage").mockImplementation((match, timeoutMs, signal) => {
+            waitSignal = signal;
+            const promise = origWaitForPage(match, timeoutMs, signal);
+            waitPromise = promise;
+            return promise;
+          });
+          return opened;
+        },
+      };
+      const { call, text } = setup({ backend: () => tracked });
+      let result: Awaited<ReturnType<typeof call>> | null = null;
+      void call("agent_browser_open", { url: "https://example.com/form" }).then((answer) => { result = answer; });
+      let waited = 0;
+      for (; result === null && waited < 120_000; waited += 1_000) await vi.advanceTimersByTimeAsync(1_000);
+      expect(text(result!)).toContain("The browser could not start: Chrome closed before its first tab opened.");
+      expect(waited, "not after the first-tab wait").toBeLessThanOrEqual(5_000);
+      expect(waitSignal?.aborted).toBe(true);
+      const waitOutcome = await Promise.race([
+        waitPromise!.then(() => "resolved", () => "rejected"),
+        new Promise<string>((resolve) => setImmediate(() => resolve("pending"))),
+      ]);
+      expect(waitOutcome).toBe("rejected");
+      expect(activePageListeners, "no first-tab page listener left attached").toBe(0);
+      expect(vi.getTimerCount(), "no first-tab timer left running").toBe(0);
     } finally {
       vi.useRealTimers();
     }

@@ -25,6 +25,7 @@ export interface SavedStepsDeps {
   patchMessage(threadId: string, messageId: string, patch: Partial<Message>): void;
   withholdHandoff: DispatchDeps["withholdHandoff"];
   contextChanged: DispatchDeps["contextChanged"];
+  fallbackStarted?: DispatchDeps["fallbackStarted"];
   folder?: (botId: string) => string;
   now?: () => number;
   platform?: NodeJS.Platform;
@@ -94,6 +95,7 @@ export function createSavedSteps(deps: SavedStepsDeps): SavedSteps {
     taint,
     withholdHandoff: deps.withholdHandoff,
     contextChanged: deps.contextChanged,
+    fallbackStarted: deps.fallbackStarted,
   });
 
   const markOrSave = ({ botId, threadId, request, reply, after, automated }: SettledRequest, taken: RequestJournal | null): void => {
