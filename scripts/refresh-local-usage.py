@@ -34,6 +34,7 @@ import local_usage_models
 ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"
 LOCAL_COLLECT_TIMEOUT = 120
 REPOSITORY_TIMEOUT = 15
+LEGACY_PUBLISH_RESERVE = 45
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
@@ -330,7 +331,7 @@ def _is_opencode_error(error):
     return isinstance(error, dict) and error.get("source") == "opencode"
 
 
-def collect_local(collector_path, config, device, at=None, history_days=30):
+def collect_local(collector_path, config, device, at=None, history_days=30, *, cycle_deadline=None):
     deadline = time.monotonic() + LOCAL_COLLECT_TIMEOUT
     fields = ("home", "repoRoots", "authorEmails", "workGithubOrgs", "personalGithubOwners", "m365Repos")
     request = {"collector": str(collector_path), "config": {k: config[k] for k in fields if k in config},
@@ -362,6 +363,8 @@ def collect_local(collector_path, config, device, at=None, history_days=30):
         print("usage stage=local-collect timeout lock-retained", file=sys.stderr, flush=True)
         raise RuntimeError("Local activity worker cleanup is unverified") from None
     tokens, opencode_error = [], "ReadLimit"
+    if cycle_deadline is not None:
+        deadline = min(deadline, cycle_deadline - LEGACY_PUBLISH_RESERVE)
     remaining = deadline - time.monotonic()
     if remaining > 0:
         try:
@@ -982,7 +985,8 @@ def _primary_worker():
                 raise ValueError("ADO legacy cutoff requires an offset")
             refresh(collector_path, config, azure_dir, publish=request["publish"],
                     skip_api=request["skipApi"], reuse_sources=request["reuseSources"], force_legacy=True,
-                    legacy_diagnostics=False, primary_snapshot=request.get("primary"), primary_at=primary_at)
+                    legacy_diagnostics=False, primary_snapshot=request.get("primary"), primary_at=primary_at,
+                    cycle_deadline=request["cycleDeadline"])
             return
         if stage not in ("github", "ado"):
             raise ValueError("Unknown contribution worker")
@@ -1062,6 +1066,7 @@ def refresh_primary(collector_path, config, azure_config_dir, *, publish=False, 
                                "primary": primary}
                     environment = child_environment()
                     if stage == "legacy":
+                        request["cycleDeadline"] = deadline
                         environment.update(_opencode_environment())
                     process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--worker"],
                         stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -1131,7 +1136,8 @@ def refresh_primary(collector_path, config, azure_config_dir, *, publish=False, 
 
 
 def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api=False, reuse_sources=False,
-            force_legacy=False, legacy_diagnostics=True, herdr_runner=None, primary_snapshot=None, primary_at=None):
+            force_legacy=False, legacy_diagnostics=True, herdr_runner=None, primary_snapshot=None, primary_at=None,
+            cycle_deadline=None):
     if publish:
         raise ValueError("Scheduled Usage publication requires a separately reviewed transport")
     if config.get("primaryContributionSource") == "contributions-v2" and not force_legacy:
@@ -1323,7 +1329,7 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
 
     collector.run = run
     collector.collect = lambda config, device, at=None, history_days=30: collect_local(
-        collector_path, config, device, at, history_days
+        collector_path, config, device, at, history_days, cycle_deadline=cycle_deadline
     )
     options = {"upload": publish, "skip_api": skip_api, "reuse_sources": reuse_sources}
     if "history_days" in inspect.signature(collector.refresh).parameters:
