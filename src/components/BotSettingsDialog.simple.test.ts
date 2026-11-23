@@ -138,7 +138,7 @@ const { PageHeader } = await import("./bot-panel/rows");
 const { ChatShareMenu } = await import("./ChatMoreMenu");
 const { SoulField } = await import("./SoulField");
 const { LocalComputerAutoWarning } = await import("./LocalComputerAutoWarning");
-const { ModelPicker } = await import("./ModelPicker");
+const { EffortRow, ModelPicker } = await import("./ModelPicker");
 const { ThreadModelsLine } = await import("./ThreadModelsLine");
 const { ModelSection } = await import("./bot-settings/ModelSection");
 const { RoutineList } = await import("./routines/RoutineList");
@@ -240,6 +240,7 @@ const app = (slug: string, scope: "read" | "write" | null) => ({
 });
 const engine = (extra: Partial<InstanceInfo> & { capabilities?: Record<string, unknown> } = {}) => ({
   instanceId: "claude", driverKind: "claudeAgent", snapshot: { state: "available", authenticated: true },
+  models: { default: "claude-opus-5-5", options: [] },
   capabilities: { effortLevels: ["low", "medium", "high", "max"] }, ...extra,
 });
 const memoryDoc = (text: string): MemoryDoc => ({ path: "MEMORY.md", text, hash: "h1", exists: true });
@@ -628,6 +629,132 @@ describe("the Details tab", () => {
     }
     expect(rendered.html).not.toContain(">Settings<");
     expect(switches(rendered.html)).toBe(0);
+  });
+
+  describe("the Model and Reasoning rows", () => {
+    const opus = { instanceId: "claude", model: "claude-opus-5-5" };
+    const thread = (modelSelection?: Bot["modelSelection"]) => makeBot({
+      modelSelection: { ...opus, effort: "low" },
+      tasks: [{ threadId: "thread-scout", title: "Main", createdAt: 1, ...(modelSelection ? { modelSelection, followsBotModel: false } : {}) }],
+    });
+    const pickEffort = (bot: Bot, level: string) => {
+      const row = ofType(botTab(bot), EffortRow)!;
+      const select = capture(() => EffortRow(row.props as Parameters<typeof EffortRow>[0])).nodes
+        .find((node) => node.props["aria-label"] === "Reasoning effort")!;
+      change(select, level);
+      return (fixture.dispatch as ReturnType<typeof vi.fn>).mock.lastCall![0] as Record<string, unknown>;
+    };
+    const pickHigh = (bot: Bot) => pickEffort(bot, "high");
+    beforeEach(() => {
+      fixture.storeState = { ...fixture.storeState, instances: [engine()] };
+    });
+
+    it("shows the open conversation's model, not the bot's default", () => {
+      const own = { instanceId: "claude", model: "claude-haiku-4-5", effort: "max" as const };
+      const rendered = botTab(thread(own));
+      const picker = ofType(rendered, ModelPicker)!;
+      expect((picker.props.bot as Bot).modelSelection).toEqual(own);
+      expect(picker.key).toMatch(/thread-scout$/);
+      const row = ofType(rendered, EffortRow)!;
+      expect(capture(() => EffortRow(row.props as Parameters<typeof EffortRow>[0])).html).toMatch(/<option value="max" selected="">/);
+    });
+
+    it("sets an owner's reasoning level on the open conversation and as the bot's default, including per-model Raven options", () => {
+      fixture.ownerOrAdmin = true;
+      expect(pickHigh(thread())).toEqual({
+        type: "setModel", botId: "scout", threadId: "thread-scout", updateBotDefault: true, selection: { ...opus, effort: "high" },
+      });
+      const haiku = { instanceId: "claude", model: "claude-haiku-4-5" };
+      expect(pickHigh(thread({ ...haiku, effort: "low" }))).toEqual({
+        type: "setModel", botId: "scout", threadId: "thread-scout", updateBotDefault: true, selection: { ...haiku, effort: "high" },
+      });
+
+      const raven = { instanceId: "codex", model: "raven::gpt-6.2-sol" };
+      const route = { id: "local:raven", connectionGroup: "loopback:0123456789abcdef", label: "Raven (Local)", provenance: "local" as const };
+      fixture.storeState = {
+        ...fixture.storeState,
+        instances: [
+          engine(),
+          engine({
+            instanceId: "codex", driverKind: "codex",
+            capabilities: { effortLevels: ["low", "medium", "high"] },
+            models: { default: "gpt-5.6", options: [{ id: raven.model, label: "GPT 6.2 Sol", custom: true, providerRoute: route, effortLevels: ["high", "xhigh"] }] },
+          }),
+        ],
+      };
+      const row = ofType(botTab(thread({ ...raven, effort: "xhigh" })), EffortRow)!;
+      const html = capture(() => EffortRow(row.props as Parameters<typeof EffortRow>[0])).html;
+      expect(html).toContain('<option value="xhigh" selected="">');
+      expect(html).not.toContain('value="low"');
+      expect(pickEffort(thread({ ...raven, effort: "xhigh" }), "high")).toEqual({
+        type: "setModel", botId: "scout", threadId: "thread-scout", updateBotDefault: true, selection: { ...raven, effort: "high" },
+      });
+    });
+
+    it("keeps an owner's pick in a conversation on another engine to that conversation when the bot's approval level would first drop to Ask", () => {
+      fixture.ownerOrAdmin = true;
+      fixture.storeState = { ...fixture.storeState, instances: [engine(), engine({ instanceId: "codex", driverKind: "codex" })] };
+      const codex = { instanceId: "codex", model: "gpt-5.6" };
+      const onCodex = (approvalMode: Bot["approvalMode"]) => ({ ...thread({ ...codex, effort: "low" }), approvalMode });
+      expect(pickHigh(onCodex("edits"))).toEqual({ type: "setModel", botId: "scout", threadId: "thread-scout", selection: { ...codex, effort: "high" } });
+      expect(pickHigh(onCodex("full"))).toEqual({
+        type: "setModel", botId: "scout", threadId: "thread-scout", updateBotDefault: true, selection: { ...codex, effort: "high" },
+      });
+    });
+
+    it("forwards updateBotDefault through EffortRow to ModelVariantRow only for safe owner updates", async () => {
+      const { ModelVariantRow: RealModelVariantRow } = await import("./ModelReasoningControls");
+      const variants = [{ id: "low", label: "Low" }, { id: "high", label: "High" }];
+      const acp = { instanceId: "opencode", model: "raven/gemini-4-hydrogen" };
+      fixture.storeState = {
+        ...fixture.storeState,
+        instances: [
+          engine(),
+          engine({
+            instanceId: "opencode", driverKind: "opencodeGo",
+            capabilities: { modelVariants: true },
+            models: { default: acp.model, options: [{ id: acp.model, label: "Gemini 4 Hydrogen", variants }] },
+          }),
+        ],
+      };
+      const pickVariant = (bot: Bot) => {
+        const row = ofType(botTab(bot), EffortRow)!;
+        const variantNode = capture(() => EffortRow(row.props as Parameters<typeof EffortRow>[0])).nodes[0]!;
+        const select = capture(() => RealModelVariantRow(variantNode.props as Parameters<typeof RealModelVariantRow>[0])).nodes
+          .find((node) => node.props["aria-label"] === "Reasoning variant")!;
+        change(select, "1");
+        return {
+          updateBotDefault: variantNode.props.updateBotDefault,
+          action: (fixture.dispatch as ReturnType<typeof vi.fn>).mock.lastCall![0] as Record<string, unknown>,
+        };
+      };
+
+      fixture.ownerOrAdmin = false;
+      expect(pickVariant(thread({ ...acp, variant: "low" }))).toEqual({
+        updateBotDefault: false,
+        action: { type: "setModel", botId: "scout", threadId: "thread-scout", selection: { ...acp, variant: "high" } },
+      });
+
+      fixture.ownerOrAdmin = true;
+      expect(pickVariant({ ...thread({ ...acp, variant: "low" }), approvalMode: "edits" })).toEqual({
+        updateBotDefault: false,
+        action: { type: "setModel", botId: "scout", threadId: "thread-scout", selection: { ...acp, variant: "high" } },
+      });
+
+      expect(pickVariant({ ...thread({ ...acp, variant: "low" }), approvalMode: "full" })).toEqual({
+        updateBotDefault: true,
+        action: { type: "setModel", botId: "scout", threadId: "thread-scout", updateBotDefault: true, selection: { ...acp, variant: "high" } },
+      });
+    });
+
+    it.each([false, null] as const)("sets a guest's reasoning level on the open conversation only, whatever its model (owner: %s)", (ownerOrAdmin) => {
+      fixture.ownerOrAdmin = ownerOrAdmin;
+      expect(pickHigh(thread())).toEqual({ type: "setModel", botId: "scout", threadId: "thread-scout", selection: { ...opus, effort: "high" } });
+      const haiku = { instanceId: "claude", model: "claude-haiku-4-5" };
+      expect(pickHigh(thread({ ...haiku, effort: "low" }))).toEqual({
+        type: "setModel", botId: "scout", threadId: "thread-scout", selection: { ...haiku, effort: "high" },
+      });
+    });
   });
 
   it("offers Add a routine, which says what routines are, and Automations while the bot has none, and lists them once it has some", () => {

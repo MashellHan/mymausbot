@@ -53,9 +53,15 @@ it("discovers custom ACP models and preserves independent bot and thread choices
     const configPath = join(dataDir, "config.json");
     const config = JSON.parse(readFileSync(configPath, "utf8"));
     const fakeCli = fileURLToPath(new URL("./testing/fake-custom-acp-models.ts", import.meta.url));
+    const replacementCli = fileURLToPath(new URL("./testing/fake-acp-cli.ts", import.meta.url));
+    const command = (cli: string) => `${JSON.stringify(process.execPath)} --experimental-strip-types ${JSON.stringify(cli)}`;
     config.instances[engineId] = { driver: "customAcp", displayName: "Custom model fixture",
-      config: { cli: `${JSON.stringify(process.execPath)} --experimental-strip-types ${JSON.stringify(fakeCli)}` },
-      environment: { FAKE_CUSTOM_ACP_DIRECTORY: nativeDir } };
+      config: { cli: command(fakeCli) },
+      environment: {
+        FAKE_CUSTOM_ACP_DIRECTORY: nativeDir,
+        FAKE_ACP_MODELS: "replacement-model,glm-5.3-flash",
+        FAKE_ACP_EXIT_ON_MODEL: "glm-5.3-flash",
+      } };
     writeFileSync(configPath, JSON.stringify(config));
     await restart();
     const refreshed = await api("POST", `/api/instances/${engineId}/refresh-models`, {});
@@ -135,6 +141,18 @@ it("discovers custom ACP models and preserves independent bot and thread choices
     await turn(b.id, threadB, "ACP_PICKER_B_RESTART", chosen.b);
     await turn(a.id, sibling, "ACP_PICKER_SIBLING_RESTART", chosen.sibling);
     await assertSelections();
+
+    await api("PATCH", `/api/instances/${engineId}`, { cli: command(replacementCli) });
+    const replaced = await api("POST", `/api/instances/${engineId}/refresh-models`, {});
+    const replacement = replaced.instances.find((entry: any) => entry.instanceId === engineId);
+    expect(replacement.models.options.map((option: any) => option.id)).toEqual([
+      "agent-default", "replacement-model", "glm-5.3-flash",
+    ]);
+    expect(replacement.modelsUnconfirmed).toBeUndefined();
+    const sharedModel = replacement.models.options.find((option: any) => option.id === "glm-5.3-flash");
+    expect(sharedModel.provider).toBeUndefined();
+    expect(sharedModel.variants).toBeUndefined();
+    evidence.push({ replacementModels: replacement.models });
   } finally {
     const evidencePath = `${logPath}.custom-acp-models.json`;
     writeFileSync(evidencePath, JSON.stringify({ evidence, receipts: receipts() }, null, 2));
