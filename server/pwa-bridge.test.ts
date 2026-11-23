@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, statSync } from "node:fs";
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { createServer as createNetServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -427,7 +427,151 @@ describe("PWA bridge unit, config, and route enforcement", () => {
     await relay.waitForHost();
     expect(relay.hellos.length).toBe(2);
 
+    // Peer-provided close reasons (including any secret marker) must never leak into status().lastError.
+    relay.ws?.close(4401, `bad secret ${rotated.body.bridgeSecret}`);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(bridgeRef!.status().state).toBe("error");
+    expect(bridgeRef!.status().lastError).toBe("bridge authentication rejected (4401)");
+    expect(bridgeRef!.status().lastError).not.toContain(rotated.body.bridgeSecret);
+
+    // Invalid header names/values and Content-Length mismatches fail cleanly at the bridge boundary.
+    await adminCall("PUT", "/api/pwa-bridge", {
+      enabled: true,
+      relayUrl: relay.url,
+      hostId: "mac-mini",
+      pwaOrigin: "https://mausbot.mxhan.com",
+    });
+    await new Promise<void>((resolve, reject) => {
+      const deadline = Date.now() + 5_000;
+      const poll = () => {
+        if (bridgeRef!.status().state === "connected" && relay.ws?.readyState === 1) return resolve();
+        if (Date.now() > deadline) return reject(new Error("timed out waiting for reconnect"));
+        setTimeout(poll, 20);
+      };
+      poll();
+    });
+
+    const badHeader = await relay.request({
+      method: "GET",
+      path: "/api/bots",
+      headers: { "bad header": "value" },
+    });
+    expect(badHeader.status).toBe(400);
+
+    const mismatchedLen = await relay.request({
+      method: "POST",
+      path: "/api/bots/bot-acct/messages",
+      headers: { "content-type": "application/json", "content-length": "100" },
+      body: JSON.stringify({ text: "short" }),
+    });
+    expect(mismatchedLen.status).toBe(400);
+
     sessions.close();
+  });
+
+  it("closes active SSE streams on managed-policy denial and aborts CONNECTING sockets without uncaught errors", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pwa-bridge-policy-"));
+    dirs.push(dir);
+    const relay = await MockBridgeRelay.start();
+    relays.push(relay);
+
+    let policyRefusal: string | undefined;
+    let originClosed = false;
+    let pushSseEvent: ((chunk: string) => void) | null = null;
+
+    const bridge = startPwaBridge({
+      dataDir: dir,
+      managedRemoteAccessRefusal: () => policyRefusal,
+      reconnectDelaysMs: [100],
+      jitterFactor: () => 0.5,
+      handle: (req, res) => {
+        const url = new URL(req.url ?? "/", "http://pwa-bridge.invalid");
+        if (url.pathname === "/api/events") {
+          res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
+          res.write("event: hello\ndata: {\"ok\":true}\n\n");
+          pushSseEvent = (chunk: string) => {
+            if (!res.writableEnded) res.write(chunk);
+          };
+          res.on("close", () => {
+            originClosed = true;
+          });
+          return;
+        }
+        json(res, 200, { ok: true });
+      },
+    })!;
+    bridges.push(bridge);
+
+    const rot = createPwaBridgeRoutes({
+      bridge: () => bridge,
+      dataDir: dir,
+      sessions: new SessionRegistry({ file: join(dir, "sessions.json") }),
+    });
+    const adminServer = createServer(async (req, res) => {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+      await dispatchRoutes([rot], {
+        req,
+        res,
+        url,
+        path: url.pathname,
+        method: req.method ?? "GET",
+        auth: { kind: "loopback", scopes: ["admin", "client"] },
+        json,
+        readBody,
+      });
+    });
+    servers.push(adminServer);
+    await new Promise<void>((r) => adminServer.listen(0, "127.0.0.1", r));
+    const adminBase = `http://127.0.0.1:${(adminServer.address() as AddressInfo).port}`;
+
+    await fetch(`${adminBase}/api/pwa-bridge/rotate-secret`, { method: "POST", body: "{}" });
+    await fetch(`${adminBase}/api/pwa-bridge`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: true, relayUrl: relay.url, hostId: "mac-mini" }),
+    });
+    await relay.waitForHost();
+
+    const sse = relay.openStream({ method: "GET", path: "/api/events?ticket=t1" });
+    const head = await sse.head;
+    expect(head.status).toBe(200);
+    const initial = await sse.readUntil((txt) => txt.includes("event: hello"));
+    expect(initial).toContain("hello");
+
+    // Flip managed policy to deny and emit an event; stream must close without delivering the post-denial event.
+    policyRefusal = "Org Policy disables remote access.";
+    pushSseEvent!("event: secret\ndata: {\"shouldNotDeliver\":true}\n\n");
+    const closedBody = (await sse.body).toString("utf8");
+    expect(closedBody).not.toContain("shouldNotDeliver");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(originClosed).toBe(true);
+    expect(bridge.status().activeStreams).toBe(0);
+
+    // Stopping during a CONNECTING WebSocket handshake must not throw an uncaught error.
+    const stalledSockets = new Set<import("node:net").Socket>();
+    const stalledTcp = createNetServer((sock) => {
+      stalledSockets.add(sock);
+      sock.on("close", () => stalledSockets.delete(sock));
+    });
+    await new Promise<void>((r) => stalledTcp.listen(0, "127.0.0.1", r));
+    const stalledPort = (stalledTcp.address() as AddressInfo).port;
+
+    const dir2 = mkdtempSync(join(tmpdir(), "pwa-bridge-connecting-"));
+    dirs.push(dir2);
+    const bridge2 = startPwaBridge({ dataDir: dir2 })!;
+    bridge2.applyConfig({
+      enabled: true,
+      relayUrl: `http://127.0.0.1:${stalledPort}`,
+      hostId: "mac-mini",
+      bridgeSecret: "omb_bridge_test_secret_12345",
+      pwaOrigin: "https://mausbot.mxhan.com",
+      defaultBotId: null,
+    });
+    expect(bridge2.status().state).toBe("connecting");
+    bridge2.stop();
+    await new Promise((r) => setTimeout(r, 80));
+    for (const sock of stalledSockets) sock.destroy();
+    await new Promise<void>((r) => stalledTcp.close(() => r()));
   });
 });
 

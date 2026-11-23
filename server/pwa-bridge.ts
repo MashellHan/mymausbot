@@ -1,6 +1,15 @@
 // Outbound WSS bridge client (`omb-pwa-bridge.v1`) connecting the local Mac server to the DO relay and dispatching
 // sanitized, allowlisted requests to `handleRequest` over an in-memory socket without loopback trust.
-import { Agent, createServer, request as httpRequest, type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from "node:http";
+import {
+  Agent,
+  createServer,
+  request as httpRequest,
+  validateHeaderName,
+  validateHeaderValue,
+  type IncomingHttpHeaders,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
 import { duplexPair, type Duplex } from "node:stream";
 import WebSocket from "ws";
 
@@ -286,16 +295,47 @@ function isSensitiveHeader(name: string): boolean {
   );
 }
 
-function scrubHeadersObject(headers: IncomingHttpHeaders | HeaderMap, remoteAddr: string): HeaderMap {
+function scrubHeadersObject(
+  headers: IncomingHttpHeaders | HeaderMap,
+  remoteAddr: string,
+): { ok: true; headers: HeaderMap; declaredContentLength?: number } | { ok: false; status: number; error: string } {
   const clean: HeaderMap = {};
+  let declaredContentLength: number | undefined;
   for (const [rawName, value] of Object.entries(headers)) {
+    try {
+      validateHeaderName(rawName);
+    } catch {
+      return { ok: false, status: 400, error: "invalid request header name" };
+    }
     const name = rawName.toLowerCase();
     if (value === undefined || isSensitiveHeader(name)) continue;
+    try {
+      if (Array.isArray(value)) {
+        for (const item of value) validateHeaderValue(name, item);
+      } else {
+        validateHeaderValue(name, value);
+      }
+    } catch {
+      return { ok: false, status: 400, error: "invalid request header value" };
+    }
+    if (name === "content-length") {
+      if (Array.isArray(value) || !/^\d+$/.test(value)) {
+        return { ok: false, status: 400, error: "invalid content-length header" };
+      }
+      const parsedLength = Number(value);
+      if (!Number.isSafeInteger(parsedLength) || parsedLength < 0) {
+        return { ok: false, status: 400, error: "invalid content-length header" };
+      }
+      if (parsedLength > PWA_BRIDGE_MAX_BODY_BYTES) {
+        return { ok: false, status: 413, error: "Request body too large" };
+      }
+      declaredContentLength = parsedLength;
+    }
     clean[name] = value;
   }
   clean.host = "pwa-bridge.invalid";
   clean["x-forwarded-for"] = sanitizeSource(remoteAddr || "pwa-bridge");
-  return clean;
+  return { ok: true, headers: clean, declaredContentLength };
 }
 
 function scrubIncomingRequest(req: IncomingMessage, remoteAddr: string): void {
@@ -365,11 +405,43 @@ function relayWsUrl(relayUrl: string): string | null {
   }
 }
 
+function sanitizeTransportError(message: string, secret: string): string {
+  let clean = message.trim();
+  if (secret) clean = clean.split(secret).join("[REDACTED]");
+  clean = clean.replace(/\bomb_(?:bridge|sess|pair)_[A-Za-z0-9_-]+/g, "[REDACTED]");
+  return clean.slice(0, 200) || "bridge socket error";
+}
+
+function mapBridgeCloseError(code: number): string | null {
+  switch (code) {
+    case 4401:
+      return "bridge authentication rejected (4401)";
+    case 4403:
+      return "bridge host forbidden (4403)";
+    case 4409:
+      return "bridge connection replaced by another host session (4409)";
+    case 1000:
+    case 1001:
+      return null;
+    default:
+      return `bridge disconnected (${code})`;
+  }
+}
+
+interface StreamMeta {
+  remoteAddr: string;
+  expectedMethod: string;
+  expectedPath: string;
+  expectedPathname: string;
+  handled: boolean;
+}
+
 interface ActiveStream {
   streamId: string;
   clientReq: ReturnType<typeof httpRequest>;
   near: Duplex;
   far: Duplex;
+  declaredContentLength?: number;
   bodyBytesReceived: number;
   requestEnded: boolean;
   responseStarted: boolean;
@@ -399,22 +471,56 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
   let attempt = 0;
   let lastInboundAt = 0;
 
-  const streamMeta = new WeakMap<object, { remoteAddr: string }>();
+  const streamMeta = new WeakMap<object, StreamMeta>();
   const streams = new Map<string, ActiveStream>();
+
+  const sendImmediateLocalResponse = (res: ServerResponse, status: number, body: unknown) => {
+    if (res.headersSent) {
+      res.destroy();
+      return;
+    }
+    const text = JSON.stringify(body);
+    res.writeHead(status, {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": Buffer.byteLength(text),
+      "cache-control": "no-store",
+    });
+    res.end(text);
+  };
 
   const originServer = createServer(
     gzipTunnelReplies((req, res) => {
       const meta = streamMeta.get(req.socket);
-      scrubIncomingRequest(req, meta?.remoteAddr ?? "pwa-bridge");
+      if (!meta || meta.handled) {
+        sendImmediateLocalResponse(res, 400, { error: "one request per bridge stream" });
+        req.socket.destroy();
+        return;
+      }
+      meta.handled = true;
+      const actualMethod = (req.method ?? "").toUpperCase();
+      const actualUrl = req.url ?? "";
+      if (
+        actualMethod !== meta.expectedMethod ||
+        actualUrl !== meta.expectedPath ||
+        !isBridgeRouteAllowed(meta.expectedMethod, meta.expectedPathname)
+      ) {
+        sendImmediateLocalResponse(res, 403, {
+          error: "forbidden: route not available over PWA bridge",
+          code: "bridge_route_forbidden",
+        });
+        req.socket.destroy();
+        return;
+      }
+      const refusal = options.managedRemoteAccessRefusal?.();
+      if (refusal) {
+        sendImmediateLocalResponse(res, 403, { error: refusal, code: "managed_policy" });
+        req.socket.destroy();
+        return;
+      }
+      scrubIncomingRequest(req, meta.remoteAddr);
       Promise.resolve(options.handle(req, res)).catch(() => {
         if (!res.headersSent) {
-          const text = JSON.stringify({ error: "request failed" });
-          res.writeHead(500, {
-            "content-type": "application/json; charset=utf-8",
-            "content-length": Buffer.byteLength(text),
-            "cache-control": "no-store",
-          });
-          res.end(text);
+          sendImmediateLocalResponse(res, 500, { error: "request failed" });
         } else {
           res.destroy();
         }
@@ -452,6 +558,19 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
     }
   };
 
+  const closeStreamsForPolicyRefusal = (socket: WebSocket | null, refusal: string) => {
+    for (const stream of streams.values()) {
+      if (socket && ws === socket && socket.readyState === WebSocket.OPEN) {
+        if (!stream.responseStarted) {
+          sendImmediateJson(socket, stream.streamId, 403, { error: refusal, code: "managed_policy" });
+        } else {
+          sendFrame(socket, { type: "res.body", streamId: stream.streamId, chunkB64: "", eof: true });
+        }
+      }
+      cleanupStream(stream.streamId, true);
+    }
+  };
+
   const sendFrame = (socket: WebSocket, frame: unknown, onFlushed?: () => void): boolean => {
     if (socket.readyState !== WebSocket.OPEN) return false;
     socket.send(JSON.stringify(frame), onFlushed);
@@ -479,12 +598,17 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
   };
 
   const handleReqOpen = (socket: WebSocket, frame: Extract<InboundBridgeFrame, { type: "req.open" }>) => {
+    if (streams.has(frame.streamId)) {
+      sendImmediateJson(socket, frame.streamId, 400, { error: "duplicate stream id" });
+      return;
+    }
     if (streams.size >= PWA_BRIDGE_MAX_CONCURRENT_STREAMS) {
       sendImmediateJson(socket, frame.streamId, 503, { error: "Too many concurrent streams", code: "bridge_busy" });
       return;
     }
     const refusal = options.managedRemoteAccessRefusal?.();
     if (refusal) {
+      closeStreamsForPolicyRefusal(socket, refusal);
       sendImmediateJson(socket, frame.streamId, 403, { error: refusal, code: "managed_policy" });
       return;
     }
@@ -503,22 +627,46 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
     }
 
     const remoteAddr = sanitizeSource(frame.remoteAddr || "pwa-bridge");
+    const scrubbed = scrubHeadersObject(frame.headers, remoteAddr);
+    if (!scrubbed.ok) {
+      sendImmediateJson(socket, frame.streamId, scrubbed.status, { error: scrubbed.error });
+      return;
+    }
+    if ((upperMethod === "GET" || upperMethod === "HEAD") && scrubbed.declaredContentLength !== undefined && scrubbed.declaredContentLength > 0) {
+      sendImmediateJson(socket, frame.streamId, 400, { error: "unexpected request body on GET/HEAD" });
+      return;
+    }
+
+    const expectedPath = target.url.pathname + target.url.search;
     const [rawNear, rawFar] = duplexPair();
     const near = socketLike(rawNear);
     const far = socketLike(rawFar);
     bridgeSockets.add(far);
-    streamMeta.set(far, { remoteAddr });
+    streamMeta.set(far, {
+      remoteAddr,
+      expectedMethod: upperMethod,
+      expectedPath,
+      expectedPathname: target.url.pathname,
+      handled: false,
+    });
     originServer.emit("connection", far);
 
-    const reqHeaders = scrubHeadersObject(frame.headers, remoteAddr);
     const streamAgent = new Agent({ keepAlive: false });
     streamAgent.createConnection = () => near;
-    const clientReq = httpRequest({
-      method: upperMethod,
-      path: target.url.pathname + target.url.search,
-      headers: reqHeaders,
-      agent: streamAgent,
-    });
+    let clientReq: ReturnType<typeof httpRequest>;
+    try {
+      clientReq = httpRequest({
+        method: upperMethod,
+        path: expectedPath,
+        headers: scrubbed.headers,
+        agent: streamAgent,
+      });
+    } catch {
+      near.destroy();
+      far.destroy();
+      sendImmediateJson(socket, frame.streamId, 400, { error: "invalid request parameters" });
+      return;
+    }
     clientReq.setTimeout(0);
 
     const stream: ActiveStream = {
@@ -526,6 +674,7 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
       clientReq,
       near,
       far,
+      declaredContentLength: scrubbed.declaredContentLength,
       bodyBytesReceived: 0,
       requestEnded: false,
       responseStarted: false,
@@ -533,8 +682,7 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
     };
     streams.set(frame.streamId, stream);
 
-    const hasRequestBodyHeader = reqHeaders["content-length"] !== undefined || reqHeaders["transfer-encoding"] !== undefined;
-    if ((upperMethod === "GET" || upperMethod === "HEAD") && !hasRequestBodyHeader) {
+    if (upperMethod === "GET" || upperMethod === "HEAD") {
       stream.requestEnded = true;
       clientReq.end();
     }
@@ -542,6 +690,11 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
     clientReq.on("response", (proxyRes) => {
       if (stream.finished || ws !== socket || socket.readyState !== WebSocket.OPEN) {
         cleanupStream(frame.streamId, true);
+        return;
+      }
+      const policyRefusal = options.managedRemoteAccessRefusal?.();
+      if (policyRefusal) {
+        closeStreamsForPolicyRefusal(socket, policyRefusal);
         return;
       }
       stream.responseStarted = true;
@@ -554,6 +707,11 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
 
       proxyRes.on("data", (chunk: Buffer) => {
         if (stream.finished || ws !== socket || socket.readyState !== WebSocket.OPEN) return;
+        const activeRefusal = options.managedRemoteAccessRefusal?.();
+        if (activeRefusal) {
+          closeStreamsForPolicyRefusal(socket, activeRefusal);
+          return;
+        }
         for (let offset = 0; offset < chunk.length; offset += MAX_RAW_CHUNK_BYTES) {
           const slice = chunk.subarray(offset, offset + MAX_RAW_CHUNK_BYTES);
           const overBuffered = socket.bufferedAmount >= PWA_BRIDGE_MAX_WS_BUFFERED_BYTES;
@@ -613,10 +771,22 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
   const handleReqBody = (socket: WebSocket, frame: Extract<InboundBridgeFrame, { type: "req.body" }>) => {
     const stream = streams.get(frame.streamId);
     if (!stream || stream.finished) return;
+    const refusal = options.managedRemoteAccessRefusal?.();
+    if (refusal) {
+      closeStreamsForPolicyRefusal(socket, refusal);
+      return;
+    }
     const chunk = decodeBase64Chunk(frame.chunkB64, PWA_BRIDGE_MAX_BODY_BYTES);
     if (!chunk) {
       if (!stream.responseStarted) {
         sendImmediateJson(socket, frame.streamId, 400, { error: "invalid request body chunk" });
+      }
+      cleanupStream(frame.streamId, true);
+      return;
+    }
+    if (stream.requestEnded) {
+      if (!stream.responseStarted) {
+        sendImmediateJson(socket, frame.streamId, 400, { error: "unexpected request body after end" });
       }
       cleanupStream(frame.streamId, true);
       return;
@@ -629,12 +799,24 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
       cleanupStream(frame.streamId, true);
       return;
     }
-    if (!stream.requestEnded) {
-      if (chunk.length > 0) stream.clientReq.write(chunk);
-      if (frame.eof) {
-        stream.requestEnded = true;
-        stream.clientReq.end();
+    if (stream.declaredContentLength !== undefined && stream.bodyBytesReceived > stream.declaredContentLength) {
+      if (!stream.responseStarted) {
+        sendImmediateJson(socket, frame.streamId, 400, { error: "request body exceeds declared content-length" });
       }
+      cleanupStream(frame.streamId, true);
+      return;
+    }
+    if (frame.eof && stream.declaredContentLength !== undefined && stream.bodyBytesReceived !== stream.declaredContentLength) {
+      if (!stream.responseStarted) {
+        sendImmediateJson(socket, frame.streamId, 400, { error: "request body shorter than declared content-length" });
+      }
+      cleanupStream(frame.streamId, true);
+      return;
+    }
+    if (chunk.length > 0) stream.clientReq.write(chunk);
+    if (frame.eof) {
+      stream.requestEnded = true;
+      stream.clientReq.end();
     }
   };
 
@@ -661,6 +843,8 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
     if (existing) {
       try {
         existing.removeAllListeners();
+        // `ws` emits an async error when closing a CONNECTING socket before open; keep a no-op listener attached.
+        existing.on("error", () => {});
         if (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING) {
           existing.close(code, reason);
         } else {
@@ -703,6 +887,10 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
 
       heartbeatTimer = setInterval(() => {
         if (ws !== socket || socket.readyState !== WebSocket.OPEN) return;
+        const refusal = options.managedRemoteAccessRefusal?.();
+        if (refusal && streams.size > 0) {
+          closeStreamsForPolicyRefusal(socket, refusal);
+        }
         if (Date.now() - lastInboundAt > heartbeatTimeoutMs) {
           lastError = "relay heartbeat timeout";
           state = "error";
@@ -736,11 +924,11 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
 
     socket.on("error", (err) => {
       if (ws !== socket || stopped) return;
-      lastError = err.message || "bridge socket error";
+      lastError = sanitizeTransportError(err.message || "", currentConfig.bridgeSecret);
       state = "error";
     });
 
-    socket.on("close", (code, reasonBuf) => {
+    socket.on("close", (code) => {
       if (ws !== socket) return;
       ws = null;
       clearTimers();
@@ -749,13 +937,13 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
         state = "off";
         return;
       }
-      const reason = reasonBuf.toString("utf8").trim();
+      const mapped = mapBridgeCloseError(code);
       if (code === 4401 || code === 4403 || code === 4409) {
         state = "error";
-        lastError = reason || `bridge rejected (${code})`;
+        lastError = mapped;
       } else if (state !== "error") {
         state = "connecting";
-        if (reason) lastError = reason;
+        if (mapped) lastError = mapped;
       }
       scheduleReconnect();
     });
