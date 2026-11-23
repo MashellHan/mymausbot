@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Connect, Plugin } from "vite";
 import { configDefaults, defineConfig } from "vitest/config";
@@ -31,6 +32,20 @@ function railPage(): Plugin {
   };
 }
 
+function pwaCloudflareHeaders(): Plugin {
+  return {
+    name: "pwa-cloudflare-headers",
+    apply: "build",
+    writeBundle(options) {
+      const source = fileURLToPath(new URL("./deploy/pwa-cf/public/_headers", import.meta.url));
+      if (!existsSync(source)) return;
+      const outDir = options.dir ? resolve(options.dir) : fileURLToPath(new URL("./dist", import.meta.url));
+      mkdirSync(outDir, { recursive: true });
+      copyFileSync(source, join(outDir, "_headers"));
+    },
+  };
+}
+
 const include = [
   "evals/**/*.test.ts",
   "server/**/*.test.ts",
@@ -45,7 +60,7 @@ const include = [
 ];
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), railPage()],
+  plugins: [react(), tailwindcss(), railPage(), pwaCloudflareHeaders()],
   build: {
     rollupOptions: { input: { index: page("./index.html"), rail: page("./rail.html") } },
   },

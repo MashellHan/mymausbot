@@ -1,0 +1,19 @@
+# Optional same-origin API proxy Worker for https://mausbot.mxhan.com/api/*
+# Copy to wrangler.toml (or deploy with `wrangler deploy -c deploy/pwa-cf/wrangler.toml`)
+# only if you want same-origin `/api/*` forwarding instead of direct cross-origin requests
+# to https://relay.mxhan.com.
+
+name = "mausbot-pwa-api-proxy"
+main = "worker-proxy.ts"
+compatibility_date = "2026-08-18"
+workers_dev = false
+
+routes = [
+  { pattern = "mausbot.mxhan.com/api/*", zone_name = "mxhan.com" }
+]
+
+[vars]
+RELAY_ORIGIN = "https://relay.mxhan.com"
+
+[observability]
+enabled = false
