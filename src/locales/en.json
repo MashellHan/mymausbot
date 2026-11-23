@@ -11814,5 +11814,12 @@
   "workspaces.upgraded": "Every running installation restarted on the new release.",
   "workspaces.users": "Users",
   "workspaces.usersTitle": "Who may sign in to {slug}",
-  "workspaces.working": "Working…"
+  "workspaces.working": "Working…",
+  "chat.handoffExchange.open": "Open exchange with {name}",
+  "chat.handoffExchange.label": "Bot exchange between {asker} and {helper}",
+  "chat.handoffExchange.backTo": "Back to {name}",
+  "chat.handoffExchange.back": "Back",
+  "chat.handoffExchange.loading": "Loading the conversation…",
+  "chat.handoffExchange.failed": "Couldn't load the conversation.",
+  "chat.handoffExchange.empty": "No messages yet."
 }

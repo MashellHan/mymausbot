@@ -10711,5 +10711,12 @@
   "workspaces.upgraded": "所有运行中的安装都已在新版本上重新启动。",
   "workspaces.users": "用户",
   "workspaces.usersTitle": "谁可以登录 {slug}",
-  "workspaces.working": "处理中…"
+  "workspaces.working": "处理中…",
+  "chat.handoffExchange.open": "打开与 {name} 的对话",
+  "chat.handoffExchange.label": "{asker} 与 {helper} 的对话",
+  "chat.handoffExchange.backTo": "返回 {name}",
+  "chat.handoffExchange.back": "返回",
+  "chat.handoffExchange.loading": "正在加载对话…",
+  "chat.handoffExchange.failed": "无法加载对话。",
+  "chat.handoffExchange.empty": "还没有消息。"
 }
