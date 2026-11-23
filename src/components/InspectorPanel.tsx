@@ -5,6 +5,7 @@ import { cn } from "@/lib/cn";
 import { useCaptionChrome } from "@/components/DesktopCapabilities";
 import { formatTime, toRows, type InspectorPage, type InspectorRow } from "@/lib/inspector";
 import { listenLiveFrames } from "@/lib/live-events";
+import { remoteFetch } from "@/lib/pwa-config";
 import type { RuntimeEvent } from "../../shared/runtime-events";
 import { RunLog } from "./RunLog";
 import { timelineEvents } from "@/lib/taskTimeline";
@@ -40,7 +41,7 @@ export function InspectorPanel({ bot }: { bot: Bot }) {
     const controller = new AbortController();
     loadAbort.current = controller;
     try {
-      const res = await fetch(`/api/threads/${threadId}/events?limit=${INSPECTOR_WINDOW_LIMIT}`, { signal: controller.signal });
+      const res = await remoteFetch(`/api/threads/${threadId}/events?limit=${INSPECTOR_WINDOW_LIMIT}`, { signal: controller.signal });
       if (!res.ok) throw new Error(`${res.status}`);
       // SAFETY: the same-version harness's typed inspector endpoint; malformed transport data is handled by catch.
       const next = (await res.json()) as InspectorPage;

@@ -42,11 +42,7 @@ import type { RoutineRequestCardData } from "../../shared/routine-request";
 import type { RoutineRunCardData } from "../../shared/routine-run";
 import type { GroupGoalRunCardData } from "../../shared/group-goal-run"; import type { BurstCardData } from "../../shared/burst";
 import type { PlaceRow } from "../../shared/place-view";
-import {
-  reviewedSkillSha256,
-  skillRequestBehavior,
-  type SkillRequestCardData,
-} from "../../shared/skill-request";
+import { reviewedSkillSha256, skillRequestBehavior, type SkillRequestCardData } from "../../shared/skill-request";
 import type { Routine, RoutineInput, RoutineRun, RoutineRunStatusFilter } from "@/lib/routines";
 import type { WebhookAttempt, WebhookIngressStatus, WebhookTrigger } from "@/lib/webhooks";
 import { duplicateBotProfile, restrictedCopyRequest } from "@/lib/bot-duplicate";
@@ -70,6 +66,8 @@ import { createBotPatchQueue, flushWhenLeaving, keepaliveFits, type BotUpdatePat
 import { liveCallFromFrame, nextLiveCallLookup } from "./live-call";
 import { isNoAiRefusal, useChatErrorClear } from "./chat-error";
 import { openLiveEvents, publishLiveFrame, publishMissedFrames, withoutScreenPixels } from "@/lib/live-events";
+import { remoteFetch } from "@/lib/pwa-config"; import { setMacOffline } from "@/lib/pwa-transport"; import { initialStoreStateFromPwaCache, reduceHydrateFromCache, resolveLiveResumeId, usePwaCacheSync, type HydrateFromCacheAction } from "./pwa-boot";
+import { noteRefusedRequest } from "@/lib/session-ended";
 import { unlessRefused } from "@/lib/admin-scope";
 import { olderRunsSince, ROUTINE_RUNS_WINDOW_MS, trimRoutineRuns, withOlderRoutineRuns } from "./routine-runs";
 import { reconcileSnapshotQueues, rememberConsumedQueueId, replaceBotQueues } from "./queue-receipts";
@@ -116,7 +114,7 @@ export type SecretRequestCardData = Omit<import("../../shared/wire").SecretReque
 
 export type ComputerControlState = { held: boolean; helpReason: string | null; help?: import("../../shared/wire").ComputerHelpRef | null };
 
-export interface Message extends Pick<import("../../shared/wire").WireMessage, "widget" | "app" | "fromApp" | "pointed" | "routedBy" | "quickModel" | "aside" | "relayed" | "automated" | "automation" | "publishedPage" | "template" | "sender" | "setupSuggestion" | "settingsCard" | "helperIntro" | "helperFollowup" | "setupOffer" | "savedSteps" | "setupChoices" | "setupChoicesPending" | "setupChoicesUpdating" | "setupRequest" | "relay" | "inbox" | "sentDirectly" | "doneWhen" | "bugReport" | "engineCompaction" | "stoppedBy"> {
+export interface Message extends Pick<import("../../shared/wire").WireMessage, "widget" | "app" | "fromApp" | "pointed" | "routedBy" | "quickModel" | "aside" | "relayed" | "automated" | "waitContinuation" | "automation" | "publishedPage" | "template" | "sender" | "setupSuggestion" | "settingsCard" | "helperIntro" | "helperFollowup" | "setupOffer" | "savedSteps" | "setupChoices" | "setupChoicesPending" | "setupChoicesUpdating" | "setupRequest" | "relay" | "inbox" | "sentDirectly" | "doneWhen" | "bugReport" | "engineCompaction" | "stoppedBy"> {
   id: string;
   role: "bot" | "user";
   kind: "text" | "options" | "activity" | "screen" | "connector" | "secret" | "signin" | "routine.run" | "goal.run" | "burst" | "digest" | "compaction" | "call" | "widget" | "app";
@@ -557,7 +555,7 @@ export interface AppState {
   focusMessage: { threadId: string; messageId: string; matchText?: string; nonce: number; consumed: boolean } | null;
   unreadDivider: UnreadDivider | null;
   connected: boolean;
-  hydrated?: true;
+  hydrated?: true; cachedHydrated?: boolean;
   error: string | null;
   notice: { kind: "thread-gone" | "bot-gone" | "steer-images" | "note"; botName: string | null; text?: string } | null;
   revealThread: { threadId: string; nonce: number } | null;
@@ -577,6 +575,7 @@ export interface AppState {
 export type BotAnnouncement = Omit<Bot, "messages"> & { messages?: Message[] };
 
 export type Action =
+  | HydrateFromCacheAction
   | {
       type: "hydrate";
       bots: Bot[];
@@ -751,11 +750,7 @@ export type Action =
   | { type: "cloudHowTo"; open: boolean }
   | { type: "toggleWelcome"; open?: boolean }
   | { type: "toggleTour"; open?: boolean }
-  | {
-      type: "updateBot";
-      botId: string;
-      patch: BotUpdatePatch;
-    };
+  | { type: "updateBot"; botId: string; patch: BotUpdatePatch };
 
 function reconcileModelVariantSessions(state: AppState): AppState {
   const sessions = Object.entries(state.modelVariantSessions);
@@ -883,6 +878,7 @@ export function reducer(state: AppState, action: Action): AppState {
   }
   if (isNotificationFeedAction(action)) return { ...state, notifications: reduceNotificationFeed(state.notifications, action) };
   switch (action.type) {
+    case "hydrateFromCache": return reduceHydrateFromCache(state, action);
     case "hydrate": {
       const known = (id: string) => action.bots.some((b) => b.id === id) || action.groups.some((g) => g.id === id);
       const resume = action.resumeId;
@@ -907,7 +903,7 @@ export function reducer(state: AppState, action: Action): AppState {
         sections: action.sections ?? [],
         computerControl: action.computerControl,
         selectedId,
-        hydrated: true as const,
+        hydrated: true as const, cachedHydrated: false,
         backgroundThreadEvents: {},
         loadingOlder: {},
         transcriptGeneration: {},
@@ -2065,8 +2061,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     ...bot,
     tasks: bot.tasks?.map((task) => ({ ...task, ...taskPatchFields(taskWrites.get(task.threadId)?.patch ?? {}) })),
   });
-  const [store] = useState(() => createAppStore<AppState, Action, ServerFrame>(reducer, withRememberedTrayPin(restoreBotSettingsSection(initialState))));
+  const [store] = useState(() => createAppStore<AppState, Action, ServerFrame>(reducer, initialStoreStateFromPwaCache(withRememberedTrayPin(restoreBotSettingsSection(initialState)))));
   const rawDispatch = store.dispatch, state = useSyncExternalStore(store.subscribe, store.getState, store.getState);
+  usePwaCacheSync(state);
   const stateRef = useRef(state), selectionRevision = useRef(0);
   stateRef.current = state;
   const showThreads = useShowThreads();
@@ -2132,7 +2129,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return { host, card: cardMessages(stateRef.current, action.botId, action.groupId, action.threadId)?.find((m) => m.id === action.messageId)?.card, inRoom: !!action.groupId };
     };
     const persistCard = (botId: string, messageId: string, patch: Partial<OptionCardData>, threadId?: string) => {
-      fetch(`/api/bots/${botId}/cards/${messageId}`, {
+      remoteFetch(`/api/bots/${botId}/cards/${messageId}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ ...patch, threadId }),
@@ -2880,7 +2877,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const launched = useRef(false);
   useEffect(() => {
-    if (!state.hydrated || !state.config || launched.current) return;
+    if (!state.hydrated || !state.config || state.cachedHydrated || launched.current) return;
     launched.current = true;
     const bot = state.bots.find((candidate) => candidate.id === state.selectedId);
     if (bot && state.activeView === "chat" && botOpensTo(bot, showThreads) !== bot.threadId) openBot(dispatch, bot, showThreads);
@@ -3017,7 +3014,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             preserveNavigation: selectionRevision.current !== navigationAtStart,
             navigationSince,
             taskIdsAtStart,
-            resumeId: readLastConversation() ?? undefined,
+            resumeId: resolveLiveResumeId(bots, groups ?? [], readLastConversation() ?? undefined),
           });
         });
       const peripherals = peripheralParts.map((part) => ({
@@ -3066,7 +3063,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const readsInFlight = new Map<string, { covers: number; again: boolean }>();
     const sendRead = (botId: string, threadId: string | undefined, key: string, covers: number): void => {
       readsInFlight.set(key, { covers, again: false });
-      void fetch(`/api/bots/${botId}/read`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ threadId }) }).catch(() => {}).finally(() => {
+      void remoteFetch(`/api/bots/${botId}/read`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ threadId }) }).catch(() => {}).finally(() => {
         const open = readsInFlight.get(key); readsInFlight.delete(key);
         if (open?.again && alive) sendRead(botId, threadId, key, open.covers);
       });
@@ -3230,8 +3227,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
     };
     const stopLive = openLiveEvents({
-      onOpen: () => { rawDispatch({ type: "connected", value: true }); reportWindowPrefs(); },
+      onOpen: () => { setMacOffline(false); rawDispatch({ type: "connected", value: true }); reportWindowPrefs(); },
       onError: () => rawDispatch({ type: "connected", value: false }),
+      onUnauthenticated: () => { rawDispatch({ type: "connected", value: false }); noteRefusedRequest(); },
       onSnapshotRequired: () => {
         store.flushFrames(); // the old stream's waiting frames go first, so forgetLiveTurns() below has the last word
         clearTimeout(hydrationFallback);

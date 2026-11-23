@@ -456,6 +456,9 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False, history_d
             ("partial", [{"source": "git-fetch", "code": "CalledProcessError"},
                          {"source": "git-fetch", "code": "TimeoutExpired"}], "ready", "partial"),
             ("partial", [{"source": "git-fetch", "code": "DisabledByAuthBoundary"}], "ready", "local-ref-ready"),
+            ("partial", [{"source": "opencode", "code": "ReadFailed"}], "partial", "ready"),
+            ("partial", [{"source": "git-fetch", "code": "DisabledByAuthBoundary"},
+                         {"source": "opencode", "code": "ReadFailed"}], "partial", "local-ref-ready"),
             ("partial", [{"source": "git-fetch"}, {"source": "codex"}], "partial", "partial"),
             ("partial", [{"source": "tokens", "code": "NoRetainedLogs"}], "partial", "partial"),
             ("partial", [{"source": "repositories"}], "partial", "partial"),
@@ -475,6 +478,55 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False, history_d
         self.assertEqual(result["daily"], [{"tokenStatus": "partial", "totalTokens": 123}])
         self.assertEqual(result["sources"], [{"device": str(i), "status": status, "tokenStatus": token_status, "commitStatus": commit_status}
                          for i, (status, _, token_status, commit_status) in enumerate(cases)])
+
+    def test_legacy_join_deduplicates_sha_and_preserves_partial_coverage(self):
+        collector = self.root / "collector-ado-join.py"
+        output = self.root / "ado-join.json"
+        collector.write_text('''import datetime as dt
+import json
+def instant(value):
+    return dt.datetime.fromisoformat(value.replace("Z", "+00:00")) if isinstance(value, str) else None
+def remote_category(remote, config):
+    return "work"
+def repository_identity(remote):
+    return {"id": "same-repository", "name": "dev.azure.com/example/project/repo"}
+def run(args, timeout=35):
+    raise AssertionError("No CLI should run in this fixture")
+def aggregate(machines, prs, at, history_days=30):
+    commits, repositories = {}, {}
+    for machine in machines:
+        for row in machine.get("commits", []):
+            commits.setdefault(row["key"], row)
+    for row in commits.values():
+        repository = row.get("repository")
+        if repository:
+            repositories.setdefault(repository["id"], {**repository, "commits": 0})["commits"] += 1
+    return {"sources": [{"device": machine["device"], "status": machine["status"]}
+                         for machine in machines], "daily": [], "commitKeys": list(commits),
+            "repositories": list(repositories.values())}
+def refresh(config, upload=False, skip_api=False, reuse_sources=False, history_days=30):
+    at = dt.datetime(2026, 11, 6, 8, tzinfo=dt.timezone.utc)
+    with open(config["result"], "w") as stream:
+        json.dump(aggregate(config["machines"], {}, at, history_days), stream)
+''')
+        config = {"azureCli": "/fixture/az", "authorEmails": [OWNER],
+                  "adoRemotes": ["https://dev.azure.com/example/project/_git/repo"],
+                  "result": str(output), "machines": [{"device": "0", "status": "ok", "commits": [
+                      {"key": "local", "at": "2026-11-06T06:00:00Z"},
+                      {"key": "shared", "at": "2026-11-06T06:10:00Z", "category": "work", "m365": False,
+                       "repository": {"id": "same-repository", "name": "dev.azure.com/example/project/repo"}}]}]}
+        repository = {"id": "same-repository", "name": "dev.azure.com/example/project/repo"}
+        events = [{"key": "shared", "at": "2026-11-06T06:10:00Z", "category": "work", "m365": False,
+                   "repository": repository},
+                  {"key": "remote", "at": "2026-11-06T06:20:00Z", "category": "work", "m365": False,
+                   "repository": repository}]
+        for complete, expected in ((True, "ready"), (False, "partial")):
+            with patch.object(usage, "legacy_ado_commits", return_value={"records": events, "complete": complete}):
+                usage.refresh(collector, config, self.root, skip_api=True, reuse_sources=True)
+            result = json.loads(output.read_text())
+            self.assertEqual(result["commitKeys"], ["local", "shared", "remote"])
+            self.assertEqual(result["repositories"], [{**repository, "commits": 2}])
+            self.assertEqual(result["sources"][0]["commitStatus"], expected)
 
     def test_remote_refresh_stays_independent_when_local_logs_fail(self):
         collector = self.root / "collector-fails.py"
@@ -509,15 +561,18 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False):
                 raise subprocess.TimeoutExpired("synthetic root", timeout)
             if request["stage"] == "repositories":
                 return [{"path": "/fixture/ready", "name": "ready", "category": "work"}]
+            if request["stage"] == "opencode":
+                return [], None
             return fresh
         collector = types.SimpleNamespace(read_json=lambda path, default: old,
             instant=lambda value: dt.datetime.fromisoformat(value.replace("Z", "+00:00")))
         config = {"repoRoots": ["/fixture/ready", "/fixture/failed"], "storageDir": str(self.root)}
         with patch.object(usage, "_run_worker", side_effect=worker), patch.object(usage, "load_collector", return_value=collector):
             result = usage.collect_local(self.root / "collector.py", config, "fixture", at=at, history_days=59)
-        self.assertEqual([call[0]["stage"] for call in calls], ["repositories", "repositories", "collect"])
+        self.assertEqual([call[0]["stage"] for call in calls], ["repositories", "repositories", "collect", "opencode"])
         self.assertTrue(all(timeout <= 15 for _, timeout in calls[:2]))
-        self.assertLessEqual(calls[-1][1], 120)
+        self.assertLessEqual(calls[-2][1], 120)
+        self.assertLessEqual(calls[-1][1], 14)
         self.assertEqual(result["status"], "partial")
         self.assertEqual(result["tokens"], [
             {"key": "replayed", "at": "2026-11-06T07:00:00Z", "category": "work"},
@@ -529,7 +584,7 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False):
         self.assertEqual(result["retainedCapturedAt"], old["capturedAt"])
         self.assertEqual(result["errors"], [{"source": "repositories", "rootIndex": 2, "code": "TimeoutExpired"}])
 
-    def test_disabled_fetch_only_does_not_retain_previous_commits(self):
+    def test_opencode_timeout_does_not_lose_fresh_commits_or_resurrect_stale_commits(self):
         at = dt.datetime.fromisoformat("2026-11-06T08:00:00+00:00")
         old = {"capturedAt": "2026-11-05T08:00:00Z",
                "tokens": [{"key": "old-token", "at": "2026-11-06T06:00:00Z", "category": "personal"}],
@@ -542,14 +597,71 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False):
         collector = types.SimpleNamespace(read_json=lambda path, default: old,
             instant=lambda value: dt.datetime.fromisoformat(value.replace("Z", "+00:00")))
         config = {"repoRoots": ["/fixture/ready"], "storageDir": str(self.root)}
+        opencode_budgets = []
+
         def worker(request, timeout):
-            return [{"path": "/fixture/ready", "name": "ready", "category": "work"}] if request["stage"] == "repositories" else fresh
-        with patch.object(usage, "_run_worker", side_effect=worker), patch.object(usage, "load_collector", return_value=collector):
-            result = usage.collect_local(self.root / "collector.py", config, "fixture", at=at, history_days=59)
-        self.assertEqual([row["key"] for row in result["commits"]], ["new-commit"])
-        self.assertEqual([row["key"] for row in result["tokens"]], ["old-token"])
-        self.assertEqual(result["retainedTokenCapturedAt"], old["capturedAt"])
-        self.assertNotIn("retainedCapturedAt", result)
+            if request["stage"] == "opencode":
+                opencode_budgets.append(timeout)
+                raise subprocess.TimeoutExpired("synthetic OpenCode read", timeout)
+            if request["stage"] == "repositories":
+                return [{"path": "/fixture/ready", "name": "ready", "category": "work"}]
+            return {**fresh, "errors": list(fresh["errors"]), "tokens": []}
+
+        for cycle_deadline, budgets in (
+            (None, [usage.local_usage_models.MAX_OPENCODE_READ_SECONDS + 2]),
+            (100 + usage.LEGACY_PUBLISH_RESERVE + 3, [3]),
+            (100 + usage.LEGACY_PUBLISH_RESERVE, []),
+        ):
+            with (
+                self.subTest(cycle_deadline=cycle_deadline),
+                patch.object(usage.time, "monotonic", return_value=100),
+                patch.object(usage, "_run_worker", side_effect=worker),
+                patch.object(usage, "load_collector", return_value=collector),
+            ):
+                opencode_budgets.clear()
+                result = usage.collect_local(self.root / "collector.py", config, "fixture", at=at,
+                                             history_days=59, cycle_deadline=cycle_deadline)
+                self.assertEqual(opencode_budgets, budgets)
+                self.assertEqual([row["key"] for row in result["commits"]], ["new-commit"])
+                self.assertEqual([row["key"] for row in result["tokens"]], ["old-token"])
+                self.assertEqual(result["retainedTokenCapturedAt"], old["capturedAt"])
+                self.assertNotIn("retainedCapturedAt", result)
+                self.assertIn({"source": "opencode", "code": "ReadLimit"}, result["errors"])
+
+    def test_opencode_worker_uses_the_captured_window_and_classifier(self):
+        start = "2026-11-06T00:00:00Z"
+        cutoff = "2026-11-06T08:00:00Z"
+
+        def parse(value):
+            return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+        request = {"stage": "opencode", "collector": "fixture.py", "config": {"home": str(self.root)},
+                   "failedRoots": [], "repositories": [], "device": "fixture", "start": start, "at": cutoff,
+                   "opencodeEnvironment": {"OPENCODE_DB": "fixture.db"}}
+        event = {"key": "opaque-event", "at": "2026-11-06T07:59:00Z", "provider": "opencode", "model": "example-model",
+                 "input": 1, "output": 2, "cacheRead": 3, "category": "unclassified"}
+
+        class Classifier:
+            def __init__(self, repos, _config):
+                self.repos = repos
+
+            def classify(self, _cwd, _context=None):
+                return "unclassified"
+
+        collector = types.SimpleNamespace(Classifier=Classifier, instant=parse)
+        output = io.StringIO()
+        with (
+            patch.object(usage, "load_collector", return_value=collector),
+            patch.object(usage.local_usage_models, "opencode_events", return_value=([event], "ReadFailed")) as read,
+            patch.object(sys, "stdin", io.StringIO(json.dumps(request))),
+            patch.object(sys, "stdout", output),
+        ):
+            usage._collect_worker()
+        home, classify, lower, upper = read.call_args.args
+        self.assertEqual((home, lower, upper), (self.root, parse(start), parse(cutoff)))
+        self.assertEqual(classify("/fixture/repo"), "unclassified")
+        self.assertEqual(read.call_args.kwargs, {"env": request["opencodeEnvironment"]})
+        self.assertEqual(json.loads(output.getvalue()), [[event], "ReadFailed"])
 
     def test_repeat_disabled_fetch_only_keeps_local_ref_ready_and_marks_covered_days_only(self):
         at = dt.datetime.fromisoformat("2026-11-06T08:00:00+00:00")
@@ -565,6 +677,8 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False):
             instant=lambda value: dt.datetime.fromisoformat(value.replace("Z", "+00:00")))
         config_local = {"repoRoots": ["/fixture/ready"], "storageDir": str(self.root)}
         def worker(request, timeout):
+            if request["stage"] == "opencode":
+                return [], None
             return [{"path": "/fixture/ready", "name": "ready", "category": "work"}] if request["stage"] == "repositories" else fresh
         with patch.object(usage, "_run_worker", side_effect=worker), patch.object(usage, "load_collector", return_value=collector_stub):
             repeat = usage.collect_local(self.root / "collector.py", config_local, "fixture", at=at, history_days=59)
@@ -761,6 +875,208 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False, history_d
         self.assertFalse(lock.exists())
 
 
+class LegacyAdoJoinTests(unittest.TestCase):
+    config = {
+        "adoRemotes": ["https://dev.azure.com/example/Project/_git/Repo"],
+        "adoPrincipals": {"example": {"stableId": "11111111-2222-3333-4444-555555555555",
+                                       "alias": "owner@example.test"}},
+        "adoAuthorEmails": ["author@example.test"],
+    }
+    repo_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    ordinary = "1" * 40
+    merge = "2" * 40
+    coauthor = "3" * 40
+    later = "4" * 40
+
+    def fixture(self, status="ready"):
+        org, project, names = usage.local_usage_ado.projects(self.config)[0]
+        account = usage.local_usage_ado.principal(self.config, org)
+        scope = org.casefold() + "/" + project.casefold()
+        source_id = usage.local_usage_ado.digest("ado", "dev.azure.com", scope, account["stableId"])
+        cutoff = "2026-11-06T08:00:00Z"
+        captured = "2026-11-06T08:01:00Z"
+        items = [
+            {"id": self.ordinary, "day": "2026-11-06", "authoredAt": "2026-11-06T07:00:00Z",
+             "merge": False, "coauthor": False},
+            {"id": self.merge, "day": "2026-11-06", "authoredAt": "2026-11-06T07:01:00Z",
+             "merge": True, "coauthor": False},
+            {"id": self.coauthor, "day": "2026-11-06", "authoredAt": "2026-11-06T07:02:00Z",
+             "merge": False, "coauthor": True},
+            {"id": self.later, "day": "2026-11-06", "authoredAt": "2026-11-06T08:00:01Z",
+             "merge": False, "coauthor": False},
+        ]
+        proof = {"head": "a" * 40, "branch": "refs/heads/main", "pinnedAt": captured,
+                 "items": items, "checked": [item["id"] for item in items], "relation": "initial",
+                 "coverageStartAt": "2026-09-07T16:00:00Z"}
+        work = {"cutoff": cutoff, "firstDay": "2026-09-08", "lastDay": "2026-11-06",
+                "inventory": [{"id": self.repo_id, "name": "Repo", "defaultBranch": "refs/heads/main",
+                               "isDisabled": False}],
+                "selectedRepoIds": [self.repo_id], "repoDone": {self.repo_id: proof},
+                "progress": {}, "repoErrors": {}, "scanComplete": True}
+        state = {"schema": 3, "projects": {scope: {"account": account,
+            "emailHash": usage.local_usage_ado.digest("ado-author-aliases", sorted(self.config["adoAuthorEmails"])),
+            "remoteScopeHash": usage.local_usage_ado.digest("ado-remotes", scope, names),
+            "cache": {self.repo_id: proof}, "work": work}}}
+        source = {"id": source_id, "account": account,
+                  "scope": {"organization": org, "project": project}, "status": status,
+                  "coverage": {"identityVerified": True, "paginationComplete": status == "ready",
+                               "visibilityComplete": status == "ready", "reasons": []},
+                  "provenance": {"sourceCutoffAt": cutoff, "sourceCapturedAt": captured,
+                                 "pinnedHeads": {self.repo_id: proof["head"]}}}
+        return {"ado": {"asOfAt": cutoff, "capturedAt": captured,
+                         "operationWindow": {"startDay": "2026-09-08", "endDay": "2026-11-06"},
+                         "sources": [source], "state": state}}
+
+    def extract(self, snapshot, at="2026-11-06T08:00:00Z"):
+        with patch.object(usage.local_usage_contributions, "load_previous", return_value=snapshot), \
+             patch.object(usage.local_usage_contributions, "validate_seed_bindings", return_value=snapshot):
+            identity = lambda remote: {"id": usage.local_usage_ado.digest("dev.azure.com", "example/project/repo"),
+                                       "name": "dev.azure.com/example/Project/Repo"}
+            return usage.legacy_ado_commits(self.config, identity,
+                                            lambda remote, config: "work", at=at, file="/fixture/usage.json")
+
+    def test_join_keeps_only_ordinary_author_commits_with_repository_identity_and_cutoff(self):
+        result = self.extract(self.fixture())
+        self.assertTrue(result["complete"])
+        self.assertEqual([row["key"] for row in result["records"]], [self.ordinary])
+        for row in result["records"]:
+            self.assertEqual(row["repository"], {
+                "id": usage.local_usage_ado.digest("dev.azure.com", "example/project/repo"),
+                "name": "dev.azure.com/example/Project/Repo"})
+            self.assertEqual((row["category"], row["m365"]), ("work", False))
+
+    def test_partial_source_retains_known_records_but_is_not_exact(self):
+        snapshot = self.fixture("partial")
+        result = self.extract(snapshot)
+        self.assertFalse(result["complete"])
+        self.assertEqual([row["key"] for row in result["records"]], [self.ordinary])
+
+    def test_ready_snapshot_before_aggregate_cutoff_retains_only_a_lower_bound(self):
+        result = self.extract(self.fixture(), at="2026-11-06T08:00:01Z")
+        self.assertFalse(result["complete"])
+        self.assertEqual([row["key"] for row in result["records"]], [self.ordinary])
+
+    def test_cached_proof_rollover_validates_its_old_window_then_filters_to_current_days(self):
+        snapshot = self.fixture("partial")
+        project = snapshot["ado"]["state"]["projects"]["example/project"]
+        proof = project["work"]["repoDone"].pop(self.repo_id)
+        old = {"id": "5" * 40, "day": "2026-09-08", "authoredAt": "2026-09-08T04:00:00Z",
+               "merge": False, "coauthor": False}
+        proof["items"].insert(0, old)
+        proof["checked"].insert(0, old["id"])
+        project["cache"][self.repo_id] = proof
+        project["work"].update(firstDay="2026-09-09", progress={self.repo_id: {**proof, "pending": [self.merge]}},
+                               scanComplete=False)
+        snapshot["ado"]["operationWindow"]["startDay"] = "2026-09-09"
+        snapshot["ado"]["sources"][0]["provenance"]["pinnedHeads"] = {}
+        result = self.extract(snapshot)
+        self.assertFalse(result["complete"])
+        self.assertEqual([row["key"] for row in result["records"]], [self.ordinary])
+
+    def test_completed_proof_precedes_incomplete_progress_for_the_same_repository(self):
+        snapshot = self.fixture("partial")
+        project = snapshot["ado"]["state"]["projects"]["example/project"]
+        active = dict(project["work"]["repoDone"][self.repo_id])
+        active["head"] = "b" * 40
+        active["items"] = []
+        active["checked"] = []
+        project["work"]["progress"] = {self.repo_id: active}
+        result = self.extract(snapshot)
+        self.assertEqual([row["key"] for row in result["records"]], [self.ordinary])
+
+    def test_partial_progress_recovers_cached_proof_at_the_same_pinned_head(self):
+        snapshot = self.fixture("partial")
+        project = snapshot["ado"]["state"]["projects"]["example/project"]
+        proof = project["work"]["repoDone"].pop(self.repo_id)
+        project["work"].update(progress={self.repo_id: {**proof, "pending": [self.merge]}}, scanComplete=False)
+        snapshot["ado"]["sources"][0]["provenance"]["pinnedHeads"] = {}
+        result = self.extract(snapshot)
+        self.assertFalse(result["complete"])
+        self.assertEqual([row["key"] for row in result["records"]], [self.ordinary])
+
+    def test_request_budget_before_pinning_retains_bound_cache_until_fresh_proof(self):
+        snapshot = self.fixture("stale")
+        source = snapshot["ado"]["sources"][0]
+        source["coverage"]["reasons"] = ["request-budget"]
+        source["provenance"]["pinnedHeads"] = {}
+        project = snapshot["ado"]["state"]["projects"]["example/project"]
+        work = project["work"]
+        work.update(repoDone={}, scanComplete=False)
+        retained = project["cache"][self.repo_id]
+
+        result = self.extract(snapshot)
+        self.assertFalse(result["complete"])
+        self.assertEqual([row["key"] for row in result["records"]], [self.ordinary])
+
+        repo = work["inventory"][0]
+        for field, value in (("defaultBranch", "refs/heads/another"), ("isDisabled", True)):
+            with self.subTest(field=field), patch.dict(repo, {field: value}):
+                self.assertEqual(self.extract(snapshot), {"records": [], "complete": False})
+
+        fresh = self.fixture()
+        fresh_project = fresh["ado"]["state"]["projects"]["example/project"]
+        proof = fresh_project["work"]["repoDone"][self.repo_id]
+        proof["items"] = [row for row in proof["items"] if row["id"] != self.ordinary]
+        fresh_project["cache"][self.repo_id] = retained
+        self.assertEqual(self.extract(fresh), {"records": [], "complete": True})
+
+    def test_transient_identity_read_retains_only_previously_bound_repository_evidence(self):
+        snapshot = self.fixture("stale")
+        ado = snapshot["ado"]
+        cutoff = "2026-11-06T08:02:00Z"
+        captured = "2026-11-06T08:03:00Z"
+        ado.update(asOfAt=cutoff, capturedAt=captured)
+        source = ado["sources"][0]
+        source["coverage"].update(identityVerified=False, reasons=["authenticated-read-interrupted-http-503"])
+        source["provenance"].update(sourceCutoffAt=cutoff, sourceCapturedAt=captured, pinnedHeads={})
+        project = ado["state"]["projects"]["example/project"]
+        project["expectedRepositoryIds"] = [self.repo_id]
+        project["work"].update(cutoff=cutoff, inventory=None, selectedRepoIds=[], repoDone={}, scanComplete=False)
+        proof = project["cache"][self.repo_id]
+        proof["items"] = [row for row in proof["items"] if row["id"] != self.later]
+        prior_repository = {"id": usage.local_usage_ado.digest("ado-repo", "example", self.repo_id),
+                            "name": "example/Project/Repo", "status": "ready"}
+        prior_day = {"status": "stale", "capturedAt": "2026-11-06T08:01:01Z", "repositories": [prior_repository]}
+        source["days"] = [prior_day]
+
+        result = self.extract(snapshot, at=cutoff)
+        self.assertFalse(result["complete"])
+        self.assertEqual([row["key"] for row in result["records"]], [self.ordinary])
+
+        for code in (401, 403):
+            with self.subTest(code=code), patch.dict(source["coverage"], {
+                "reasons": [f"authenticated-read-interrupted-http-{code}"],
+            }):
+                self.assertEqual(self.extract(snapshot, at=cutoff), {"records": [], "complete": False})
+        for field, value in (("id", "0" * 64), ("name", "example/Project/Unconfigured"), ("status", "partial")):
+            with self.subTest(field=field), patch.dict(prior_repository, {field: value}):
+                self.assertEqual(self.extract(snapshot, at=cutoff), {"records": [], "complete": False})
+        with patch.dict(prior_day, {"capturedAt": "2026-11-06T08:00:59Z"}):
+            self.assertEqual(self.extract(snapshot, at=cutoff), {"records": [], "complete": False})
+
+    def test_proof_binding_rejects_changed_head_and_author_scope(self):
+        changed = self.fixture()
+        changed["ado"]["sources"][0]["provenance"]["pinnedHeads"][self.repo_id] = "b" * 40
+        with self.assertRaisesRegex(ValueError, "completed repository binding"):
+            self.extract(changed)
+        changed = self.fixture()
+        project = changed["ado"]["state"]["projects"]["example/project"]
+        project["emailHash"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "project binding"):
+            self.extract(changed)
+
+    def test_unverified_source_adds_no_commit_lower_bound(self):
+        snapshot = self.fixture("unavailable")
+        snapshot["ado"]["sources"][0]["coverage"]["identityVerified"] = False
+        self.assertEqual(self.extract(snapshot), {"records": [], "complete": False})
+
+    def test_missing_legacy_cache_is_partial_and_has_no_fabricated_lower_bound(self):
+        with patch.object(usage.local_usage_contributions, "load_previous", return_value=None):
+            result = usage.legacy_ado_commits(self.config, lambda remote: {}, lambda remote, config: "work",
+                                              at="2026-11-06T08:00:00Z", file="/fixture/usage.json")
+        self.assertEqual(result, {"records": [], "complete": False})
+
+
 class FileAuthAndChildBoundaryTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -954,7 +1270,8 @@ def collect(config):
             workers.append(kwargs)
             return Worker()
 
-        with patch.object(usage, "primary_config"), \
+        opencode_environment = {"XDG_DATA_HOME": str(self.root / "xdg"), "OPENCODE_DB": ":memory:"}
+        with patch.dict(os.environ, opencode_environment), patch.object(usage, "primary_config"), \
              patch.object(usage.local_usage_contributions, "target_lock", return_value=nullcontext()), \
              patch.object(usage.local_usage_contributions, "load_previous", return_value=None), \
              patch.object(usage.subprocess, "Popen", side_effect=spawn):
@@ -965,6 +1282,112 @@ def collect(config):
         self.assertTrue(all(worker["env"]["GIT_CONFIG_GLOBAL"] == "/dev/null"
                             and worker["env"]["GIT_ASKPASS"] == "/usr/bin/false"
                             and "GH_TOKEN" not in worker["env"] for worker in workers))
+        for key, value in opencode_environment.items():
+            self.assertNotIn(key, workers[0]["env"])
+            self.assertNotIn(key, workers[1]["env"])
+            self.assertEqual(workers[2]["env"][key], value)
+
+    def test_primary_passes_only_published_fresh_or_retained_snapshot_to_legacy_worker(self):
+        target = self.root / "candidate.json"
+        retained = {"version": 2, "generation": "retained"}
+        seen, legacy_snapshots, legacy_on_disk, legacy_deadlines = [], [], [], []
+
+        class Worker:
+            returncode = 0
+
+            def __init__(self, fail_stage=None):
+                self.fail_stage = fail_stage
+                self.stdin = self.Input(self)
+
+            class Input(io.BytesIO):
+                def __init__(self, process):
+                    super().__init__()
+                    self.process = process
+
+                def close(self):
+                    request = json.loads(self.getvalue())
+                    stage = request["stage"]
+                    seen.append(stage)
+                    if stage == "legacy":
+                        legacy_snapshots.append(request["primary"])
+                        legacy_on_disk.append(json.loads(target.read_text()) if target.exists() else None)
+                        legacy_deadlines.append(request["cycleDeadline"])
+                    elif stage == self.process.fail_stage:
+                        self.process.returncode = 1
+                    else:
+                        Path(request["output"]).write_text(json.dumps({
+                            "generation": "fresh", "provider": stage,
+                            "asOfAt": request["at"], "sources": []}))
+                    super().close()
+
+            def wait(self, timeout):
+                return self.returncode
+
+            def poll(self):
+                return self.returncode
+
+        common = [patch.object(usage, "primary_config"),
+                  patch.object(usage.local_usage_contributions, "target_lock", return_value=nullcontext()),
+                  patch.object(usage.local_usage_contributions, "validate_bindings", side_effect=lambda value, config: value),
+                  patch.object(usage.local_usage_contributions, "preserve_incomplete_github"),
+                  patch.object(usage, "finalized_day", return_value=dt.date(2026, 11, 10)),
+                  patch.object(usage.local_usage_contributions, "write_private",
+                               side_effect=lambda path, value: path.write_text(json.dumps(value)))]
+        with common[0], common[1], common[2], common[3], common[4], common[5], \
+             patch.object(usage.time, "monotonic", return_value=100), \
+             patch.object(usage.subprocess, "Popen", side_effect=lambda *a, **k: Worker()):
+            current = usage.refresh_primary(self.root / "collector.py", {}, self.root, file=target, whole_cycle_seconds=60)
+        self.assertEqual(seen, ["github", "ado", "legacy"])
+        self.assertEqual(legacy_snapshots, [current])
+        self.assertEqual(legacy_on_disk, [current])
+        self.assertEqual(legacy_deadlines, [160])
+        self.assertEqual(json.loads(target.read_text()), current)
+
+        seen.clear(); legacy_snapshots.clear(); legacy_on_disk.clear()
+        target.write_text(json.dumps(retained)); target.chmod(0o600)
+        with patch.object(usage, "primary_config"), \
+             patch.object(usage.local_usage_contributions, "target_lock", return_value=nullcontext()), \
+             patch.object(usage.local_usage_contributions, "load_previous", return_value=retained), \
+             patch.object(usage, "refresh_window", return_value=(dt.date(2026, 11, 10), dt.date(2026, 11, 9))), \
+             patch.object(usage.local_usage_contributions, "validate_bindings", side_effect=lambda value, config: value), \
+             patch.object(usage.subprocess, "Popen", side_effect=lambda *a, **k: Worker("github")):
+            with self.assertRaisesRegex(ValueError, "previous generation retained"):
+                usage.refresh_primary(self.root / "collector.py", {}, self.root, file=target)
+        self.assertEqual(seen, ["github", "ado", "legacy"])
+        self.assertEqual(legacy_snapshots, [retained])
+        self.assertEqual(legacy_on_disk, [retained])
+
+    def test_legacy_worker_binds_primary_cutoff_to_the_collector_clock(self):
+        cutoff = dt.datetime.fromisoformat("2026-11-23T08:00:00+00:00")
+        observed = []
+
+        class Collector:
+            def __init__(self):
+                self.run = lambda *args, **kwargs: None
+                self.original_now = self.now
+
+            def now(self):
+                return cutoff + dt.timedelta(seconds=15)
+
+            def refresh(self, config, **options):
+                observed.append(self.now())
+                self.collect(config, "fixture", self.now())
+
+        collector = Collector()
+        request = {"stage": "legacy", "collector": "/fixture/collector.py", "config": {"authorEmails": []},
+                   "azureDir": str(self.root), "at": cutoff.isoformat(), "publish": False,
+                   "skipApi": True, "reuseSources": False, "primary": {"version": 2}, "cycleDeadline": 160}
+        with patch.object(usage.sys, "stdin", io.StringIO(json.dumps(request))), \
+             patch.object(usage, "load_collector", return_value=collector), \
+             patch.object(usage, "AzureMemorySession", return_value=types.SimpleNamespace()), \
+             patch.object(usage, "GitHubFileSession", return_value=types.SimpleNamespace()), \
+             patch.object(usage.local_usage_models, "sample_herdr", return_value=None), \
+             patch.object(usage, "collect_local") as collect:
+            usage._primary_worker()
+        self.assertEqual(observed, [cutoff])
+        self.assertEqual(collector.now, collector.original_now)
+        collect.assert_called_once_with(Path(request["collector"]), request["config"], "fixture", cutoff, 30,
+                                        cycle_deadline=160)
 
     def test_private_capture_prefers_valid_candidate_progress_over_immutable_seed(self):
         zone = dt.timezone(dt.timedelta(hours=8))

@@ -93,6 +93,81 @@ describe("local Usage projection", () => {
     expect(localUsageView({ ...snapshot, github: undefined })).toEqual(view);
   });
 
+  it("projects fresh, partial and recovered commit evidence without turning unavailable data into zero", async () => {
+    const asOf = Date.parse("2026-11-09T08:00:00Z");
+    const { file, snapshot } = await historyFixture(asOf);
+    const read = async (now = asOf) => {
+      const response = await createLocalUsageProvider({ file, now: () => now }).get();
+      return { response, view: localUsageView(response) };
+    };
+    const fresh = await read();
+    expect(fresh.view.windows!["1"]).toMatchObject({ commits: 8, knownCommits: 8 });
+
+    const prior = structuredClone(snapshot);
+    const partialSource = { status: "partial", commitStatus: "partial" };
+    snapshot.sources = [partialSource];
+    snapshot.status = "partial";
+    for (const rows of [snapshot.daily, snapshot.localHistory.daily]) {
+      const today = rows.at(-1)!;
+      today.categories.work.commits = 1;
+      Object.assign(today, { commitStatus: "partial" });
+    }
+    snapshot.localRepositories.rows[0]!.daily.at(-1)!.commits = 1;
+    snapshot.localRepositories.attribution.at(-1)!.commits = 1;
+    snapshot.localHistory.localRepositories.rows[0]!.daily.at(-1)!.commits = 1;
+    snapshot.localHistory.localRepositories.attribution.at(-1)!.commits = 1;
+    await writeFile(file, JSON.stringify(snapshot));
+    const partial = await read(asOf + 16 * 60_000);
+    expect(partial.response.status).toBe("stale");
+    expect(partial.response.windows!["1"]).toMatchObject({ commits: null, knownCommits: 1,
+      coverage: "partial", categories: { work: { commits: null, knownCommits: 1 } } });
+    expect(partial.view.windows!["1"]).toMatchObject({ commits: null, knownCommits: 1 });
+    expect(partial.view.trend.at(-1)).toMatchObject({ commits: null, knownCommits: 1 });
+
+    for (const rows of [snapshot.daily, snapshot.localHistory.daily]) {
+      const today = rows.at(-1)!;
+      (today.categories.personal as { commits: number | null }).commits = null;
+    }
+    await writeFile(file, JSON.stringify(snapshot));
+    const stillKnown = await read();
+    expect(stillKnown.view.windows!["1"]).toMatchObject({ commits: null, knownCommits: 1 });
+    const unavailable = structuredClone(snapshot);
+    for (const rows of [unavailable.daily, unavailable.localHistory.daily]) {
+      for (const category of Object.values(rows.at(-1)!.categories)) {
+        (category as { commits: number | null }).commits = null;
+      }
+    }
+    await writeFile(file, JSON.stringify(unavailable));
+    expect((await read()).view.windows!["1"].knownCommits).toBeNull();
+
+    await writeFile(file, JSON.stringify(prior));
+    const recovered = await read();
+    expect(recovered.view.windows!["1"]).toMatchObject({ commits: 8, knownCommits: 8 });
+  });
+
+  it("keeps partial and unavailable legacy counts while retaining attributable repository commits", async () => {
+    const asOf = Date.parse("2026-11-09T08:00:00Z");
+    const { file, snapshot } = await historyFixture(asOf);
+    const today = snapshot.daily.at(-1)!;
+    const yesterday = snapshot.daily.at(-2)!;
+    const historyToday = snapshot.localHistory.daily.at(-1)!;
+    const historyYesterday = snapshot.localHistory.daily.at(-2)!;
+    (today.categories.personal as { commits: number | null }).commits = null;
+    (historyToday.categories.personal as { commits: number | null }).commits = null;
+    Object.assign(today, { commitStatus: "partial" });
+    Object.assign(historyToday, { commitStatus: "partial" });
+    for (const category of Object.values(yesterday.categories)) (category as { commits: number | null }).commits = null;
+    for (const category of Object.values(historyYesterday.categories)) (category as { commits: number | null }).commits = null;
+    Object.assign(yesterday, { commitStatus: "unavailable" });
+    Object.assign(historyYesterday, { commitStatus: "unavailable" });
+    await writeFile(file, JSON.stringify(snapshot));
+    const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(response.windows!["1"]).toMatchObject({ commits: null, coverage: "partial",
+      repositories: { rows: [{ id: "a".repeat(64), commits: 8 }] } });
+    expect(response.trend.at(-2)).toMatchObject({ commits: null, coverage: "partial" });
+    expect(response.windows!["7"].commits).toBeNull();
+  });
+
   it.each(["ready", "partial"] as const)("retains %s token history through unavailable baseline and recent rows without changing short windows", async (tokenStatus) => {
     const asOf = Date.parse("2026-11-09T08:00:00Z");
     const { file, snapshot } = await historyFixture(asOf);
@@ -392,13 +467,14 @@ describe("local Usage projection", () => {
     await writeFile(file, JSON.stringify(snapshot));
     const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
     expect(response.windows?.["1"].comparison.known).toBeUndefined();
-    expect(response.windows?.["1"]).toMatchObject({ prs: 4, commits: 8, newTokens: 56, totalTokens: 256,
+    expect(response.windows?.["1"]).toMatchObject({ prs: 4, commits: null, knownCommits: 8, newTokens: 56, totalTokens: 256,
       tokenCoverage: "partial", comparison: { prs: 100, commits: null, totalTokens: null,
         categories: { work: { prs: 100, commits: null } } },
-      repositories: { rows: [{ prs: 4, commits: 8, comparison: { prs: 100, commits: null } }] } });
+      categories: { work: { commits: null, knownCommits: 8 } },
+      repositories: { rows: [{ prs: 4, commits: null, knownCommits: 8, comparison: { prs: 100, commits: null } }] } });
     expect(response.windows?.["7"].comparison).toMatchObject({ prs: (16 - 7) / 7 * 100, commits: null, totalTokens: null });
     expect(response.windows?.["30"].comparison).toMatchObject({ prs: 30, commits: null, totalTokens: null });
-    expect(response.trend.at(-1)).toMatchObject({ commits: 8, newTokens: 56, totalTokens: 256,
+    expect(response.trend.at(-1)).toMatchObject({ commits: null, knownCommits: 8, newTokens: 56, totalTokens: 256,
       wow: { prs: 300, commits: null, newTokens: null, totalTokens: null } });
   });
 
@@ -622,7 +698,10 @@ describe("local Usage projection", () => {
     const fresh = await provider.get();
     expect(fresh.status).toBe("ready");
     now++;
-    expect(await provider.get()).toEqual({ ...fresh, status: "stale" });
+    const stale = await provider.get();
+    expect(stale.status).toBe("stale");
+    expect(stale.windows?.["1"]).toMatchObject({ commits: null, knownCommits: 2 });
+    expect(stale.trend.at(-1)).toMatchObject({ commits: null, knownCommits: 2 });
     snapshot.updatedAt = now;
     await writeFile(file, JSON.stringify(snapshot));
     expect(await provider.get()).toMatchObject({ status: "ready", asOf: now, windows: { "1": { prs: 1, commits: 2 } } });
@@ -777,6 +856,10 @@ describe("local Usage projection", () => {
     await writeFile(file, JSON.stringify(input));
     expect((await createLocalUsageProvider({ file, now: () => asOf }).get()).windows?.["1"]).toMatchObject({ prs: 1,
       repositories: { coverage: "unavailable", rows: [] } });
+    Object.assign(input.daily.find((row) => row.day === "2026-11-03")!.categories.personal, { commits: null });
+    await writeFile(file, JSON.stringify(input));
+    expect((await createLocalUsageProvider({ file, now: () => asOf }).get()).windows?.["1"]).toMatchObject({ commits: null,
+      repositories: { coverage: "unavailable", rows: [] } });
   });
 });
 
@@ -871,8 +954,9 @@ describe("daily model attribution and Activities list estimates", () => {
 
   it("uses the same reconciled days in China-calendar windows and trends with coverage-qualified prices", async () => {
     const { file, snapshot } = await fixture(asOf);
-    const priced = [model("gpt-6.2-sol", 2, 4, 45), model("gpt-6.2-sol", 1, 0, 1, "pi")];
-    const unknown = model("activities-unpriced-fixture", 7, 0, 4);
+    const priced = [model("gpt-6.2-sol", 2, 4, 45), model("gpt-6.2-sol", 1, 0, 1, "pi"),
+      model("gemini-4-hydrogen", 5, 0, 2, "opencode")];
+    const unknown = model("activities-unpriced-fixture", 2, 0, 2);
     const older = day(endDay, -61), legacy = day(endDay, -62);
     await writeFile(file, JSON.stringify({ ...snapshot, trendHistory: { version: 1, daily: [
       { day: legacy, tokenStatus: "ready", newTokens: 14, cacheRead: 50, totalTokens: 64 },
@@ -884,9 +968,10 @@ describe("daily model attribution and Activities list estimates", () => {
     expect(windows["1"]).toMatchObject({ startDay: endDay, endDay, newTokens: 14, cacheRead: 50, totalTokens: 64,
       tokenDetails: { input: 10, output: 4, estimatedCost: { coverage: "partial" }, models: { coverage: "ready", rows: [
         { model: "gpt-6.2-sol", input: 3, output: 4, cacheRead: 46, totalTokens: 53, estimatedCost: { coverage: "ready" } },
-        { model: "activities-unpriced-fixture", totalTokens: 11, estimatedCost: { coverage: "unavailable", usd: null } },
+        { model: "gemini-4-hydrogen", input: 5, output: 0, cacheRead: 2, totalTokens: 7, estimatedCost: { coverage: "ready" } },
+        { model: "activities-unpriced-fixture", totalTokens: 4, estimatedCost: { coverage: "unavailable", usd: null } },
       ] } } });
-    expect(windows["1"].tokenDetails!.estimatedCost.usd).toBeCloseTo(50.6 / 1e6, 12);
+    expect(windows["1"].tokenDetails!.estimatedCost.usd).toBeCloseTo(58.25 / 1e6, 12);
     expect(response.trend.at(-1)?.tokenDetails).toEqual({ ...windows["1"].tokenDetails, cacheRead: 50 });
     expect(response.history?.find((row) => row.day === endDay)?.tokenDetails).toEqual(response.trend.at(-1)?.tokenDetails);
     expect(response.history?.find((row) => row.day === older)?.tokenDetails).toMatchObject({
@@ -897,8 +982,8 @@ describe("daily model attribution and Activities list estimates", () => {
     for (const key of ["7", "30"] as const) {
       const window = windows[key];
       expect(window.tokenDetails).toMatchObject({ input: window.days * 10, output: window.days * 4,
-        models: { rows: [{ totalTokens: window.days * 64 - 11 }, { totalTokens: 11 }] } });
-      expect(window.tokenDetails!.estimatedCost.usd).toBeCloseTo((50.6 + (window.days - 1) * 65) / 1e6, 12);
+        models: { rows: [{ totalTokens: window.days * 64 - 11 }, { totalTokens: 7 }, { totalTokens: 4 }] } });
+      expect(window.tokenDetails!.estimatedCost.usd).toBeCloseTo((58.25 + (window.days - 1) * 65) / 1e6, 12);
     }
   });
 

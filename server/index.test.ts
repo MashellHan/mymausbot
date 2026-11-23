@@ -183,6 +183,7 @@ const connectorLinkRequests: Array<{ toolkit: string; alias?: string }> = [];
 let connectorAuthConfigs: Array<{ id: string; status: string; is_composio_managed: boolean; toolkit: { slug: string } }> = [];
 const connectorSessionAuthConfigs: Array<Record<string, string> | undefined> = [];
 const connectorAuthConfigEdits: Array<{ id: string; body: unknown }> = [];
+let connectorSessionStatusOverride: number | null = null;
 const connectorRelayCalls: Array<{ transportSessionId: string; body: any }> = [];
 const browserCapabilityCalls: Array<{ operation: string; authorization?: string; body: any }> = [];
 let browserRevokeFailuresRemaining = 0;
@@ -942,6 +943,10 @@ beforeAll(async () => {
       return res.end(JSON.stringify(id ? found ?? { error: { message: "Auth config not found" } } : { items: connectorAuthConfigs }));
     }
     if (req.url?.startsWith("/api/v3.1/tool_router/session")) {
+      if (connectorSessionStatusOverride !== null) {
+        res.writeHead(connectorSessionStatusOverride, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: { message: `session refused (${connectorSessionStatusOverride})` } }));
+      }
       if (req.headers["x-api-key"] !== "ak_good") {
         res.writeHead(401, { "content-type": "application/json" });
         return res.end(JSON.stringify({ error: { message: "invalid project key" } }));
@@ -12842,6 +12847,63 @@ describe("harness HTTP API", () => {
       expect(rejected.body.error).toMatch(/connected apps are not enabled/i);
     } finally {
       held?.close();
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
+  it("preserves HTTP 401/403 project-session refusals on /api/internal/connectors/mcp so the bridge lists no fallback tools", async () => {
+    expect((await api("PUT", "/api/config", { composio: { apiKey: "ak_good" } })).status).toBe(200);
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    let proxy: ChildProcess | undefined;
+    try {
+      expect((await api("PATCH", `/api/bots/${bot.id}`, { composio: true })).status).toBe(200);
+      const token = await mintTestCapability(BASE, bot.id, bot.threadId, { kind: "connectors" });
+      for (const expectedStatus of [401, 403] as const) {
+        connectorSessionStatusOverride = expectedStatus;
+        const direct = await fetch(`${BASE}/api/internal/connectors/mcp`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+        });
+        expect(direct.status).toBe(expectedStatus);
+
+        proxy = spawn(process.execPath, [join(SERVER_DIR, "connector-proxy.ts")], {
+          env: {
+            ...process.env,
+            OMB_CONNECTOR_UPSTREAM_URL: `${BASE}/api/internal/connectors/mcp`,
+            OMB_CONNECTOR_UPSTREAM_HEADERS: JSON.stringify({ authorization: `Bearer ${token}` }),
+            OMB_HARNESS_URL: BASE,
+            OMB_CONNECTOR_TOKEN: token,
+            OMB_BOT_ID: bot.id,
+            OMB_THREAD_ID: bot.threadId,
+          },
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+        const answer = await new Promise<Record<string, any>>((resolve, reject) => {
+          let stdout = "";
+          const timer = setTimeout(() => reject(new Error(`connector-proxy timed out (${stdout})`)), 10_000);
+          proxy!.stdout!.on("data", (chunk: Buffer) => {
+            stdout += chunk.toString();
+            const nl = stdout.indexOf("\n");
+            if (nl >= 0) {
+              clearTimeout(timer);
+              resolve(JSON.parse(stdout.slice(0, nl)) as Record<string, any>);
+            }
+          });
+          proxy!.once("exit", (code) => {
+            clearTimeout(timer);
+            reject(new Error(`connector-proxy exited early (${code}): ${stdout}`));
+          });
+          proxy!.stdin!.write(`${JSON.stringify({ jsonrpc: "2.0", id: 11, method: "tools/list", params: {} })}\n`);
+        });
+        expect(answer).toEqual({ jsonrpc: "2.0", id: 11, result: { tools: [] } });
+        proxy.kill("SIGKILL");
+        proxy = undefined;
+      }
+    } finally {
+      proxy?.kill("SIGKILL");
+      connectorSessionStatusOverride = null;
+      await api("PUT", "/api/config", { composio: { apiKey: "" } });
       await api("DELETE", `/api/bots/${bot.id}`);
     }
   });

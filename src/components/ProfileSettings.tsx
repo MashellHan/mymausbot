@@ -2,6 +2,8 @@ import { useEffect, useId, useRef, useState } from "react";
 import { api, useStore, type ConfigStatus } from "@/state/store";
 import { t } from "@/lib/i18n";
 import { avatarMarks } from "@/lib/avatar-marks";
+import { remoteFetch } from "@/lib/pwa-config";
+import { useRemoteMediaUrl } from "@/lib/use-remote-media";
 import { saveTeamProfile } from "@/lib/own-profile";
 import { IMAGE_MAX_BYTES, imageAttachmentFromFile, isImageFile } from "@/lib/composer-attachments";
 import type { LocaleKey } from "@/locales";
@@ -67,6 +69,7 @@ function croppedPhoto(file: File, zoom: number): Promise<File> {
 function ProfilePhoto({ initials }: { initials: string }) {
   const { state, dispatch } = useStore();
   const avatarUrl = state.config?.profile?.avatarUrl ?? "";
+  const remoteAvatar = useRemoteMediaUrl(avatarUrl || null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<PhotoDraft | null>(null);
@@ -136,7 +139,7 @@ function ProfilePhoto({ initials }: { initials: string }) {
               <button type="button" className="rounded-md bg-control px-2 py-1 text-[12px] text-ink hover:bg-raised-hover" disabled={busy} onClick={() => save(draft)}>{t("settings.profile.avatar.save")}</button>
             </div>
           </div>
-        ) : avatarUrl ? <img {...avatarMarks("person", "picture")} src={avatarUrl} alt="" className="size-10 rounded-full object-cover" />
+        ) : avatarUrl && remoteAvatar.url ? <img {...avatarMarks("person", "picture")} src={remoteAvatar.url} alt="" className="size-10 rounded-full object-cover" />
           : <span {...avatarMarks("person", "initials")} aria-hidden="true" className="flex size-10 shrink-0 items-center justify-center rounded-full bg-ink/[0.08] text-[14px] font-medium leading-[18px] text-ink-secondary">{initials}</span>}
         <label className="ui-button ui-button-md cursor-pointer rounded-full">
           {busy ? t("settings.profile.avatar.uploading") : t(avatarUrl ? "settings.profile.avatar.change" : "settings.profile.avatar.choose")}
@@ -170,7 +173,7 @@ export function ProfileFields() {
         .catch(() => {});
       return;
     }
-    void fetch("/api/config", {
+    void remoteFetch("/api/config", {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ profile: { name: name.trim(), email: email.trim().toLowerCase() } }),
@@ -210,10 +213,12 @@ function ProfileAvatar({ profile }: { profile?: { name?: string; email?: string;
   const [failed, setFailed] = useState<string | null>(null);
   const initials = profileInitials(profile);
   const photo = profile?.avatarUrl && failed !== profile.avatarUrl ? profile.avatarUrl : null;
+  const remotePhoto = useRemoteMediaUrl(photo);
   return (
     <span {...avatarMarks("person", photo ? "picture" : "initials")} className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-full bg-ink/[0.06] text-[15px] font-medium text-ink-secondary">
-      {photo ? <img src={photo} alt="" onError={() => setFailed(photo)} className="size-full object-cover" />
-        : initials !== "?" ? initials : <User size={20} aria-hidden="true" />}
+      {photo && !remotePhoto.failed ? (
+        remotePhoto.url ? <img src={remotePhoto.url} alt="" onError={() => setFailed(photo)} className="size-full object-cover" /> : null
+      ) : initials !== "?" ? initials : <User size={20} aria-hidden="true" />}
     </span>
   );
 }
