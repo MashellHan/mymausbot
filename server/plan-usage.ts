@@ -312,10 +312,11 @@ export async function loadPlanUsage(input: {
 }): Promise<PlanUsageReport> {
   const now = input.now ?? Date.now();
   const accounts = input.accounts.filter((account) => account.driver !== "claude");
-  const key = planUsageCacheKey(accounts);
+  const accountKeys = accounts.map(planUsageAccountKey);
+  const key = accountKeys.join("\n");
   if (!input.refresh && cachedReport && now - cachedReport.at < PLAN_USAGE_CACHE_MS) { // a read of more accounts serves a caller that asks for some of them (the limit clock)
     if (cachedReport.key === key) return cachedReport.report;
-    if (accounts.every((account) => cachedReport!.accounts.has(planUsageCacheKey([account])))) return { ...cachedReport.report, providers: cachedReport.report.providers.filter((row) => accounts.some((account) => account.id === row.id)) };
+    if (accountKeys.every((accountKey) => cachedReport!.accounts.has(accountKey))) return { ...cachedReport.report, providers: cachedReport.report.providers.filter((row) => accounts.some((account) => account.id === row.id)) };
   }
   const report = await fetchPlanUsage(accounts, {
     fetch: input.fetch ?? ((url, init) => globalThis.fetch(url, init)),
@@ -323,7 +324,7 @@ export async function loadPlanUsage(input: {
     now: () => now,
     timeoutMs: input.timeoutMs,
   });
-  cachedReport = { at: now, key, accounts: new Set(accounts.map((account) => planUsageCacheKey([account]))), report };
+  cachedReport = { at: now, key, accounts: new Set(accountKeys), report };
   return report;
 }
 
@@ -702,15 +703,12 @@ function grokPlan(settings: unknown): string | null {
   return planLabel(nested?.subscription_tier_display ?? root.subscription_tier_display);
 }
 
-function planUsageCacheKey(accounts: PlanAccount[]): string {
-  return accounts.map((account) => {
-    const environment = Object.entries(account.environment)
-      .filter((entry): entry is [string, string] => typeof entry[1] === "string")
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-      .map(([name, value]) => `${name}=${value}`)
-      .join("\n");
-    return [account.id, account.driver, account.name, account.configDir ?? "", environment, account.noUsage ? "no-usage" : "usage"].join("\u0000");
-  }).join("\n");
+export function planUsageAccountKey(account: PlanAccount): string {
+  const environment = Object.entries(account.environment)
+    .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  const identity = [account.id, account.driver, account.name, account.configDir ?? "", environment, account.noUsage === true];
+  return createHash("sha256").update(JSON.stringify(identity)).digest("hex");
 }
 
 function claudeCredentialFromText(text: string | null, now: number): PlanCredential {

@@ -131,17 +131,25 @@ export function windowLabel(window: LimitWindowName): string {
 
 export interface ResetMarker { engine: string; name: string; at: number }
 
+function actionableResetAt(limit: EngineLimit): number | null {
+  return limit.checkedAt === undefined || limit.held ? limit.resetsAt : null;
+}
+
 /** The calendar's markers: each engine's next known reset inside the range. */
 export function resetMarkers(engines: readonly EngineLimit[], from: number, to: number, now = Date.now()): ResetMarker[] {
-  return engines.flatMap((limit) => limit.resetsAt !== null && limit.resetsAt >= Math.max(from, now) && limit.resetsAt < to
-    ? [{ engine: limit.engine, name: limit.name, at: limit.resetsAt }] : []);
+  const start = Math.max(from, now);
+  return engines.flatMap((limit) => {
+    const at = actionableResetAt(limit);
+    return at !== null && at >= start && at < to ? [{ engine: limit.engine, name: limit.name, at }] : [];
+  });
 }
 
 /** Schedules whose next run comes before `engine`'s reset, on a bot that works on that engine: "Move to after reset". */
 export function dueBeforeReset(routines: readonly Routine[], botEngine: (botId: string) => string | undefined, limit: EngineLimit, now = Date.now()): Routine[] {
-  if (limit.resetsAt === null || limit.resetsAt <= now) return [];
+  const at = actionableResetAt(limit);
+  if (at === null || at <= now) return [];
   return routines.filter((routine) => routine.enabled && routine.schedule.type !== "limit_reset" && routine.nextRunAt !== null &&
-    routine.nextRunAt < limit.resetsAt! + AFTER_RESET_MS && botEngine(routine.botId) === limit.engine);
+    routine.nextRunAt < at + AFTER_RESET_MS && botEngine(routine.botId) === limit.engine);
 }
 
 /** "When your Claude limit resets", or "Each time your Claude limit resets". */
