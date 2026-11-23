@@ -34,6 +34,8 @@ export interface DispatchDeps {
   withholdHandoff(threadId: string): (turnId: string) => void;
   /** A replay answered without the engine, so the engine's session must learn that line and its reply from the conversation. */
   contextChanged(botId: string, threadId: string): void;
+  /** Notified when a fallback engine turn starts under the replay's turnId; the start itself stays off the bus. */
+  fallbackStarted?(event: Extract<RuntimeEvent, { type: "turn.started" }>): void;
 }
 
 type Start = (input: SendTurnInput) => Promise<TurnStartResult>;
@@ -127,7 +129,10 @@ export class SavedStepsDispatch {
     if (!run || run.phase !== "fallback") return false;
     const kept = retriedTurnEvent(run, event);
     if (kept === null) return false;
-    if (kept === "dropped") return true;
+    if (kept === "dropped") {
+      if (event.type === "turn.started") this.deps.fallbackStarted?.({ ...event, turnId: run.turnId });
+      return true;
+    }
     if (kept.type === "turn.completed") this.forgetRun(run);
     this.deps.publish(kept);
     return true;
