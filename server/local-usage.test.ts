@@ -800,7 +800,7 @@ describe("local Usage projection", () => {
     await writeFile(file, JSON.stringify(input));
     expect((await createLocalUsageProvider({ file, now: () => asOf }).get()).windows?.["1"]).toMatchObject({ prs: 1,
       repositories: { coverage: "unavailable", rows: [] } });
-    input.daily.find((row) => row.day === "2026-11-03")!.categories.personal.commits = null;
+    Object.assign(input.daily.find((row) => row.day === "2026-11-03")!.categories.personal, { commits: null });
     await writeFile(file, JSON.stringify(input));
     expect((await createLocalUsageProvider({ file, now: () => asOf }).get()).windows?.["1"]).toMatchObject({ commits: null,
       repositories: { coverage: "unavailable", rows: [] } });
