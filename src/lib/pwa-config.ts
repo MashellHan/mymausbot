@@ -33,10 +33,13 @@ export function defaultDeviceLabel(userAgent: string = typeof navigator !== "und
 }
 
 export const OMB_PWA_DB_NAME = "omb-pwa-v1";
-export const OMB_PWA_DB_VERSION = 2;
+export const OMB_PWA_DB_VERSION = 3;
 export const OMB_PWA_AUTH_STORE = "auth";
 export const OMB_PWA_PREFS_STORE = "prefs";
 export const OMB_PWA_SNAPSHOT_STORE = "snapshot";
+export const OMB_PWA_OUTBOX_STORE = "outbox";
+export const OMB_PWA_OUTBOX_THREAD_INDEX = "byOwnerThreadSeq";
+export const OMB_PWA_OUTBOX_LEASES_STORE = "outbox_leases";
 export const OMB_PWA_AUTH_ACTIVE_KEY = "active";
 export const DEFAULT_PWA_RELAY_ORIGIN = "https://relay.mxhan.com";
 
@@ -276,6 +279,13 @@ export function openPwaDb(idbFactory?: IDBFactory): Promise<IDBDatabase | null> 
       }
       if (!db.objectStoreNames.contains(OMB_PWA_SNAPSHOT_STORE)) {
         db.createObjectStore(OMB_PWA_SNAPSHOT_STORE);
+      }
+      if (!db.objectStoreNames.contains(OMB_PWA_OUTBOX_STORE)) {
+        const outbox = db.createObjectStore(OMB_PWA_OUTBOX_STORE, { keyPath: "sendId" });
+        outbox?.createIndex?.(OMB_PWA_OUTBOX_THREAD_INDEX, ["ownerKey", "threadId", "seq"], { unique: false });
+      }
+      if (!db.objectStoreNames.contains(OMB_PWA_OUTBOX_LEASES_STORE)) {
+        db.createObjectStore(OMB_PWA_OUTBOX_LEASES_STORE);
       }
     };
     req.onsuccess = () => resolve(req.result);

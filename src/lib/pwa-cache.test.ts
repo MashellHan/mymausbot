@@ -43,7 +43,7 @@ function createFakeIdbFactory(): IDBFactory {
         objectStoreNames: { contains: (name: string) => stores.has(name) },
         createObjectStore: (name: string) => {
           ensureStore(name);
-          return {} as IDBObjectStore;
+          return { createIndex: () => ({}) } as unknown as IDBObjectStore;
         },
         close: () => {},
         transaction: (storeNames: string | string[]) => {
@@ -57,6 +57,19 @@ function createFakeIdbFactory(): IDBFactory {
               if (!names.includes(name)) throw new Error(`Missing store ${name}`);
               const store = ensureStore(name);
               return {
+                getAll: () => {
+                  const req = {
+                    result: undefined as unknown,
+                    error: null as DOMException | null,
+                    onsuccess: null as ((ev: Event) => void) | null,
+                    onerror: null as ((ev: Event) => void) | null,
+                  };
+                  queueMicrotask(() => {
+                    req.result = [...store.values()];
+                    req.onsuccess?.(new Event("success"));
+                  });
+                  return req as unknown as IDBRequest;
+                },
                 get: (key: string) => {
                   const req = {
                     result: undefined as unknown,
@@ -206,17 +219,33 @@ describe("pwa-cache", () => {
     expect(await readPwaPrefs(ownerA, idb)).toBeNull();
   });
 
-  it("resets transient running flags when trimming bots and groups", () => {
-    const trimmedBot = trimBotForSnapshot(makeBot("b1", 10), 5);
+  it("resets transient running flags and strips optimistic rows when trimming bots and groups", () => {
+    const botWithOptimistic = {
+      ...makeBot("b1", 10),
+      messages: [
+        ...makeBot("b1", 10).messages,
+        { id: "optimistic-pending-1", role: "user" as const, kind: "text" as const, text: "queued", at: 9_999, sendId: "pending-1" },
+      ],
+    };
+    const trimmedBot = trimBotForSnapshot(botWithOptimistic, 5);
     expect(trimmedBot.messages).toHaveLength(5);
+    expect(trimmedBot.messages.some((m) => m.id.startsWith("optimistic-"))).toBe(false);
     expect(trimmedBot.hasMore).toBe(true);
     expect(trimmedBot.busy).toBe(false);
     expect(trimmedBot.turnStartedAt).toBeNull();
     expect(trimmedBot.waitingForTeammates).toBe(false);
     expect(trimmedBot.tasks?.[0]?.busy).toBe(false);
 
-    const trimmedGroup = trimGroupForSnapshot(makeGroup("g1", 3), 5);
+    const groupWithOptimistic = {
+      ...makeGroup("g1", 3),
+      messages: [
+        ...makeGroup("g1", 3).messages,
+        { id: "optimistic-pending-2", role: "user" as const, kind: "text" as const, text: "queued", at: 9_999, sendId: "pending-2" },
+      ],
+    };
+    const trimmedGroup = trimGroupForSnapshot(groupWithOptimistic, 5);
     expect(trimmedGroup.messages).toHaveLength(3);
+    expect(trimmedGroup.messages.some((m) => m.id.startsWith("optimistic-"))).toBe(false);
     expect(trimmedGroup.hasMore).toBe(false);
     expect(trimmedGroup.busyBotId).toBeNull();
   });
@@ -297,6 +326,6 @@ describe("pwa-cache", () => {
     expect(sw).not.toContain("indexedDB");
     expect(sw).not.toContain("deleteDatabase");
     expect(OMB_PWA_DB_NAME).toBe("omb-pwa-v1");
-    expect(OMB_PWA_DB_VERSION).toBe(2);
+    expect(OMB_PWA_DB_VERSION).toBe(3);
   });
 });

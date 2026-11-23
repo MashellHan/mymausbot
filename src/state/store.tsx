@@ -17,7 +17,7 @@ import { bumpThreadUpdatedAt, mergeTaskStamps, rewindThreadUpdatedAt } from "./t
 import { botOpensTo, closeTrayUnlessShown, closeUnpinnedTray, openBot, openThread, visibleNotificationThread, withRememberedTrayPin } from "./thread-navigation";
 import { patchGroupTask } from "./thread-edits"; import { unreadBeyondFrame, wholeBotFrame } from "./bot-thread-frame";
 import type { EngineInstall } from "./engine-install";
-import { optimisticMessageId, optimisticUserMessage, sendArrived, sendReconciled } from "./optimistic-send";
+import { nextLiveSendNonce, optimisticMessageId, optimisticUserMessage, sendArrived, sendReconciled } from "./optimistic-send";
 import { patchedGroups, roomAnswers, snapshotPatch } from "./room-frames";
 import { savedStateAction, type SavedOwner, type SavedSnapshot } from "./saved-state";
 import { createOlderMessagesLoader } from "./older-message-pages";
@@ -66,7 +66,7 @@ import { createBotPatchQueue, flushWhenLeaving, keepaliveFits, type BotUpdatePat
 import { liveCallFromFrame, nextLiveCallLookup } from "./live-call";
 import { isNoAiRefusal, useChatErrorClear } from "./chat-error";
 import { openLiveEvents, publishLiveFrame, publishMissedFrames, withoutScreenPixels } from "@/lib/live-events";
-import { remoteFetch } from "@/lib/pwa-config"; import { setMacOffline } from "@/lib/pwa-transport"; import { initialStoreStateFromPwaCache, reduceHydrateFromCache, resolveLiveResumeId, usePwaCacheSync, type HydrateFromCacheAction } from "./pwa-boot";
+import { getPwaAuth, isRemotePwaMode, remoteFetch } from "@/lib/pwa-config"; import { setMacOffline } from "@/lib/pwa-transport"; import { initialStoreStateFromPwaCache, reduceHydrateFromCache, resolveLiveResumeId, usePwaCacheSync, type HydrateFromCacheAction } from "./pwa-boot"; import { enqueuePwaBotSend, enqueuePwaGroupSend, noteOutboxSendArrived, overlayPwaOutboxOnState } from "./pwa-outbox";
 import { noteRefusedRequest } from "@/lib/session-ended";
 import { unlessRefused } from "@/lib/admin-scope";
 import { olderRunsSince, ROUTINE_RUNS_WINDOW_MS, trimRoutineRuns, withOlderRoutineRuns } from "./routine-runs";
@@ -156,6 +156,7 @@ export interface Message extends Pick<import("../../shared/wire").WireMessage, "
   dataResult?: import("../../shared/wire").WireMessage["dataResult"];
   queued?: boolean;
   queueId?: string;
+  liveSendNonce?: number; outboxRestored?: boolean;
 }
 
 export type GroupDefaultResponder = import("../../shared/wire").GroupDefaultResponder;
@@ -750,7 +751,8 @@ export type Action =
   | { type: "cloudHowTo"; open: boolean }
   | { type: "toggleWelcome"; open?: boolean }
   | { type: "toggleTour"; open?: boolean }
-  | { type: "updateBot"; botId: string; patch: BotUpdatePatch };
+  | { type: "updateBot"; botId: string; patch: BotUpdatePatch }
+  | { type: "pwaOutboxOverlay" };
 
 function reconcileModelVariantSessions(state: AppState): AppState {
   const sessions = Object.entries(state.modelVariantSessions);
@@ -879,6 +881,7 @@ export function reducer(state: AppState, action: Action): AppState {
   if (isNotificationFeedAction(action)) return { ...state, notifications: reduceNotificationFeed(state.notifications, action) };
   switch (action.type) {
     case "hydrateFromCache": return reduceHydrateFromCache(state, action);
+    case "pwaOutboxOverlay": return overlayPwaOutboxOnState(state);
     case "hydrate": {
       const known = (id: string) => action.bots.some((b) => b.id === id) || action.groups.some((g) => g.id === id);
       const resume = action.resumeId;
@@ -911,10 +914,10 @@ export function reducer(state: AppState, action: Action): AppState {
       };
       const held = [...hydrated.bots, ...hydrated.groups].find((owner) => owner.threadId === state.unreadDivider?.threadId);
       if (held) hydrated.unreadDivider = placeUnreadDivider(state.unreadDivider, held.threadId, visibleMessages(held), Boolean(held.hasMore));
-      return reconcileSnapshotQueues(
+      return overlayPwaOutboxOnState(reconcileSnapshotQueues(
         action.botQueuedMessages ? replaceBotQueues(hydrated, action.botQueuedMessages) : hydrated,
         [...action.bots, ...action.groups],
-      );
+      ));
     }
     case "loadOlderMessages":
       return state.loadingOlder[action.threadId]
@@ -1010,7 +1013,7 @@ export function reducer(state: AppState, action: Action): AppState {
     case "groupPatched": {
       const fenced = action.group.messages ? bumpTranscriptGeneration(state, action.group.threadId) : state;
       const groups = patchedGroups(state.groups, action.group), held = action.group.messages && groups.find((g) => g.id === action.group.id && g.threadId === state.unreadDivider?.threadId);
-      return { ...fenced, groups, ...(held ? { unreadDivider: placeUnreadDivider(state.unreadDivider, held.threadId, visibleMessages(held), Boolean(held.hasMore)) } : {}) };
+      return overlayPwaOutboxOnState({ ...fenced, groups, ...(held ? { unreadDivider: placeUnreadDivider(state.unreadDivider, held.threadId, visibleMessages(held), Boolean(held.hasMore)) } : {}) });
     }
     case "groupSnapshot": {
       const group = snapshotPatch(state, action);
@@ -1178,7 +1181,7 @@ export function reducer(state: AppState, action: Action): AppState {
       const confirmed = demotionNotice
         ? { ...patched, notice: demotionNotice }
         : patched;
-      return reconcileModelVariantSessions(confirmed);
+      return overlayPwaOutboxOnState(reconcileModelVariantSessions(confirmed));
     }
     case "messageAdded": {
       const bot = state.bots.find((b) => b.threadId === action.threadId);
@@ -1648,7 +1651,7 @@ export function reducer(state: AppState, action: Action): AppState {
       const threadId = action.threadId ?? bot?.threadId;
       if (!bot || threadId !== bot.threadId) return animated;
       if (bot.messages.some((message) => message.sendId === action.sendId)) return animated;
-      const message = optimisticUserMessage(action.text, action.sendId, action.replyToId, bot.activeLeafId);
+      const message = optimisticUserMessage(action.text, action.sendId, action.replyToId, bot.activeLeafId, undefined, { liveSendNonce: nextLiveSendNonce() });
       message.optimisticThreadOrderAt = bot.tasks?.find((task) => task.threadId === threadId)?.lastThreadOrderAt;
       return bumpThreadUpdatedAt(updateBot(animated, bot.id, (current) => ({
         ...current,
@@ -1665,12 +1668,7 @@ export function reducer(state: AppState, action: Action): AppState {
       if (bot.messages.some((message) => message.sendId === action.sendId)) return animated;
       const source = bot.messages.find((message) => message.id === action.messageId);
       if (!source || source.role !== "user" || source.kind !== "text") return animated;
-      const message = optimisticUserMessage(
-        action.text.trim(),
-        action.sendId,
-        source.replyToId,
-        source.parentId ?? null,
-      );
+      const message = optimisticUserMessage(action.text.trim(), action.sendId, source.replyToId, source.parentId ?? null, undefined, { liveSendNonce: nextLiveSendNonce() });
       message.optimisticThreadOrderAt = bot.tasks?.find((task) => task.threadId === threadId)?.lastThreadOrderAt;
       return bumpThreadUpdatedAt(updateBot(animated, bot.id, (current) => ({
         ...current,
@@ -1737,7 +1735,7 @@ export function reducer(state: AppState, action: Action): AppState {
           unread: Boolean(bot.tasks?.some((task) => task.threadId !== bot.threadId && task.unread)),
           tasks: bot.tasks?.map((task) => task.threadId === bot.threadId ? { ...task, unread: false } : task) }));
       }
-      return reconcileModelVariantSessions(reconcileSnapshotQueues(switched, [action.bot]));
+      return overlayPwaOutboxOnState(reconcileModelVariantSessions(reconcileSnapshotQueues(switched, [action.bot])));
     }
     case "newBot":
       return action.preserveSelection ? state : { ...state, settingsOpen: false, appSettingsOpen: false, pluginsOpen: false, shortcutsOpen: false };
@@ -1777,13 +1775,7 @@ export function reducer(state: AppState, action: Action): AppState {
       if (!group) return state;
       const threadId: string = action.threadId ?? group.threadId;
       if (threadId === group.threadId && group.messages.some((message) => message.sendId === action.sendId)) return state;
-      const message = optimisticUserMessage(
-        action.text,
-        action.sendId,
-        action.replyToId,
-        null,
-        action.mode ?? "chat",
-      );
+      const message = optimisticUserMessage(action.text, action.sendId, action.replyToId, null, action.mode ?? "chat", { liveSendNonce: nextLiveSendNonce() });
       message.optimisticThreadOrderAt = group.tasks?.find((task) => task.threadId === threadId)?.lastThreadOrderAt;
       const stamped = bumpThreadUpdatedAt(state, threadId, message.at, threadId === group.threadId);
       if (threadId !== group.threadId) return stamped;
@@ -2063,9 +2055,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   });
   const [store] = useState(() => createAppStore<AppState, Action, ServerFrame>(reducer, initialStoreStateFromPwaCache(withRememberedTrayPin(restoreBotSettingsSection(initialState)))));
   const rawDispatch = store.dispatch, state = useSyncExternalStore(store.subscribe, store.getState, store.getState);
-  usePwaCacheSync(state);
   const stateRef = useRef(state), selectionRevision = useRef(0);
   stateRef.current = state;
+  usePwaCacheSync(state, rawDispatch, () => stateRef.current);
   const showThreads = useShowThreads();
   const showThreadsRef = useRef(showThreads);
   showThreadsRef.current = showThreads;
@@ -2376,6 +2368,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const threadId =
             action.threadId ?? stateRef.current.bots.find((bot) => bot.id === action.botId)?.threadId;
           const sendId = action.sendId ?? randomUuid();
+          if (threadId && isRemotePwaMode() && getPwaAuth() && enqueuePwaBotSend({ sendId, threadId, targetId: action.botId, text: action.text, replyToId: action.replyToId, dataContext: action.dataContext, pointed: action.pointed, openPage: action.openPage, mode: action.mode, followUp: action.followUp, mentions: action.mentions }, () => waitForExecutionSettings(botBeforeSend ? [botBeforeSend] : [], threadId))) break;
           const arrived = () => {
             const panel = stateRef.current.forkPanel;
             return sendArrived(panel?.kind === "bot" && panel.ownerId === action.botId && panel.threadId === threadId
@@ -2393,16 +2386,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 rawDispatch({ type: "messageAdded", threadId: body.threadId, message: body.message });
                 rawDispatch({ type: "forkPanelMessage", threadId: body.threadId, message: body.message });
               }
-              if (
-                body?.queued &&
-                typeof body.threadId === "string" &&
-                typeof body.queueId === "string"
-              ) {
-                rawDispatch({
-                  type: "optimisticMessageRemoved",
-                  threadId: body.threadId,
-                  sendId,
-                });
+              if (body?.queued && typeof body.threadId === "string" && typeof body.queueId === "string") {
+                rawDispatch({ type: "optimisticMessageRemoved", threadId: body.threadId, sendId });
                 rawDispatch({
                   type: "pendingQueued",
                   threadId: body.threadId,
@@ -2625,6 +2610,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const threadId =
             action.threadId ?? stateRef.current.groups.find((group) => group.id === action.groupId)?.threadId;
           const sendId = action.sendId ?? randomUuid();
+          if (threadId && isRemotePwaMode() && getPwaAuth() && enqueuePwaGroupSend({ sendId, threadId, targetId: action.groupId, text: action.text, replyToId: action.replyToId, mode: action.mode, mentions: action.mentions, pointed: action.pointed, pointedChips: action.pointedChips }, () => waitForExecutionSettings(executionBotsBeforeAction))) break;
           const arrived = () => {
             const panel = stateRef.current.forkPanel;
             return sendArrived(panel?.kind === "group" && panel.ownerId === action.groupId && panel.threadId === threadId
@@ -3092,6 +3078,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           rawDispatch({ type: "botQueues", queues: frame.queues });
           break;
         case "message": {
+          if (typeof frame.message?.sendId === "string") noteOutboxSendArrived(frame.threadId, frame.message.sendId);
           rawDispatch({ type: "messageAdded", threadId: frame.threadId, message: frame.message as Message });
           if (frame.message?.role === "user" && typeof frame.message.queueId === "string") {
             rawDispatch({

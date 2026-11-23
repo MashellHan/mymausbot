@@ -4,12 +4,20 @@ import type { Message } from "./store";
 
 export const optimisticMessageId = (sendId: string): string => `optimistic-${sendId}`;
 
+let liveSendCounter = 0;
+
+export function nextLiveSendNonce(): number {
+  liveSendCounter += 1;
+  return liveSendCounter;
+}
+
 export function optimisticUserMessage(
   text: string,
   sendId: string,
   replyToId?: string,
   parentId?: string | null,
   channelMode?: "chat" | "goal",
+  options?: { liveSendNonce?: number; outboxRestored?: boolean },
 ): Message {
   return {
     id: optimisticMessageId(sendId),
@@ -21,6 +29,8 @@ export function optimisticUserMessage(
     replyToId,
     sendId,
     channelMode,
+    ...(options?.liveSendNonce !== undefined ? { liveSendNonce: options.liveSendNonce } : {}),
+    ...(options?.outboxRestored ? { outboxRestored: true } : {}),
   };
 }
 

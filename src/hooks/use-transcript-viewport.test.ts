@@ -88,7 +88,7 @@ import { forgetTranscriptPositions } from "@/lib/transcript-follow";
 import { noteLiveReplyEvent, resetLiveReplies } from "@/state/live-reply";
 import type { RuntimeEvent } from "../../shared/runtime-events";
 
-type Row = { id: string; role?: "user" | "bot" };
+type Row = { id: string; role?: "user" | "bot"; liveSendNonce?: number; outboxRestored?: boolean };
 const rows = (count: number, from = 0): Row[] => Array.from({ length: count }, (_, index) => ({ id: `m${from + index}` }));
 
 const ROW = 50;
@@ -757,9 +757,17 @@ describe("following a reply and coming back to a conversation", () => {
     const view = mount({ messages: rows(60) });
     readUpTo(view, 300);
     expect(view.current.following).toBe(false);
-    view.rerender({ messages: [...rows(60), { id: "optimistic-1", role: "user" }] });
+    view.rerender({ messages: [...rows(60), { id: "optimistic-1", role: "user", liveSendNonce: 1 }] });
     expect(view.current.following).toBe(true);
     expect(scroller.scrollTop).toBe(scroller.bottom);
+  });
+
+  it("does not jump to the bottom when a persisted outbox row is restored without a live send nonce", () => {
+    const view = mount({ messages: rows(60) });
+    readUpTo(view, 300);
+    expect(view.current.following).toBe(false);
+    view.rerender({ messages: [...rows(60), { id: "optimistic-restored", role: "user", outboxRestored: true }] });
+    expect(view.current.following).toBe(false);
   });
 
   it("does not follow a message someone else sent while the reader is up the page", () => {

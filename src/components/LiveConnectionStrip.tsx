@@ -5,6 +5,12 @@ import { t } from "@/lib/i18n";
 import { retryLiveEvents } from "@/lib/live-events";
 import { useMacOffline } from "@/lib/pwa-connection";
 import { noteRefusedRequest } from "@/lib/session-ended";
+import {
+  discardPriorSessionOutbox,
+  importPriorSessionOutbox,
+  retryAllOutboxSends,
+  useOutboxSummary,
+} from "@/state/pwa-outbox";
 
 export const RECONNECTING_AFTER_MS = 4_000;
 export const CONNECTION_HELP_AFTER_MS = 20_000;
@@ -17,6 +23,7 @@ export function LiveConnectionStrip({ connected, hydrated, cachedHydrated = fals
   const [online, setOnline] = useState(() => typeof navigator === "undefined" || navigator.onLine !== false);
   const [asleep, setAsleep] = useState(cloudAsleep);
   const macOffline = useMacOffline();
+  const outbox = useOutboxSummary();
   useEffect(() => onCloudPower(setAsleep), []);
   useEffect(() => {
     const on = () => setOnline(true), off = () => setOnline(false);
@@ -49,7 +56,8 @@ export function LiveConnectionStrip({ connected, hydrated, cachedHydrated = fals
         : !connected && cachedHydrated
           ? "connecting"
           : null;
-  if (!notice) return null;
+  const hasOutboxActions = outbox.failedCount > 0 || outbox.priorSessionCount > 0;
+  if (!notice && !hasOutboxActions) return null;
   const messageKey =
     notice === "offline"
       ? "liveConnection.offline"
@@ -60,11 +68,46 @@ export function LiveConnectionStrip({ connected, hydrated, cachedHydrated = fals
           : help
             ? "liveConnection.help"
             : "liveConnection.reconnecting";
-  return <div role="status" data-live-connection={notice} className="flex flex-wrap items-center justify-center gap-2 border-b border-hairline/40 bg-panel px-3 py-1.5 text-[13px] text-ink-secondary">
-    {notice === "offline" || notice === "mac-offline" ? <CloudOff size={14} className="shrink-0" aria-hidden="true" /> : <Loader2 size={14} className="shrink-0 animate-spin" aria-hidden="true" />}
-    <span>{t(messageKey)}</span>
-    {(notice === "reconnecting" || notice === "mac-offline") && help && <button type="button" onClick={retryLiveEvents} className="shrink-0 rounded px-2 py-1 text-ink underline underline-offset-2 hover:bg-raised focus-visible:outline-2 focus-visible:outline-offset-2">
-      {t("liveConnection.retry")}
-    </button>}
+  return <div role="status" data-live-connection={notice ?? "outbox"} className="flex flex-wrap items-center justify-center gap-2 border-b border-hairline/40 bg-panel px-3 py-1.5 text-[13px] text-ink-secondary">
+    {notice && (
+      <>
+        {notice === "offline" || notice === "mac-offline" ? <CloudOff size={14} className="shrink-0" aria-hidden="true" /> : <Loader2 size={14} className="shrink-0 animate-spin" aria-hidden="true" />}
+        <span>{t(messageKey)}</span>
+        {(notice === "reconnecting" || notice === "mac-offline") && help && <button type="button" onClick={retryLiveEvents} className="shrink-0 rounded px-2 py-1 text-ink underline underline-offset-2 hover:bg-raised focus-visible:outline-2 focus-visible:outline-offset-2">
+          {t("liveConnection.retry")}
+        </button>}
+      </>
+    )}
+    {outbox.failedCount > 0 && (
+      <button
+        type="button"
+        data-outbox-retry-all
+        onClick={() => void retryAllOutboxSends()}
+        className="shrink-0 rounded px-2 py-1 text-ink underline underline-offset-2 hover:bg-raised focus-visible:outline-2 focus-visible:outline-offset-2"
+      >
+        {t("liveConnection.retryAll", { count: outbox.failedCount })}
+      </button>
+    )}
+    {outbox.priorSessionCount > 0 && (
+      <span data-outbox-prior-session className="flex flex-wrap items-center gap-2">
+        <span>{t("liveConnection.priorOutbox", { count: outbox.priorSessionCount })}</span>
+        <button
+          type="button"
+          data-outbox-import-prior
+          onClick={() => void importPriorSessionOutbox()}
+          className="shrink-0 rounded px-2 py-1 text-ink underline underline-offset-2 hover:bg-raised focus-visible:outline-2 focus-visible:outline-offset-2"
+        >
+          {t("liveConnection.importAndResend")}
+        </button>
+        <button
+          type="button"
+          data-outbox-discard-prior
+          onClick={() => void discardPriorSessionOutbox()}
+          className="shrink-0 rounded px-2 py-1 text-ink-tertiary underline underline-offset-2 hover:bg-raised hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2"
+        >
+          {t("chat.outbox.discard")}
+        </button>
+      </span>
+    )}
   </div>;
 }
