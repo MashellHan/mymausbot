@@ -2,7 +2,9 @@ import { Calendar, CalendarPlus, ChevronRight, Sparkles } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
-import { useStore, type Bot } from "@/state/store";
+import { currentTaskBot, useStore, type Bot } from "@/state/store";
+import { useOwnerOrAdmin } from "@/lib/use-owner-or-admin";
+import { approvalModeFor, modelSwitchNeedsAsk } from "../../../shared/approval-mode";
 import { useChatMoreItems } from "../ChatMoreMenu";
 import { EffortRow, ModelPicker } from "../ModelPicker";
 import type { SidebarMenuItem } from "../SidebarPopoverMenu";
@@ -46,7 +48,13 @@ export function DetailsTab({ bot, derived, onOpen }: {
   onOpen: (page: SimplePageId) => void;
 }) {
   const { items } = useChatMoreItems(bot);
-  const { dispatch } = useStore();
+  const { state, dispatch } = useStore();
+  const thread = currentTaskBot(bot);
+  const ownerOrAdmin = useOwnerOrAdmin();
+  const driverOf = (instanceId: string) => state.instances.find((instance) => instance.instanceId === instanceId)?.driverKind;
+  // The host rejects cross-engine default switches that require dropping to Ask without confirmation, and EffortRow has no Ask prompt.
+  const reasoningSetsDefault = ownerOrAdmin === true
+    && !modelSwitchNeedsAsk(approvalModeFor(bot), driverOf(bot.modelSelection.instanceId), driverOf(thread.modelSelection.instanceId));
   const routinesOn = derived.botRoutines.filter((routine) => routine.enabled).length;
   const conversationItems = CONVERSATION_ITEMS.flatMap((key) => items.filter((item) => item.key === key));
 
@@ -56,7 +64,8 @@ export function DetailsTab({ bot, derived, onOpen }: {
       <section data-panel-card="model" className="pt-2">
         <div data-panel-row="model" className={cn(rowCls, "rounded-[8px]")}>
           <ModelPicker
-            bot={bot}
+            key={bot.threadId}
+            bot={thread}
             contained
             threadId={bot.threadId}
             label={<span className="flex shrink-0 items-center gap-2.5"><RowIcon icon={Sparkles} /><RowText title={t("model.simple.model")} /></span>}
@@ -64,8 +73,9 @@ export function DetailsTab({ bot, derived, onOpen }: {
         </div>
         {/* The picker hides its own reasoning row when contained, so this tab draws it as its own row. */}
         <EffortRow
-          bot={bot}
+          bot={thread}
           threadId={bot.threadId}
+          updateBotDefault={reasoningSetsDefault}
           compact
           className={cn(rowCls, "min-w-0 flex-1 rounded-[8px]")}
           label={<span className="flex shrink-0 items-center gap-2.5"><RowIcon icon={Sparkles} /><RowText title={t("model.simple.reasoning")} /></span>}
