@@ -836,3 +836,37 @@ describe("a member's own phone on a Team Cloud", () => {
     expect(registry.memberPhones(), "an ended phone is not listed").toEqual([]);
   });
 });
+
+describe("PWA-bound pairing invites", () => {
+  it("forces client scope, rejects non-client/browser combinations, and isolates exchange to pwa credential-only", () => {
+    expect(() => registry.openPairing({ pwa: true, scopes: ["admin"] })).toThrow();
+    expect(() => registry.openPairing({ pwa: true, browser: true })).toThrow();
+
+    const pwa = registry.openPairing({ pwa: true, label: "iPhone PWA" });
+    const admin = registry.openPairing({ label: "Admin Phone" });
+
+    const shortCode = registry.exchange({ code: pwa.code, label: "Phone", source: "pwa", pwa: true });
+    expect(shortCode).toMatchObject({ ok: false, status: 400, code: "pairing_qr_only" });
+
+    const nonPwaOnPwa = registry.exchange({ code: admin.credential, label: "Phone", source: "pwa", pwa: true });
+    expect(nonPwaOnPwa).toMatchObject({ ok: false, status: 401, code: "pairing_code_wrong" });
+
+    const pwaOnRegular = registry.exchange({ code: pwa.credential, label: "Phone", source: "10.0.0.9" });
+    expect(pwaOnRegular).toMatchObject({ ok: false, status: 401, code: "pairing_code_wrong" });
+
+    const bothFlags = registry.exchange({ code: pwa.credential, label: "Phone", source: "pwa", pwa: true, browser: true });
+    expect(bothFlags).toMatchObject({ ok: false, status: 400, code: "pairing_bad_request" });
+
+    const paired = registry.exchange({ code: pwa.credential, label: "My Phone", source: "pwa", attemptId: "attempt-1234", pwa: true });
+    expect(paired.ok).toBe(true);
+    if (!paired.ok) return;
+    expect(paired.session.scopes).toEqual(["client"]);
+    expect(paired.session.label).toBe("My Phone");
+
+    const replayed = registry.exchange({ code: pwa.credential, label: "My Phone", source: "pwa", attemptId: "attempt-1234", pwa: true });
+    expect(replayed).toEqual(paired);
+
+    const crossReplay = registry.exchange({ code: pwa.credential, label: "My Phone", source: "10.0.0.9", attemptId: "attempt-1234" });
+    expect(crossReplay).toMatchObject({ ok: false, status: 401 });
+  });
+});
