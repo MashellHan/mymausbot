@@ -238,15 +238,56 @@ describe("CI concurrency", () => {
     expect(sparse.sort()).toEqual([...modules].sort());
   });
 
-  it("builds the Windows Defender check's installer exactly as the release's Windows job does", () => {
-    const release = parse(readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8"));
+  it("builds the Windows Defender check's installer without coupling release.yml to Windows packaging", () => {
+    const pkgWin = parse(readFileSync(new URL("../.github/workflows/package-win.yml", import.meta.url), "utf8"));
     const check = parse(readFileSync(new URL("../.github/workflows/windows-defender-check.yml", import.meta.url), "utf8"));
     type Step = { uses?: string; with?: unknown; run?: string; shell?: string };
     const toolchainToInstaller = (steps: Step[]) => steps.slice(1, steps.findIndex((step) => step.run === "pnpm package:win") + 1)
       .map(({ uses, with: inputs, run, shell }) => ({ uses, with: inputs, run, shell }));
     expect(toolchainToInstaller(check.jobs.check.steps).at(-1)?.run).toBe("pnpm package:win");
-    expect(toolchainToInstaller(check.jobs.check.steps)).toEqual(toolchainToInstaller(release.jobs.windows.steps));
-    expect(check.jobs.check["runs-on"]).toBe(release.jobs.windows["runs-on"]);
+    expect(toolchainToInstaller(check.jobs.check.steps)).toEqual(toolchainToInstaller(pkgWin.jobs.package.steps));
+    expect(check.jobs.check["runs-on"]).toBe(pkgWin.jobs.package["runs-on"]);
+  });
+
+  it("keeps desktop release packaging macOS-only while retaining CI gating, feeds, and tag dispatches", () => {
+    const release = parse(readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8"));
+    expect(Object.keys(release.jobs)).toEqual(["prepare", "ci", "mac", "assemble"]);
+    expect(release.jobs.assemble.needs).toEqual(["prepare", "ci", "mac"]);
+    expect(Object.keys(release.on.workflow_dispatch.inputs)).toEqual(["ref", "publish", "ship_without_ci"]);
+    const requiredStep = release.jobs.assemble.steps.find((step: { name?: string }) => step.name === "Refuse an incomplete installer or updater set");
+    expect(requiredStep.run).toContain("latest-mac.yml");
+    expect(requiredStep.run).toContain("mymausbot-intel.dmg");
+    expect(requiredStep.run).toContain("mymausbot.dmg");
+    for (const removed of ["latest.yml", "latest-linux.yml", "setup.exe", "amd64.deb", "AppImage", "SHA256SUMS-ubuntu-x64.txt"]) {
+      expect(requiredStep.run).not.toContain(removed);
+    }
+    const feedStep = release.jobs.assemble.steps.find((step: { name?: string }) => step.name === "Verify every feed hash against the actual bytes");
+    expect(feedStep.run).toContain("latest-mac.yml");
+    expect(feedStep.run).not.toContain("latest.yml");
+    expect(feedStep.run).not.toContain("latest-linux.yml");
+    const publishStep = release.jobs.assemble.steps.find((step: { name?: string }) => step.name === "Publish (only when asked to)");
+    expect(publishStep.run).toContain("npm-package.yml docker.yml connector-release.yml");
+    const keychainStep = release.jobs.mac.steps.find((step: { name?: string }) => step.name === "Import the Developer ID certificate into a throwaway keychain");
+    expect(keychainStep.run).toContain('KEYCHAIN="$RUNNER_TEMP/release.keychain-db"');
+    expect(keychainStep.run).toContain("security import");
+    expect(keychainStep.run).toContain("security set-key-partition-list");
+    expect(keychainStep.run).toContain("printf 'CSC_KEYCHAIN=%s\\n' \"$KEYCHAIN\" >> \"$GITHUB_ENV\"");
+    expect(keychainStep.run).not.toContain("list-keychains");
+    expect(keychainStep.run).not.toContain("login.keychain");
+    const rawRelease = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+    expect(rawRelease).not.toContain("list-keychains");
+    expect(rawRelease).not.toContain("login.keychain");
+    const macGateStep = release.jobs.mac.steps.find((step: { name?: string }) => step.name === "Gate: the signature must verify BEFORE notarization");
+    expect(macGateStep.run).toContain("release/mac-arm64/mymausbot.app");
+    expect(macGateStep.run).toContain("release/mac/mymausbot.app");
+    expect(macGateStep.run).toContain("codesign --verify --deep --strict");
+    const notarizeStep = release.jobs.mac.steps.find((step: { name?: string }) => step.name === "Notarize all four artifacts");
+    expect(notarizeStep.run).toContain("xcrun notarytool");
+    const readmeTop = readFileSync(new URL("../README.md", import.meta.url), "utf8").split("## Why")[0];
+    expect(readmeTop).toContain("MashellHan/mymausbot/releases/latest/download/mymausbot.dmg");
+    expect(readmeTop).toContain("MashellHan/mymausbot/releases/latest/download/mymausbot-intel.dmg");
+    expect(readmeTop).not.toContain("mymausbot-setup.exe");
+    expect(readmeTop).not.toContain("mymausbot-amd64.deb");
   });
 
   it("lets scope read main CI baseline evidence and live issue labels without any write permission", () => {
