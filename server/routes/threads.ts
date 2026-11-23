@@ -16,6 +16,7 @@ import type { Coordinator } from "../coordinator.ts";
 import type { WorkspaceAccess } from "../enterprise.ts";
 import type { GroupUsageReader } from "../group-thread-usage.ts";
 import { readMessage, searchMessagesAsync } from "../message-db.ts";
+import { isWaitContinuation, waitContinuationPlaceholder } from "../wait-continuation.ts";
 import { cappedMediaRange, MessageMediaLinks, STREAMABLE_MEDIA_MIMES } from "../message-media-links.ts";
 import {
   listMessageFolder, MESSAGE_FILE_DOWNLOAD_MAX_BYTES, MESSAGE_FILE_MAX_BYTES, messageAttachmentName, messageFileDisposition, messageFileDownloadName, messageFolderEntryName,
@@ -518,7 +519,12 @@ export function createThreadRoutes(deps: ThreadRouteDeps): RouteHandler {
       const currentVisible = visibleTo(viewerFor(current.auth));
       if (threadId && !currentVisible.thread(threadId)) return json(res, 404, { error: "no such conversation" });
       const hits = found
-        .filter((hit) => currentVisible.thread(hit.threadId))
+        .filter((hit) => {
+          if (!currentVisible.thread(hit.threadId)) return false;
+          if (hit.role !== "user" || hit.kind !== "text") return true;
+          const message = readMessage(hit.threadId, hit.messageId);
+          return message !== null && !isWaitContinuation(message, (id) => readMessage(hit.threadId, id));
+        })
         .slice(0, limit)
         .map((hit) => {
           const bot = store.botByThread(hit.threadId);
@@ -553,7 +559,8 @@ export function createThreadRoutes(deps: ThreadRouteDeps): RouteHandler {
         ? (store.taskByThread(bot.id, threadId)?.title || bot.name)
         : (store.groupTaskByThread(group!.id, threadId)?.title || group!.name);
       const filename = (title.replace(/[^\w\- ]+/g, "").trim() || "conversation").slice(0, 60);
-      const messages = store.activePath(threadId);
+      const messages = store.activePath(threadId).map((message) =>
+        waitContinuationPlaceholder(message, (id) => readMessage(threadId, id)) ?? message);
       if (format === "json") {
         const slim = messages.map(({ png: _png, mime: _mime, ...rest }) => rest);
         res.writeHead(200, {
