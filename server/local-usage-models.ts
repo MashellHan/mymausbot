@@ -22,7 +22,7 @@ export interface DailyTokenObservation extends TokenAmounts {
 }
 
 const fields = ["input", "output", "cacheRead"] as const;
-const providers = new Set(["codex", "copilot", "hermes", "pi"]);
+const providers = new Set(["codex", "copilot", "hermes", "pi", "opencode"]);
 const modelLabel = /^[A-Za-z0-9][A-Za-z0-9_.+-]*(?:\/[A-Za-z0-9][A-Za-z0-9_.+-]*)?$/;
 const maxDailyModels = 24;
 const unavailableCost: LocalUsageEstimatedCost = { coverage: "unavailable", usd: null };

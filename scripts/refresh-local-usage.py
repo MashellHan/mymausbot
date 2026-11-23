@@ -34,6 +34,7 @@ import local_usage_models
 ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"
 LOCAL_COLLECT_TIMEOUT = 120
 REPOSITORY_TIMEOUT = 15
+LEGACY_PUBLISH_RESERVE = 45
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
@@ -49,6 +50,10 @@ def child_environment():
         "GIT_NO_LAZY_FETCH": "1", "GIT_ALLOW_PROTOCOL": "file", "GIT_TERMINAL_PROMPT": "0",
         "GIT_ASKPASS": "/usr/bin/false", "SSH_ASKPASS": "/usr/bin/false",
         "SSH_ASKPASS_REQUIRE": "never", "GCM_INTERACTIVE": "never"}
+
+
+def _opencode_environment():
+    return {name: os.environ[name] for name in ("XDG_DATA_HOME", "OPENCODE_DB") if name in os.environ}
 
 
 class LocalGitOnly:
@@ -278,9 +283,17 @@ def _collect_worker():
                 return original_classify(self, cwd, context)
 
             collector.Classifier.classify = classify
-            result = collector.collect(request["config"], request["device"],
-                                       at=collector.instant(request["at"]),
-                                       history_days=request["history_days"])
+            if request["stage"] == "opencode":
+                classifier = collector.Classifier(request["repositories"], request["config"])
+                result = local_usage_models.opencode_events(
+                    Path(request["config"]["home"]).expanduser(), classifier.classify,
+                    collector.instant(request["start"]), collector.instant(request["at"]),
+                    env=request["opencodeEnvironment"],
+                )
+            else:
+                result = collector.collect(request["config"], request["device"],
+                                           at=collector.instant(request["at"]),
+                                           history_days=request["history_days"])
         json.dump(result, sys.stdout)
     except Exception as error:
         print(f"usage stage=local-collect failed type={type(error).__name__}", file=sys.stderr, flush=True)
@@ -314,11 +327,16 @@ def _run_worker(request, timeout):
     return json.loads(output)
 
 
-def collect_local(collector_path, config, device, at=None, history_days=30):
+def _is_opencode_error(error):
+    return isinstance(error, dict) and error.get("source") == "opencode"
+
+
+def collect_local(collector_path, config, device, at=None, history_days=30, *, cycle_deadline=None):
     deadline = time.monotonic() + LOCAL_COLLECT_TIMEOUT
     fields = ("home", "repoRoots", "authorEmails", "workGithubOrgs", "personalGithubOwners", "m365Repos")
     request = {"collector": str(collector_path), "config": {k: config[k] for k in fields if k in config},
-               "device": device, "at": at.isoformat() if at else None, "history_days": history_days}
+               "device": device, "at": at.isoformat() if at else None, "history_days": history_days,
+               "opencodeEnvironment": _opencode_environment()}
     repositories, failed_roots, errors = [], [], []
     for index, root in enumerate(config["repoRoots"], 1):
         print(f"usage stage=repository root={index} begin", file=sys.stderr, flush=True)
@@ -344,6 +362,27 @@ def collect_local(collector_path, config, device, at=None, history_days=30):
             os._exit(1)
         print("usage stage=local-collect timeout lock-retained", file=sys.stderr, flush=True)
         raise RuntimeError("Local activity worker cleanup is unverified") from None
+    tokens, opencode_error = [], "ReadLimit"
+    if cycle_deadline is not None:
+        deadline = min(deadline, cycle_deadline - LEGACY_PUBLISH_RESERVE)
+    remaining = deadline - time.monotonic()
+    if remaining > 0:
+        try:
+            tokens, opencode_error = _run_worker({**request, "stage": "opencode", "repositories": repositories,
+                "failedRoots": failed_roots, "start": result["start"], "at": result["capturedAt"]},
+                min(remaining, local_usage_models.MAX_OPENCODE_READ_SECONDS + 2))
+        except subprocess.TimeoutExpired:
+            pass
+        except (OSError, ValueError):
+            opencode_error = "DatabaseReadError"
+    if tokens:
+        result["tokens"].extend(tokens)
+        result["errors"] = [failure for failure in result["errors"]
+                            if failure != {"source": "tokens", "code": "NoRetainedLogs"}]
+    if opencode_error:
+        result["errors"].append({"source": "opencode", "code": opencode_error})
+    if tokens or opencode_error:
+        result["status"] = "partial" if result["errors"] else "ok"
     if errors or result.get("errors"):
         collector = load_collector(collector_path)
         previous = collector.read_json(Path(config["storageDir"]).expanduser() / "machines" / (device + ".json"), {})
@@ -357,13 +396,14 @@ def collect_local(collector_path, config, device, at=None, history_days=30):
                 if record.get("category") == "unclassified" and previous_category in ("work", "personal"):
                     record["category"] = previous_category
         combined_errors = list(result.get("errors") or []) + list(errors)
-        fetch_disabled_only = bool(combined_errors) and all(
+        non_opencode_errors = [error for error in combined_errors if not _is_opencode_error(error)]
+        skip_retained_commits = all(
             isinstance(error, dict)
             and error.get("source") == "git-fetch"
             and error.get("code") == "DisabledByAuthBoundary"
-            for error in combined_errors
+            for error in non_opencode_errors
         )
-        retain_fields = ("tokens",) if fetch_disabled_only else ("tokens", "commits")
+        retain_fields = ("tokens",) if skip_retained_commits else ("tokens", "commits")
         for field in retain_fields:
             def key(record):
                 return record["key"] if field == "tokens" else (record["key"], (record.get("repository") or {}).get("id"))
@@ -945,7 +985,8 @@ def _primary_worker():
                 raise ValueError("ADO legacy cutoff requires an offset")
             refresh(collector_path, config, azure_dir, publish=request["publish"],
                     skip_api=request["skipApi"], reuse_sources=request["reuseSources"], force_legacy=True,
-                    legacy_diagnostics=False, primary_snapshot=request.get("primary"), primary_at=primary_at)
+                    legacy_diagnostics=False, primary_snapshot=request.get("primary"), primary_at=primary_at,
+                    cycle_deadline=request["cycleDeadline"])
             return
         if stage not in ("github", "ado"):
             raise ValueError("Unknown contribution worker")
@@ -1023,9 +1064,13 @@ def refresh_primary(collector_path, config, azure_config_dir, *, publish=False, 
                                "output": str(Path(temporary) / (stage + ".json")),
                                "publish": publish, "skipApi": False, "reuseSources": reuse_sources,
                                "primary": primary}
+                    environment = child_environment()
+                    if stage == "legacy":
+                        request["cycleDeadline"] = deadline
+                        environment.update(_opencode_environment())
                     process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--worker"],
                         stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                        start_new_session=True, env=child_environment())
+                        start_new_session=True, env=environment)
                     processes[stage] = process
                     process.stdin.write(json.dumps(request).encode())
                     process.stdin.close()
@@ -1091,7 +1136,8 @@ def refresh_primary(collector_path, config, azure_config_dir, *, publish=False, 
 
 
 def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api=False, reuse_sources=False,
-            force_legacy=False, legacy_diagnostics=True, herdr_runner=None, primary_snapshot=None, primary_at=None):
+            force_legacy=False, legacy_diagnostics=True, herdr_runner=None, primary_snapshot=None, primary_at=None,
+            cycle_deadline=None):
     if publish:
         raise ValueError("Scheduled Usage publication requires a separately reviewed transport")
     if config.get("primaryContributionSource") == "contributions-v2" and not force_legacy:
@@ -1186,16 +1232,20 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
                 git_fetch_only = isinstance(errors, list) and bool(errors) and all(
                     isinstance(error, dict) and error.get("source") == "git-fetch" for error in errors
                 )
-                fetch_disabled_only = isinstance(errors, list) and bool(errors) and all(
+                commit_errors = [error for error in errors if not _is_opencode_error(error)] if isinstance(errors, list) else None
+                fetch_disabled_only = bool(commit_errors) and all(
                     isinstance(error, dict)
                     and error.get("source") == "git-fetch"
                     and error.get("code") == "DisabledByAuthBoundary"
-                    for error in errors
+                    for error in commit_errors
                 )
                 source["tokenStatus"] = "ready" if machine.get("status") == "ok" or (
                     machine.get("status") == "partial" and git_fetch_only
                 ) else "partial" if machine.get("status") in ("partial", "stale") else "unavailable"
-                source["commitStatus"] = "ready" if machine.get("status") == "ok" else (
+                commit_ready = machine.get("status") == "ok" or (
+                    machine.get("status") == "partial" and bool(errors) and commit_errors == []
+                )
+                source["commitStatus"] = "ready" if commit_ready else (
                     "local-ref-ready" if machine.get("status") == "partial" and fetch_disabled_only
                     and not machine.get("retainedCapturedAt")
                     and not machine.get("retainedCommits")
@@ -1279,7 +1329,7 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
 
     collector.run = run
     collector.collect = lambda config, device, at=None, history_days=30: collect_local(
-        collector_path, config, device, at, history_days
+        collector_path, config, device, at, history_days, cycle_deadline=cycle_deadline
     )
     options = {"upload": publish, "skip_api": skip_api, "reuse_sources": reuse_sources}
     if "history_days" in inspect.signature(collector.refresh).parameters:

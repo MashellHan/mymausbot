@@ -898,8 +898,9 @@ describe("daily model attribution and Activities list estimates", () => {
 
   it("uses the same reconciled days in China-calendar windows and trends with coverage-qualified prices", async () => {
     const { file, snapshot } = await fixture(asOf);
-    const priced = [model("gpt-6.2-sol", 2, 4, 45), model("gpt-6.2-sol", 1, 0, 1, "pi")];
-    const unknown = model("activities-unpriced-fixture", 7, 0, 4);
+    const priced = [model("gpt-6.2-sol", 2, 4, 45), model("gpt-6.2-sol", 1, 0, 1, "pi"),
+      model("gemini-4-hydrogen", 5, 0, 2, "opencode")];
+    const unknown = model("activities-unpriced-fixture", 2, 0, 2);
     const older = day(endDay, -61), legacy = day(endDay, -62);
     await writeFile(file, JSON.stringify({ ...snapshot, trendHistory: { version: 1, daily: [
       { day: legacy, tokenStatus: "ready", newTokens: 14, cacheRead: 50, totalTokens: 64 },
@@ -911,9 +912,10 @@ describe("daily model attribution and Activities list estimates", () => {
     expect(windows["1"]).toMatchObject({ startDay: endDay, endDay, newTokens: 14, cacheRead: 50, totalTokens: 64,
       tokenDetails: { input: 10, output: 4, estimatedCost: { coverage: "partial" }, models: { coverage: "ready", rows: [
         { model: "gpt-6.2-sol", input: 3, output: 4, cacheRead: 46, totalTokens: 53, estimatedCost: { coverage: "ready" } },
-        { model: "activities-unpriced-fixture", totalTokens: 11, estimatedCost: { coverage: "unavailable", usd: null } },
+        { model: "gemini-4-hydrogen", input: 5, output: 0, cacheRead: 2, totalTokens: 7, estimatedCost: { coverage: "ready" } },
+        { model: "activities-unpriced-fixture", totalTokens: 4, estimatedCost: { coverage: "unavailable", usd: null } },
       ] } } });
-    expect(windows["1"].tokenDetails!.estimatedCost.usd).toBeCloseTo(50.6 / 1e6, 12);
+    expect(windows["1"].tokenDetails!.estimatedCost.usd).toBeCloseTo(58.25 / 1e6, 12);
     expect(response.trend.at(-1)?.tokenDetails).toEqual({ ...windows["1"].tokenDetails, cacheRead: 50 });
     expect(response.history?.find((row) => row.day === endDay)?.tokenDetails).toEqual(response.trend.at(-1)?.tokenDetails);
     expect(response.history?.find((row) => row.day === older)?.tokenDetails).toMatchObject({
@@ -924,8 +926,8 @@ describe("daily model attribution and Activities list estimates", () => {
     for (const key of ["7", "30"] as const) {
       const window = windows[key];
       expect(window.tokenDetails).toMatchObject({ input: window.days * 10, output: window.days * 4,
-        models: { rows: [{ totalTokens: window.days * 64 - 11 }, { totalTokens: 11 }] } });
-      expect(window.tokenDetails!.estimatedCost.usd).toBeCloseTo((50.6 + (window.days - 1) * 65) / 1e6, 12);
+        models: { rows: [{ totalTokens: window.days * 64 - 11 }, { totalTokens: 7 }, { totalTokens: 4 }] } });
+      expect(window.tokenDetails!.estimatedCost.usd).toBeCloseTo((58.25 + (window.days - 1) * 65) / 1e6, 12);
     }
   });
 
