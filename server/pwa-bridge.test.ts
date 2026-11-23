@@ -1,6 +1,5 @@
-import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, mkdirSync, mkdtempSync, openSync, statSync } from "node:fs";
+import { mkdtempSync, statSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -8,7 +7,7 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
 
-import { verificationServerArgs, verificationServerEnvironment } from "../scripts/control-omb.ts";
+import { launchVerificationServer, type VerificationServer } from "../scripts/control-omb.ts";
 import type { PwaPairingPayload } from "../shared/pwa-bridge.ts";
 import { json, readBody } from "./harness/http.ts";
 import { PWA_BRIDGE_SUBPROTOCOL, isPwaBridgeRequest, pwaBridgePairingRefusal, startPwaBridge } from "./pwa-bridge.ts";
@@ -17,8 +16,7 @@ import { resolveRequestAuth, type RequestAuth } from "./request-auth.ts";
 import { createPwaBridgeRoutes } from "./routes/pwa-bridge.ts";
 import { dispatchRoutes } from "./routes/table.ts";
 import { SessionRegistry } from "./sessions.ts";
-import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
-import { freePortBlock } from "./testing/ports.ts";
+import { removeTempDir } from "./testing/cleanup.ts";
 
 interface MockRelayStream {
   headersPromise: Promise<{ status: number; headers: Record<string, string | string[]> }>;
@@ -435,30 +433,14 @@ describe("PWA bridge unit, config, and route enforcement", () => {
 
 describe("PWA bridge real handleRequest integration", () => {
   let relay: MockBridgeRelay;
-  let child: ChildProcess;
-  let dataDir: string;
+  let fixture: VerificationServer | undefined;
   let base: string;
   let bridgeSecret: string;
 
   beforeAll(async () => {
     relay = await MockBridgeRelay.start();
-    const port = await freePortBlock([0, 1]);
-    dataDir = mkdtempSync(join(tmpdir(), "omb-pwa-bridge-e2e-"));
-    mkdirSync(join(dataDir, "tmp"), { recursive: true });
-
-    const env = verificationServerEnvironment(process.env, dataDir, port);
-    const logPath = join(dataDir, "server.log");
-    const fd = openSync(logPath, "a", 0o600);
-    child = spawn(process.execPath, verificationServerArgs(env), { env, stdio: ["ignore", fd, fd] });
-    closeSync(fd);
-    base = `http://127.0.0.1:${port}`;
-
-    const deadline = Date.now() + 30_000;
-    while (Date.now() < deadline) {
-      const health = await fetch(`${base}/api/health`).then((r) => r.json(), () => null) as { app?: string } | null;
-      if (health?.app === "openmausbot") break;
-      await new Promise((r) => setTimeout(r, 150));
-    }
+    fixture = await launchVerificationServer({ ...process.env, OMB_DEV_TRUST_LOCAL_BROWSER: "1" });
+    base = fixture.info.url;
 
     const rot = await fetch(`${base}/api/pwa-bridge/rotate-secret`, {
       method: "POST",
@@ -484,9 +466,8 @@ describe("PWA bridge real handleRequest integration", () => {
   }, 60_000);
 
   afterAll(async () => {
-    if (child) await waitForExit(child, { signal: "SIGTERM", graceMs: 15_000 });
+    await fixture?.close();
     await relay?.close();
-    if (dataDir) await removeTempDir(dataDir);
   });
 
   const admin = async (method: string, path: string, body?: unknown) => {
