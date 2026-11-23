@@ -3,9 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { botBox } from "../bot-box/box.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { ensurePiInjectModel } from "./pi.ts";
-import { ownPiAgentDir, piAgentDir, readPiDefaultModel } from "./pi-agent-dir.ts";
+import { assertPiAuthReachableInBox, ownPiAgentDir, piAgentDir, readPiDefaultModel } from "./pi-agent-dir.ts";
 import { encodeInjectId } from "./local-inject.ts";
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -159,5 +160,92 @@ describe("MausBot's own Pi agent folder", () => {
     expect(lstatSync(modelsPath).isFile()).toBe(true);
     expect(lstatSync(modelsPath).isSymbolicLink()).toBe(false);
     expect(statSync(modelsPath).mode & 0o777).toBe(0o600);
+  });
+
+  it.skipIf(process.platform === "win32")("rejects a boxed Pi sign-in whose symlink chain passes through masked data even when the end file is under home", () => {
+    const profileDir = join(home, "profiles", "raven");
+    const canonicalDir = join(home, "canonical");
+    const canonicalAuth = join(canonicalDir, "auth.json");
+    const redirectDir = join(dataDir, "redirect");
+    const redirectAuth = join(redirectDir, "auth.json");
+    mkdirSync(profileDir, { recursive: true });
+    mkdirSync(canonicalDir, { recursive: true });
+    mkdirSync(redirectDir, { recursive: true });
+    writeFileSync(canonicalAuth, '{"raven":{"type":"api_key","key":"canonical"}}');
+    symlinkSync(canonicalAuth, redirectAuth);
+    symlinkSync(redirectAuth, join(profileDir, "auth.json"));
+
+    const own = ownPiAgentDir({ HOME: home, PI_CODING_AGENT_DIR: profileDir }, "pi-chain", dataDir);
+    const enabled = vi.spyOn(botBox, "enabled").mockReturnValue(true);
+    const startOptions = vi.spyOn(botBox, "startOptions").mockReturnValue({
+      dataDir,
+      home,
+      port: 0,
+      denyEnv: new Set(),
+      codeRoots: [],
+      engineRoots: [],
+    });
+    try {
+      const boxedEnv = { HOME: home, TMPDIR: "/tmp", PI_CODING_AGENT_DIR: own };
+      expect(() => assertPiAuthReachableInBox(own, boxedEnv, "pi")).toThrow(/not reachable inside the bot box/);
+
+      // An intermediate directory symlink passing through dataDir is also rejected.
+      rmSync(join(profileDir, "auth.json"));
+      const via = join(home, "via");
+      symlinkSync(redirectDir, via);
+      symlinkSync(join(via, "auth.json"), join(profileDir, "auth.json"));
+      expect(() => assertPiAuthReachableInBox(own, boxedEnv, "pi")).toThrow(/not reachable inside the bot box/);
+
+      // A symlink chain wholly inside unmasked home remains reachable.
+      rmSync(join(profileDir, "auth.json"));
+      symlinkSync(canonicalAuth, join(profileDir, "auth.json"));
+      expect(() => assertPiAuthReachableInBox(own, boxedEnv, "pi")).not.toThrow();
+    } finally {
+      startOptions.mockRestore();
+      enabled.mockRestore();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("rejects a symlinked data directory redirect and symlink loops before spawning", () => {
+    const linkedHome = join(root, "linked-home");
+    const realData = join(root, "real-data");
+    const linkedData = join(linkedHome, ".openmausbot");
+    const profileDir = join(linkedHome, "profiles", "raven");
+    const canonicalAuth = join(linkedHome, "canonical", "auth.json");
+    mkdirSync(realData, { recursive: true });
+    mkdirSync(profileDir, { recursive: true });
+    mkdirSync(join(linkedHome, "canonical"), { recursive: true });
+    symlinkSync(realData, linkedData);
+    writeFileSync(canonicalAuth, '{"raven":{"type":"api_key","key":"canonical"}}');
+    mkdirSync(join(linkedData, "redirect"), { recursive: true });
+    symlinkSync(canonicalAuth, join(linkedData, "redirect", "auth.json"));
+    symlinkSync(join(linkedData, "redirect", "auth.json"), join(profileDir, "auth.json"));
+
+    const own = ownPiAgentDir({ HOME: linkedHome, PI_CODING_AGENT_DIR: profileDir }, "pi-symdata", linkedData);
+    const enabled = vi.spyOn(botBox, "enabled").mockReturnValue(true);
+    const startOptions = vi.spyOn(botBox, "startOptions").mockReturnValue({
+      dataDir: linkedData,
+      home: linkedHome,
+      port: 0,
+      denyEnv: new Set(),
+      codeRoots: [],
+      engineRoots: [],
+    });
+    try {
+      const boxedEnv = { HOME: linkedHome, TMPDIR: "/tmp", PI_CODING_AGENT_DIR: own };
+      expect(() => assertPiAuthReachableInBox(own, boxedEnv, "pi")).toThrow(/not reachable inside the bot box/);
+
+      rmSync(join(profileDir, "auth.json"));
+      rmSync(join(own, "auth.json"));
+      const loopA = join(linkedHome, "loop-a.json");
+      const loopB = join(linkedHome, "loop-b.json");
+      symlinkSync(loopB, loopA);
+      symlinkSync(loopA, loopB);
+      symlinkSync(loopA, join(own, "auth.json"), "file");
+      expect(() => assertPiAuthReachableInBox(own, boxedEnv, "pi")).toThrow("Pi sign-in target could not be resolved for the bot box.");
+    } finally {
+      startOptions.mockRestore();
+      enabled.mockRestore();
+    }
   });
 });

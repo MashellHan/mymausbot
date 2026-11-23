@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { writeFileAtomic } from "../atomic.ts";
 import { botBox } from "../bot-box/box.ts";
-import { planBox, under, visibleInBox } from "../bot-box/plan.ts";
+import { planBox, under, visibleInBox, type BoxPlan } from "../bot-box/plan.ts";
 import { DATA_DIR } from "../config.ts";
 
 // Pi 1.6.0's SettingsManager loads packages, extensions, skills and prompts from settings.json.
@@ -132,12 +132,33 @@ export function ownPiAgentDir(env: Record<string, string | undefined>, instanceI
   return own;
 }
 
+const MAX_SYMLINK_HOPS = 40;
+
 function tryRealpath(path: string): string {
   try {
     return realpathSync(path);
   } catch {
     return resolve(path);
   }
+}
+
+function rwMountRoot(plan: BoxPlan, path: string): string | null {
+  const full = resolve(path);
+  if (visibleInBox(plan, full) !== "rw") return null;
+  let root: string | null = null;
+  for (const mount of plan.mounts) {
+    if (mount.kind === "bind" && under(full, mount.target)) {
+      if (!root || under(mount.target, root)) root = mount.target;
+    }
+  }
+  return root;
+}
+
+function unreachablePiAuthError(target: string, dataDir: string, home: string): Error {
+  const guidance = under(target, dataDir) || under(tryRealpath(target), tryRealpath(dataDir))
+    ? `place PI_CODING_AGENT_DIR outside ${dataDir}`
+    : `place PI_CODING_AGENT_DIR inside ${home} and outside ${dataDir}`;
+  return new Error(`Pi sign-in (${target}) is not reachable inside the bot box; ${guidance}.`);
 }
 
 export function assertPiAuthReachableInBox(
@@ -149,46 +170,70 @@ export function assertPiAuthReachableInBox(
   const authLink = join(agentDir, "auth.json");
   const entry = lstatSync(authLink, { throwIfNoEntry: false });
   if (!entry?.isSymbolicLink()) return;
-  const linkTarget = resolve(agentDir, readlinkSync(authLink));
-  let canonical: string;
-  try {
-    canonical = realpathSync(authLink);
-  } catch {
-    throw new Error("Pi sign-in target could not be resolved for the bot box.");
-  }
   const started = botBox.startOptions();
   const dataDir = resolve(started?.dataDir ?? DATA_DIR);
   const home = resolve(started?.home ?? (env.HOME || env.USERPROFILE || homedir()));
   const codeRoots = started?.codeRoots ?? [];
   const engineRoots = started?.engineRoots ?? [];
   const plan = planBox(
-    {
-      dataDir,
-      home,
-      codeRoots,
-      engineRoots,
-      bridges: [],
-    },
+    { dataDir, home, codeRoots, engineRoots, bridges: [] },
     { command: cli, args: [], env, rw: [agentDir] },
   );
-  const realPlan = planBox(
-    {
-      dataDir: tryRealpath(dataDir),
-      home: tryRealpath(home),
-      codeRoots: codeRoots.map(tryRealpath),
-      engineRoots: engineRoots.map(tryRealpath),
-      bridges: [],
-    },
-    { command: cli, args: [], env, rw: [tryRealpath(agentDir)] },
-  );
-  if (
-    visibleInBox(plan, linkTarget) !== "rw" ||
-    visibleInBox(realPlan, canonical) !== "rw" ||
-    visibleInBox(realPlan, dirname(canonical)) !== "rw"
-  ) {
-    const guidance = under(canonical, tryRealpath(dataDir)) || under(linkTarget, dataDir)
-      ? `place PI_CODING_AGENT_DIR outside ${dataDir}`
-      : `place PI_CODING_AGENT_DIR inside ${home} and outside ${dataDir}`;
-    throw new Error(`Pi sign-in (${canonical}) is not reachable inside the bot box; ${guidance}.`);
+  const homeIsSymlink = lstatSync(home, { throwIfNoEntry: false })?.isSymbolicLink() === true;
+  const realPlan = homeIsSymlink
+    ? null
+    : planBox(
+        {
+          dataDir: tryRealpath(dataDir),
+          home: tryRealpath(home),
+          codeRoots: codeRoots.map(tryRealpath),
+          engineRoots: engineRoots.map(tryRealpath),
+          bridges: [],
+        },
+        { command: cli, args: [], env, rw: [tryRealpath(agentDir)] },
+      );
+  const boxRwRoot = (target: string): string | null => {
+    const full = resolve(target);
+    const direct = rwMountRoot(plan, full);
+    if (direct) return direct;
+    if (under(full, dataDir)) return null;
+    return realPlan ? rwMountRoot(realPlan, full) : null;
+  };
+
+  let current = resolve(agentDir, readlinkSync(authLink));
+  let hops = 1;
+  let canonical: string | null = null;
+  while (!canonical) {
+    const root = boxRwRoot(current);
+    if (!root) throw unreachablePiAuthError(current, dataDir, home);
+    const parts = relative(root, current).split(sep).filter(Boolean);
+    let prefix = root;
+    let redirected = false;
+    for (let i = 0; i < parts.length; i++) {
+      prefix = join(prefix, parts[i]!);
+      if (!boxRwRoot(prefix)) throw unreachablePiAuthError(prefix, dataDir, home);
+      const stat = lstatSync(prefix, { throwIfNoEntry: false });
+      if (!stat) throw new Error("Pi sign-in target could not be resolved for the bot box.");
+      if (stat.isSymbolicLink()) {
+        if (++hops > MAX_SYMLINK_HOPS) {
+          throw new Error("Pi sign-in target could not be resolved for the bot box.");
+        }
+        const target = resolve(dirname(prefix), readlinkSync(prefix));
+        if (!boxRwRoot(target)) throw unreachablePiAuthError(target, dataDir, home);
+        const rest = parts.slice(i + 1);
+        current = rest.length ? join(target, ...rest) : target;
+        redirected = true;
+        break;
+      }
+      if (i < parts.length - 1 && !stat.isDirectory()) {
+        throw new Error("Pi sign-in target could not be resolved for the bot box.");
+      }
+    }
+    if (!redirected) {
+      const leaf = lstatSync(prefix, { throwIfNoEntry: false });
+      if (!leaf?.isFile()) throw new Error("Pi sign-in target could not be resolved for the bot box.");
+      canonical = prefix;
+    }
   }
+  if (!boxRwRoot(dirname(canonical))) throw unreachablePiAuthError(canonical, dataDir, home);
 }

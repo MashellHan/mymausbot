@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1306,6 +1306,58 @@ describe("PiDriver turns (fake CLI)", () => {
     } finally {
       await maskedInstance?.dispose();
       await removeTempDir(maskedProfile);
+      wrap.mockRestore();
+      startOptions.mockRestore();
+      enabled.mockRestore();
+      await removeTempDir(home);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("rejects a named Pi profile whose auth symlink passes through masked data before reaching home", async () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-pi-box-chain-"));
+    const profile = join(home, "profiles", "chained");
+    const canonicalDir = join(home, "canonical");
+    const canonicalAuth = join(canonicalDir, "auth.json");
+    const redirectDir = join(DATA_DIR, "redirects", randomUUID());
+    const redirectAuth = join(redirectDir, "auth.json");
+    const dump = join(home, "chain-dump.jsonl");
+    mkdirSync(profile, { recursive: true });
+    mkdirSync(canonicalDir, { recursive: true });
+    mkdirSync(redirectDir, { recursive: true });
+    writeFileSync(canonicalAuth, '{"raven":{"type":"api_key","key":"canonical-fixture"}}');
+    writeFileSync(join(profile, "models.json"), '{"providers":{"raven":{"models":[{"id":"fixture"}]}}}');
+    symlinkSync(canonicalAuth, redirectAuth);
+    symlinkSync(redirectAuth, join(profile, "auth.json"));
+
+    const enabled = vi.spyOn(botBox, "enabled").mockReturnValue(true);
+    const startOptions = vi.spyOn(botBox, "startOptions").mockReturnValue({
+      dataDir: DATA_DIR,
+      home,
+      port: 0,
+      denyEnv: new Set(),
+      codeRoots: [],
+      engineRoots: [],
+    });
+    const wrap = vi.spyOn(botBox, "wrap").mockReturnValue(null);
+    let chainedInstance: ProviderInstance | null = null;
+    try {
+      chainedInstance = await PiDriver.create({
+        instanceId: `pi-chained-${randomUUID()}`,
+        displayName: "pi Chained",
+        environment: { HOME: home, TMPDIR: "/tmp", PI_CODING_AGENT_DIR: "~/profiles/chained", FAKE_PI_DUMP: dump },
+        enabled: true,
+        config: { cli: FAKE_CLI, fullAuto: false },
+      });
+      await expect(chainedInstance.snapshot()).resolves.toMatchObject({
+        state: "unavailable",
+        reason: expect.stringContaining("not reachable inside the bot box"),
+      });
+      await expect(chainedInstance.refreshModels?.()).rejects.toThrow(/not reachable inside the bot box/);
+      await expect(chainedInstance.adapter.sendTurn({ threadId: "t-chained", text: "hi" })).rejects.toThrow(/not reachable inside the bot box/);
+      expect(existsSync(dump)).toBe(false);
+    } finally {
+      await chainedInstance?.dispose();
+      await removeTempDir(redirectDir);
       wrap.mockRestore();
       startOptions.mockRestore();
       enabled.mockRestore();
