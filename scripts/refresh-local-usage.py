@@ -799,6 +799,126 @@ def finalized_day(current, at, focus_start, previous_finalized):
     return yesterday
 
 
+def legacy_ado_commits(config, repository_identity, repository_category, file=None):
+    if not config.get("mergedAdoProjects") and not config.get("adoRemotes"):
+        return {"records": [], "complete": True}
+    target = Path(file or Path.home() / ".local/share/mymausbot/usage/contributions-v2.json")
+    snapshot = local_usage_contributions.load_previous(target)
+    if snapshot is None:
+        return {"records": [], "complete": False}
+    local_usage_contributions.validate_seed_bindings(snapshot, config)
+    ado = snapshot["ado"]
+    configured = local_usage_ado.projects(config)
+    if len(configured) != len(ado["sources"]):
+        raise ValueError("ADO raw source count mismatch")
+    state = ado["state"]
+    sources = {source["id"]: source for source in ado["sources"]}
+    records, complete = [], True
+    email_hash = local_usage_ado.digest("ado-author-aliases", sorted(local_usage_ado.author_aliases(config)))
+    for org, project, repository_names in configured:
+        account = local_usage_ado.principal(config, org)
+        scope = org.casefold() + "/" + project.casefold()
+        source_id = local_usage_ado.digest("ado", "dev.azure.com", scope, account["stableId"])
+        source = sources.get(source_id)
+        project_state = state["projects"].get(scope)
+        if (source is None or source["account"] != account or not isinstance(project_state, dict)
+                or project_state.get("account") != account or project_state.get("emailHash") != email_hash
+                or project_state.get("remoteScopeHash") != local_usage_ado.digest(
+                    "ado-remotes", scope, repository_names)):
+            raise ValueError("ADO raw project binding mismatch")
+        verified = source["coverage"]["identityVerified"] is True
+        source_complete = (source["status"] == "ready" and verified
+                           and source["coverage"]["paginationComplete"] is True
+                           and source["coverage"]["visibilityComplete"] is True)
+        complete = complete and source_complete
+        if not verified:
+            continue
+        provenance = source.get("provenance", {})
+        cutoff = local_usage_contributions.instant(provenance.get("sourceCutoffAt", ado["asOfAt"]))
+        captured = local_usage_contributions.instant(provenance.get("sourceCapturedAt", ado["capturedAt"]))
+        if cutoff > captured or captured > local_usage_contributions.instant(ado["capturedAt"]):
+            raise ValueError("ADO raw capture is out of order")
+        work = project_state.get("work")
+        prior_cache = project_state.get("cache")
+        if (not isinstance(work, dict) or not isinstance(prior_cache, dict)
+                or work.get("cutoff") != local_usage_ado.stamp(cutoff)
+                or work.get("firstDay") != ado["operationWindow"]["startDay"]
+                or work.get("lastDay") != ado["operationWindow"]["endDay"]
+                or not isinstance(work.get("inventory"), list)):
+            raise ValueError("ADO raw work binding mismatch")
+        inventory = {repo.get("id"): repo for repo in work["inventory"]
+                     if isinstance(repo, dict) and isinstance(repo.get("id"), str)}
+        if len(inventory) != len(work["inventory"]):
+            raise ValueError("ADO raw repository inventory is invalid")
+        selected = work.get("selectedRepoIds")
+        if (not isinstance(selected, list) or len(selected) != len(set(selected))
+                or any(repo_id not in inventory for repo_id in selected)):
+            raise ValueError("ADO raw selected repositories are invalid")
+        selected_repos = [inventory[repo_id] for repo_id in selected]
+        if {repo["name"].casefold() for repo in selected_repos} != set(repository_names):
+            raise ValueError("ADO raw repository scope mismatch")
+        completed = work.get("repoDone")
+        progress = work.get("progress")
+        if not isinstance(completed, dict) or not isinstance(progress, dict):
+            raise ValueError("ADO raw repository proofs are invalid")
+        if not source_complete and work.get("scanComplete") is True:
+            complete = False
+        proofs = dict(completed)
+        for repo_id, active in progress.items():
+            if not isinstance(active, dict):
+                raise ValueError("ADO raw repository progress is invalid")
+            prior = prior_cache.get(repo_id)
+            proofs[repo_id] = (prior if isinstance(prior, dict)
+                               and prior.get("head") == active.get("head") else active)
+        pinned = provenance.get("pinnedHeads", {})
+        if not isinstance(pinned, dict):
+            raise ValueError("ADO raw pinned heads are invalid")
+        if source_complete and (set(completed) != set(selected) or any(
+                pinned.get(repo_id) != completed[repo_id].get("head") for repo_id in selected)):
+            raise ValueError("ADO raw completed repository binding mismatch")
+        for repo_id, proof in proofs.items():
+            if repo_id not in selected or not isinstance(proof, dict):
+                continue
+            repo = inventory[repo_id]
+            head, branch, pinned_at = proof.get("head"), proof.get("branch"), proof.get("pinnedAt")
+            if (repo.get("isDisabled") is not False or repo.get("defaultBranch") != branch
+                    or not isinstance(head, str) or not local_usage_ado.SHA.fullmatch(head)
+                    or local_usage_ado.instant(pinned_at) > captured
+                    or repo_id in completed and pinned.get(repo_id) != head):
+                raise ValueError("ADO raw repository proof mismatch")
+            items, checked = proof.get("items"), proof.get("checked", [])
+            if (not isinstance(items, list) or not isinstance(checked, list)
+                    or len(checked) != len(set(checked))
+                    or any(not isinstance(oid, str) or not local_usage_ado.SHA.fullmatch(oid) for oid in checked)):
+                raise ValueError("ADO raw commit proof is invalid")
+            remote = "https://dev.azure.com/" + "/".join(urllib.parse.quote(value, safe="")
+                for value in (org, project, "_git", repo["name"]))
+            identity = repository_identity(remote)
+            if (not isinstance(identity, dict) or not isinstance(identity.get("id"), str) or not identity["id"]
+                    or not isinstance(identity.get("name"), str) or not identity["name"]):
+                raise ValueError("ADO raw repository identity is invalid")
+            category = repository_category(remote, config)
+            if category not in ("work", "personal", "unclassified"):
+                raise ValueError("ADO raw repository category is invalid")
+            family = repo["name"].casefold() in {name.casefold() for name in config.get("m365Repos", [])}
+            seen = set()
+            for item in items:
+                if not isinstance(item, dict):
+                    raise ValueError("ADO raw commit is invalid")
+                oid = item.get("id")
+                authored = local_usage_ado.instant(item.get("authoredAt"))
+                if (not isinstance(oid, str) or not local_usage_ado.SHA.fullmatch(oid) or oid in seen
+                        or oid not in checked or item.get("day") != local_usage_ado.china_day(authored)
+                        or not ado["operationWindow"]["startDay"] <= item["day"] <= ado["operationWindow"]["endDay"]
+                        or type(item.get("merge")) is not bool or type(item.get("coauthor")) is not bool):
+                    raise ValueError("ADO raw commit proof is invalid")
+                seen.add(oid)
+                if authored <= cutoff and not item["merge"] and not item["coauthor"]:
+                    records.append({"key": oid, "at": item["authoredAt"], "category": category,
+                                    "m365": family, "repository": identity})
+    return {"records": records, "complete": complete}
+
+
 def _primary_worker():
     try:
         request = json.load(sys.stdin)
@@ -1009,6 +1129,21 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
     if original_aggregate is not None:
         def aggregate(machines, prs, at, *args, **kwargs):
             machines = local_usage_models.eligible_machines(collector, machines, at)
+            if config.get("mergedAdoProjects") or config.get("adoRemotes"):
+                try:
+                    ado = legacy_ado_commits(config, collector.repository_identity, collector.remote_category)
+                except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                    ado = {"records": [], "complete": False}
+            else:
+                ado = {"records": [], "complete": True}
+            if ado["records"]:
+                machines = [dict(machine) for machine in machines]
+                target_machine = next((machine for machine in machines if machine.get("status") != "missing"), None)
+                if target_machine is not None:
+                    local_records = target_machine.get("commits", [])
+                    if not isinstance(local_records, list):
+                        raise ValueError("Invalid retained local commit events")
+                    target_machine["commits"] = [*local_records, *ado["records"]]
             snapshot = original_aggregate(machines, prs, at, *args, **kwargs)
             if len(snapshot["sources"]) != len(machines):
                 raise ValueError("Activity source coverage does not match the collected machines")
@@ -1035,6 +1170,8 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
                     and not machine.get("retainedCommits")
                     else "partial" if machine.get("status") in ("partial", "stale") else "unavailable"
                 )
+                if not ado["complete"] and source["commitStatus"] in ("ready", "local-ref-ready"):
+                    source["commitStatus"] = "partial"
                 if machine.get("status") != "missing":
                     commit_statuses.append(source["commitStatus"])
             day_commit_status = None

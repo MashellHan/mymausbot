@@ -93,6 +93,29 @@ describe("local Usage projection", () => {
     expect(localUsageView({ ...snapshot, github: undefined })).toEqual(view);
   });
 
+  it("keeps partial and unavailable legacy counts while retaining attributable repository commits", async () => {
+    const asOf = Date.parse("2026-11-09T08:00:00Z");
+    const { file, snapshot } = await historyFixture(asOf);
+    const today = snapshot.daily.at(-1)!;
+    const yesterday = snapshot.daily.at(-2)!;
+    const historyToday = snapshot.localHistory.daily.at(-1)!;
+    const historyYesterday = snapshot.localHistory.daily.at(-2)!;
+    (today.categories.personal as { commits: number | null }).commits = null;
+    (historyToday.categories.personal as { commits: number | null }).commits = null;
+    Object.assign(today, { commitStatus: "partial" });
+    Object.assign(historyToday, { commitStatus: "partial" });
+    for (const category of Object.values(yesterday.categories)) (category as { commits: number | null }).commits = null;
+    for (const category of Object.values(historyYesterday.categories)) (category as { commits: number | null }).commits = null;
+    Object.assign(yesterday, { commitStatus: "unavailable" });
+    Object.assign(historyYesterday, { commitStatus: "unavailable" });
+    await writeFile(file, JSON.stringify(snapshot));
+    const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(response.windows!["1"]).toMatchObject({ commits: null, coverage: "partial",
+      repositories: { rows: [{ id: "a".repeat(64), commits: 8 }] } });
+    expect(response.trend.at(-2)).toMatchObject({ commits: null, coverage: "partial" });
+    expect(response.windows!["7"].commits).toBeNull();
+  });
+
   it.each(["ready", "partial"] as const)("retains %s token history through unavailable baseline and recent rows without changing short windows", async (tokenStatus) => {
     const asOf = Date.parse("2026-11-09T08:00:00Z");
     const { file, snapshot } = await historyFixture(asOf);
