@@ -12,6 +12,11 @@ import { optimisticMessageId, sendArrived } from "./optimistic-send";
 import type { Action, AppState, Bot, Group } from "./store";
 import { createOutboxLeaseCoordinator } from "./pwa-outbox-lease";
 import {
+  clearOutboxPreviewCacheForTests,
+  releaseOutboxAttachmentPreviews,
+  uploadPendingOutboxAttachments,
+} from "./pwa-outbox-attachments";
+import {
   OUTBOX_MAX_AUTO_ATTEMPTS,
   OUTBOX_TEXT_POST_TIMEOUT_MS,
   StaleOutboxLeaseError,
@@ -201,6 +206,7 @@ export function createOutboxManager(initialDeps: OutboxRuntimeDeps = {}) {
     lease: OutboxLeaseHandle | null,
     sendId: string,
   ): Promise<void> => {
+    releaseOutboxAttachmentPreviews(activeRecords.get(sendId) ?? priorRecords.get(sendId));
     if (lease) {
       await mutateWithFencedLease(lease, (store) => {
         store.delete(sendId);
@@ -245,12 +251,13 @@ export function createOutboxManager(initialDeps: OutboxRuntimeDeps = {}) {
 
   const sendOutboxHttp = async (record: OutboxRecord) => {
     const request = deps.apiRequest ?? api;
+    const messageText = record.composedText ?? record.text;
     if (record.targetKind === "bot") {
       return request(`/api/bots/${record.targetId}/messages`, {
         method: "POST",
         timeoutMs: OUTBOX_TEXT_POST_TIMEOUT_MS,
         body: JSON.stringify({
-          text: record.text,
+          text: messageText,
           replyToId: record.replyToId,
           threadId: record.threadId,
           sendId: record.sendId,
@@ -267,7 +274,7 @@ export function createOutboxManager(initialDeps: OutboxRuntimeDeps = {}) {
       method: "POST",
       timeoutMs: OUTBOX_TEXT_POST_TIMEOUT_MS,
       body: JSON.stringify({
-        text: record.text,
+        text: messageText,
         replyToId: record.replyToId,
         threadId: record.threadId,
         sendId: record.sendId,
@@ -290,7 +297,7 @@ export function createOutboxManager(initialDeps: OutboxRuntimeDeps = {}) {
         type: "pendingQueued",
         threadId: body.threadId,
         queueId: body.queueId,
-        text: record.text,
+        text: record.composedText ?? record.text,
         ...(record.targetKind === "bot" && (body.reason === "capacity" || body.reason === "group-turn")
           ? { reason: body.reason }
           : {}),
@@ -357,7 +364,7 @@ export function createOutboxManager(initialDeps: OutboxRuntimeDeps = {}) {
           const isRecoveryOrRetry =
             head.status === "sending" || head.status === "resending" || head.status === "failed";
           const nextStatus: OutboxStatus = isRecoveryOrRetry ? "resending" : "sending";
-          const inFlightRecord: OutboxRecord = {
+          let inFlightRecord: OutboxRecord = {
             ...head,
             status: nextStatus,
             updatedAt: ts,
@@ -377,6 +384,17 @@ export function createOutboxManager(initialDeps: OutboxRuntimeDeps = {}) {
           }
 
           try {
+            if (inFlightRecord.attachments?.length && !inFlightRecord.composedText) {
+              inFlightRecord = await uploadPendingOutboxAttachments({
+                record: inFlightRecord,
+                request: deps.apiRequest ?? api,
+                now,
+                persistRecord: async (next) => {
+                  inFlightRecord = next;
+                  await updateRecordFencedOrDirect(lease, next);
+                },
+              });
+            }
             const waitReady = pendingWaitReady.get(inFlightRecord.sendId);
             if (waitReady) {
               pendingWaitReady.delete(inFlightRecord.sendId);
@@ -451,7 +469,6 @@ export function createOutboxManager(initialDeps: OutboxRuntimeDeps = {}) {
   };
 
   const enqueue = async (input: EnqueueOutboxInput): Promise<OutboxRecord> => {
-    const db = await openDb().catch(() => null);
     const ts = now();
     let record: OutboxRecord = {
       sendId: input.sendId,
@@ -461,6 +478,8 @@ export function createOutboxManager(initialDeps: OutboxRuntimeDeps = {}) {
       targetId: input.targetId,
       seq: 1,
       text: input.text,
+      ...(input.rawText !== undefined ? { rawText: input.rawText } : {}),
+      ...(input.attachments?.length ? { attachments: input.attachments } : {}),
       ...(input.replyToId !== undefined ? { replyToId: input.replyToId } : {}),
       ...(input.dataContext !== undefined ? { dataContext: input.dataContext } : {}),
       ...(input.pointed?.length ? { pointed: input.pointed } : {}),
@@ -474,6 +493,8 @@ export function createOutboxManager(initialDeps: OutboxRuntimeDeps = {}) {
       updatedAt: ts,
       attemptCount: 0,
     };
+    if (!activeRecords.has(input.sendId)) syncRecordToMirror(record);
+    const db = await openDb().catch(() => null);
 
     if (db) {
       try {
@@ -817,6 +838,7 @@ export function createOutboxManager(initialDeps: OutboxRuntimeDeps = {}) {
     autoAttempts.clear();
     clearInTabMutexes();
     pendingWaitReady.clear();
+    clearOutboxPreviewCacheForTests();
     activeRecords.clear();
     priorRecords.clear();
     activeOwnerKeyCache = null;

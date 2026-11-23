@@ -14,6 +14,12 @@ const fixture = vi.hoisted(() => ({
   dispatch: vi.fn(),
   connected: false,
   cachedHydrated: true,
+  instances: [{ instanceId: "inst-1", driverKind: "claudeAgent", displayName: "Claude", capabilities: { images: true } }] as Array<{
+    instanceId: string;
+    driverKind: string;
+    displayName: string;
+    capabilities?: { images?: boolean };
+  }>,
 }));
 
 const bot: Bot = {
@@ -43,7 +49,7 @@ vi.mock("@/state/store", async (importOriginal) => {
         cachedHydrated: fixture.cachedHydrated,
         bots: [bot],
         selectedId: bot.id,
-        instances: [{ instanceId: "inst-1", driverKind: "claudeAgent", displayName: "Claude" }],
+        instances: fixture.instances,
       },
       dispatch: fixture.dispatch,
     }),
@@ -58,7 +64,7 @@ import { PwaPinBotButton } from "./PwaPinBotButton";
 
 const draftId = `bot:${bot.id}:${bot.threadId}`;
 
-describe("Stage 5 Composer offline drafting and PwaPinBotButton", () => {
+describe("Stage 5-7 Composer offline drafting, receipt images, and PwaPinBotButton", () => {
   let root: Root;
   let container: HTMLDivElement;
   let fetchSpy: ReturnType<typeof vi.fn>;
@@ -66,6 +72,7 @@ describe("Stage 5 Composer offline drafting and PwaPinBotButton", () => {
   beforeEach(() => {
     fixture.connected = false;
     fixture.cachedHydrated = true;
+    fixture.instances = [{ instanceId: "inst-1", driverKind: "claudeAgent", displayName: "Claude", capabilities: { images: true } }];
     fixture.dispatch.mockClear();
     vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
     vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
@@ -135,14 +142,66 @@ describe("Stage 5 Composer offline drafting and PwaPinBotButton", () => {
     );
   });
 
-  it("blocks attachment sends while offline/cached until Stage 7 without POSTing", () => {
+  it("queues compressed receipt images into outbox while offline/cached without POSTing", async () => {
+    fixture.instances = [];
+    const blobUrls = new Map<string, Blob | MediaSource>();
+    vi.spyOn(URL, "createObjectURL").mockImplementation((blob: Blob | MediaSource) => {
+      const url = `blob:https://mausbot.mxhan.com/mock-${blobUrls.size + 1}`;
+      blobUrls.set(url, blob);
+      return url;
+    });
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+
     flushSync(() => root.render(createElement(Composer, { bot })));
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(fileInput).not.toBeNull();
+    const receiptFile = new File([new Uint8Array([137, 80, 78, 71])], "receipt.png", { type: "image/png" });
+    Object.defineProperty(fileInput, "files", { value: [receiptFile], configurable: true });
+    fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    const previewImg = container.querySelector('img[src^="blob:"]') as HTMLImageElement | null;
+    expect(previewImg).not.toBeNull();
+
     const textarea = container.querySelector("textarea")!;
     const draft = "Review attached receipt";
+    flushSync(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+      setter?.call(textarea, draft);
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    const sendButton = container.querySelector(`button[aria-label="${t("composer.send.message")}"]`) as HTMLButtonElement | null;
+    expect(sendButton).not.toBeNull();
+    flushSync(() => sendButton!.click());
+    expect(fixture.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "send",
+        botId: "accounting",
+        text: draft,
+        outboxAttachments: [
+          expect.objectContaining({
+            uploadId: expect.any(String),
+            name: "receipt.png",
+            mime: "image/png",
+            compressedBlob: expect.any(Blob),
+          }),
+        ],
+      }),
+    );
+    expect(
+      fetchSpy.mock.calls.filter(([url, init]) => String(url).includes("/api/attachments") || String(url).includes("/messages") || init?.method === "POST"),
+    ).toEqual([]);
+  });
+
+  it("still blocks non-image file attachments while offline/cached", () => {
+    flushSync(() => root.render(createElement(Composer, { bot })));
+    const textarea = container.querySelector("textarea")!;
+    const draft = "Review attached pdf";
     flushSync(() =>
       restoreComposerDraft(draftId, {
         text: draft,
-        attachments: [{ kind: "image", id: "att-1", name: "receipt.png", mime: "image/png", size: 120, path: "/tmp/receipt.png" }],
+        attachments: [{ kind: "file", id: "file-1", name: "statement.pdf", size: 120, path: "/tmp/statement.pdf" }],
       }),
     );
 

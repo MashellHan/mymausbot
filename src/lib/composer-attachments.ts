@@ -29,6 +29,8 @@ export type ImageAttachment = {
   mime: string;
   previewUrl?: string;
   uploading?: boolean;
+  uploadId?: string;
+  compressedBlob?: Blob;
 };
 
 export type Attachment = PasteAttachment | FileAttachment | ImageAttachment | CitationAttachment;
@@ -321,6 +323,15 @@ async function uploadWithRetry<T>(url: string, init: RequestInit): Promise<T> {
   throw new Error("upload failed");
 }
 
+export function canonicalImageNameForMime(originalName: string, mime: string): string {
+  const normalizedMime = mime.split(";", 1)[0]!.trim().toLowerCase();
+  const extension = IMAGE_EXTENSION_BY_MIME[normalizedMime] ?? ".png";
+  const original = attachmentBasename(originalName.trim());
+  const dot = original.lastIndexOf(".");
+  const stem = (dot > 0 ? original.slice(0, dot) : original).trim() || "pasted image";
+  return `${stem}${extension}`;
+}
+
 function canonicalImageName(originalName: string, path: string, mime: string): string {
   const normalizedMime = mime.split(";", 1)[0]!.trim().toLowerCase();
   const extension = IMAGE_EXTENSION_BY_MIME[normalizedMime];
@@ -328,15 +339,15 @@ function canonicalImageName(originalName: string, path: string, mime: string): s
   if (!extension || !pathName.toLowerCase().endsWith(extension)) {
     throw new Error("upload returned invalid image metadata");
   }
-  const original = attachmentBasename(originalName.trim());
-  const dot = original.lastIndexOf(".");
-  const stem = (dot > 0 ? original.slice(0, dot) : original).trim() || "pasted image";
-  return `${stem}${extension}`;
+  return canonicalImageNameForMime(originalName, normalizedMime);
 }
 
-export function optimisticImageAttachment(file: File): ImageAttachment | null {
+export function optimisticImageAttachment(
+  file: File,
+  options?: { allowOversize?: boolean },
+): ImageAttachment | null {
   if (!isImageFile(file)) return null;
-  if (file.size > IMAGE_MAX_BYTES) throw new AttachError(file.name, IMAGE_MAX_BYTES);
+  if (!options?.allowOversize && file.size > IMAGE_MAX_BYTES) throw new AttachError(file.name, IMAGE_MAX_BYTES);
   const mime = file.type.split(";", 1)[0]!.trim().toLowerCase();
   const previewUrl = typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : undefined;
   return {
@@ -494,6 +505,7 @@ export type TranscriptImageAttachment = {
   path: string;
   name: string;
   private?: boolean;
+  previewUrl?: string;
 };
 
 export type TranscriptAttachments = {
