@@ -544,7 +544,7 @@ export function Composer({
     }
   };
   const send = (followUp: FollowUp | undefined = followUpFor(false)) => {
-    if (locked || attachmentPending || isPwaOfflineDraftBlocked(state)) return;
+    if (locked || attachmentPending || isPwaOfflineDraftBlocked({ ...state, hasAttachments: attachments.length > 0 })) return;
     if (unresolvedReply) {
       dispatch({ type: "error", message: t("chat.reply.cancelToSend") });
       return;

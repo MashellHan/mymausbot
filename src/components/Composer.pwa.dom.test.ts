@@ -69,7 +69,7 @@ describe("Stage 5 Composer offline drafting and PwaPinBotButton", () => {
     fixture.dispatch.mockClear();
     vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
     vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
-    fetchSpy = vi.fn();
+    fetchSpy = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
     vi.stubGlobal("fetch", fetchSpy);
     const ownerKey = makePwaOwnerKey("https://relay.mxhan.com", "env-1", "ses-pwa");
     setActivePwaAuth({
@@ -99,7 +99,7 @@ describe("Stage 5 Composer offline drafting and PwaPinBotButton", () => {
     vi.unstubAllGlobals();
   });
 
-  it("keeps Composer enabled while offline/cached and preserves draft on Enter and Send button click without POSTing", () => {
+  it("queues plain-text sends while offline/cached on Enter and Send button click", () => {
     flushSync(() => root.render(createElement(Composer, { bot })));
     const textarea = container.querySelector("textarea")!;
     expect(textarea).not.toBeNull();
@@ -114,13 +114,38 @@ describe("Stage 5 Composer offline drafting and PwaPinBotButton", () => {
     flushSync(() => {
       textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
     });
-    expect(textarea.value).toBe(draft);
-    expect(fixture.dispatch).not.toHaveBeenCalled();
+    expect(textarea.value).toBe("");
+    expect(fixture.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "send", botId: "accounting", text: draft }),
+    );
     expect(
       fetchSpy.mock.calls.filter(([url, init]) => String(url).includes("/messages") || init?.method === "POST"),
     ).toEqual([]);
 
     // 2. Submit via Send button click
+    fixture.dispatch.mockClear();
+    const secondDraft = "Check ledger totals";
+    flushSync(() => restoreComposerDraft(draftId, { text: secondDraft, attachments: [] }));
+    const sendButton = container.querySelector(`button[aria-label="${t("composer.send.message")}"]`) as HTMLButtonElement | null;
+    expect(sendButton).not.toBeNull();
+    flushSync(() => sendButton!.click());
+    expect(textarea.value).toBe("");
+    expect(fixture.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "send", botId: "accounting", text: secondDraft }),
+    );
+  });
+
+  it("blocks attachment sends while offline/cached until Stage 7 without POSTing", () => {
+    flushSync(() => root.render(createElement(Composer, { bot })));
+    const textarea = container.querySelector("textarea")!;
+    const draft = "Review attached receipt";
+    flushSync(() =>
+      restoreComposerDraft(draftId, {
+        text: draft,
+        attachments: [{ kind: "image", id: "att-1", name: "receipt.png", mime: "image/png", size: 120, path: "/tmp/receipt.png" }],
+      }),
+    );
+
     const sendButton = container.querySelector(`button[aria-label="${t("composer.send.message")}"]`) as HTMLButtonElement | null;
     expect(sendButton).not.toBeNull();
     flushSync(() => sendButton!.click());

@@ -13,8 +13,10 @@ export function isComposerLocked(input: {
 export function isPwaOfflineDraftBlocked(input: {
   connected: boolean;
   cachedHydrated?: boolean;
+  hasAttachments?: boolean;
 }): boolean {
   if (!(isRemotePwaMode() || Boolean(input.cachedHydrated))) return false;
   const navigatorOffline = typeof navigator !== "undefined" && navigator.onLine === false;
-  return !input.connected || navigatorOffline;
+  if (!(!input.connected || navigatorOffline)) return false;
+  return Boolean(input.hasAttachments);
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { AppState, Bot, ConfigStatus, Group } from "./store";
+import type { Action, AppState, Bot, ConfigStatus, Group } from "./store";
 import { getPwaAuth, isRemotePwaMode } from "@/lib/pwa-config";
 import {
   consumeBootPwaCache,
@@ -9,6 +9,12 @@ import {
   resolvePwaLaunchSelection,
   writePwaSnapshot,
 } from "@/lib/pwa-cache";
+import {
+  defaultOutboxManager,
+  overlayPwaOutboxOnState,
+  setBootPwaOutboxRecords,
+  type OutboxRecord,
+} from "./pwa-outbox";
 
 export type HydrateFromCacheAction = {
   type: "hydrateFromCache";
@@ -37,7 +43,7 @@ export function reduceHydrateFromCache(state: AppState, action: HydrateFromCache
     }
     return bot;
   });
-  return {
+  return overlayPwaOutboxOnState({
     ...state,
     bots,
     groups: action.groups,
@@ -47,12 +53,15 @@ export function reduceHydrateFromCache(state: AppState, action: HydrateFromCache
     hydrated: true as const,
     cachedHydrated: true,
     connected: false,
-  };
+  });
 }
 
 export function initialStoreStateFromPwaCache(base: AppState): AppState {
   const cache = consumeBootPwaCache();
   if (!cache) return base;
+  if (Array.isArray(cache.outbox) && cache.outbox.length > 0) {
+    setBootPwaOutboxRecords(cache.ownerKey, cache.outbox as OutboxRecord[]);
+  }
   const selection = resolvePwaLaunchSelection({
     queryBotId: cache.queryBotId,
     prefs: cache.prefs,
@@ -90,11 +99,41 @@ export function resolveLiveResumeId(
   return fallbackId;
 }
 
-export function usePwaCacheSync(state: AppState): void {
+export function usePwaCacheSync(
+  state: AppState,
+  dispatch?: (action: Action) => void,
+  getState?: () => AppState | null,
+): void {
   const auth = getPwaAuth();
   const ownerKey = auth?.ownerKey ?? "";
   const latestRef = useRef(state);
   latestRef.current = state;
+
+  useEffect(() => {
+    defaultOutboxManager.setDeps({ dispatch, getState: getState ?? (() => latestRef.current) });
+    if (!ownerKey || !isRemotePwaMode()) return;
+    void defaultOutboxManager.reloadFromDb(ownerKey).then(async () => {
+      dispatch?.({ type: "pwaOutboxOverlay" });
+      if (typeof navigator !== "undefined" && navigator.onLine === false) {
+        await defaultOutboxManager.recoverStaleOffline();
+      }
+    });
+    const onReconnectTrigger = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      void defaultOutboxManager.handleReconnect();
+    };
+    window.addEventListener("online", onReconnectTrigger);
+    document.addEventListener("visibilitychange", onReconnectTrigger);
+    return () => {
+      window.removeEventListener("online", onReconnectTrigger);
+      document.removeEventListener("visibilitychange", onReconnectTrigger);
+    };
+  }, [ownerKey, dispatch, getState]);
+
+  useEffect(() => {
+    if (!ownerKey || !isRemotePwaMode() || !state.hydrated || state.cachedHydrated || !state.connected) return;
+    void defaultOutboxManager.handleReconnect();
+  }, [ownerKey, state.hydrated, state.cachedHydrated, state.connected]);
 
   const selectedOwner =
     state.bots.find((b) => b.id === state.selectedId) ??

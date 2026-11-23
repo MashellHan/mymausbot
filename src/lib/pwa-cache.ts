@@ -2,6 +2,7 @@ import { useEffect, useSyncExternalStore } from "react";
 import type { Bot, ConfigStatus, Group } from "@/state/store";
 import type { PwaAuthRecord } from "./pwa-transport";
 import {
+  OMB_PWA_OUTBOX_STORE,
   OMB_PWA_PREFS_STORE,
   OMB_PWA_SNAPSHOT_STORE,
   getPwaAuth,
@@ -32,6 +33,7 @@ export interface PwaBootCache {
   ownerKey: string;
   snapshot: PwaSnapshotRecord;
   prefs: PwaPrefsRecord | null;
+  outbox?: unknown[];
   queryBotId: string | null;
   defaultBotId?: string;
 }
@@ -58,8 +60,9 @@ export function setActivePwaPrefs(prefs: PwaPrefsRecord | null): void {
 }
 
 export function trimBotForSnapshot(bot: Bot, limit = PWA_SNAPSHOT_MESSAGE_LIMIT): Bot {
-  const sliced = bot.messages.length > limit;
-  const messages = sliced ? bot.messages.slice(-limit) : [...bot.messages];
+  const nonOptimistic = bot.messages.filter((message) => !message.id.startsWith("optimistic-"));
+  const sliced = nonOptimistic.length > limit;
+  const messages = sliced ? nonOptimistic.slice(-limit) : nonOptimistic;
   const tasks = bot.tasks?.map((task) => ({
     ...task,
     busy: false,
@@ -80,8 +83,9 @@ export function trimBotForSnapshot(bot: Bot, limit = PWA_SNAPSHOT_MESSAGE_LIMIT)
 }
 
 export function trimGroupForSnapshot(group: Group, limit = PWA_SNAPSHOT_MESSAGE_LIMIT): Group {
-  const sliced = group.messages.length > limit;
-  const messages = sliced ? group.messages.slice(-limit) : [...group.messages];
+  const nonOptimistic = group.messages.filter((message) => !message.id.startsWith("optimistic-"));
+  const sliced = nonOptimistic.length > limit;
+  const messages = sliced ? nonOptimistic.slice(-limit) : nonOptimistic;
   const tasks = group.tasks?.map((task) => ({
     ...task,
     busyBotId: null,
@@ -357,13 +361,37 @@ export function resolvePwaLaunchSelection(input: {
   return { selectedId: first, source: "first" };
 }
 
+async function readPwaOutboxRaw(idbFactory?: IDBFactory): Promise<unknown[]> {
+  const db = await openPwaDb(idbFactory).catch(() => null);
+  if (!db) return [];
+  try {
+    if (!db.objectStoreNames?.contains?.(OMB_PWA_OUTBOX_STORE)) return [];
+    return await new Promise<unknown[]>((resolve) => {
+      const tx = db.transaction(OMB_PWA_OUTBOX_STORE, "readonly");
+      const store = tx.objectStore(OMB_PWA_OUTBOX_STORE);
+      if (typeof store.getAll !== "function") {
+        resolve([]);
+        return;
+      }
+      const req = store.getAll();
+      req.onsuccess = () => resolve(Array.isArray(req.result) ? req.result : []);
+      req.onerror = () => resolve([]);
+    });
+  } catch {
+    return [];
+  } finally {
+    db.close();
+  }
+}
+
 export async function preloadPwaBootCache(
   auth: Pick<PwaAuthRecord, "ownerKey" | "defaultBotId">,
   options: { idb?: IDBFactory; search?: string } = {},
 ): Promise<PwaBootCache | null> {
-  const [snapshot, prefs] = await Promise.all([
+  const [snapshot, prefs, outbox] = await Promise.all([
     readPwaSnapshot(auth.ownerKey, options.idb),
     readPwaPrefs(auth.ownerKey, options.idb),
+    readPwaOutboxRaw(options.idb),
   ]);
   if (prefs) setActivePwaPrefs(prefs);
   if (!snapshot) return null;
@@ -371,6 +399,7 @@ export async function preloadPwaBootCache(
     ownerKey: auth.ownerKey,
     snapshot,
     prefs,
+    outbox,
     queryBotId: readQueryBotFromLocation(options.search),
     defaultBotId: auth.defaultBotId,
   };

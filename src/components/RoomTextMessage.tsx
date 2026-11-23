@@ -184,7 +184,7 @@ export const RoomTextMessage = memo(function RoomTextMessage({
                 data-citation-thread={threadId}
               >
                 <ThreadRefText text={display} peers={peers} everyone={!dm} />
-              </div>{m.bugReport ? <BugReportNote report={m.bugReport} /> : m.pointed?.length ? <UserLineNote message={m} /> : null}
+              </div>{m.bugReport ? <BugReportNote report={m.bugReport} /> : (m.pointed?.length || m.id.startsWith("optimistic-")) ? <UserLineNote message={m} /> : null}
               {cited && <SentCitations citations={cited.citations} onNavigate={onNavigateCitation} />}
               {m.via === "api" && (
                 <div className="mt-1 text-[11px] text-ink-secondary">{t("room.viaApi")}</div>
