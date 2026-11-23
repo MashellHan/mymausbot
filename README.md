@@ -30,16 +30,8 @@ Talk to them like contacts. Watch them work. Approve what matters.
 <a href="https://github.com/MashellHan/mymausbot/releases/latest/download/mymausbot-intel.dmg">
   <img src="https://img.shields.io/github/v/release/MashellHan/mymausbot?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20%20Download%20for%20Mac%20%28Intel%29&labelColor=070707&color=2a9d8f&cacheSeconds=300" alt="Download the latest mymausbot for Intel Macs (.dmg)" height="40">
 </a>
-&nbsp;
-<a href="https://github.com/MashellHan/mymausbot/releases/latest/download/mymausbot-setup.exe">
-  <img src="https://img.shields.io/github/v/release/MashellHan/mymausbot?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20%20Download%20for%20Windows&labelColor=070707&color=4cc2ff&cacheSeconds=300" alt="Download the latest mymausbot for Windows (.exe)" height="40">
-</a>
-&nbsp;
-<a href="https://github.com/MashellHan/mymausbot/releases/latest/download/mymausbot-amd64.deb">
-  <img src="https://img.shields.io/github/v/release/MashellHan/mymausbot?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20%20Download%20for%20Ubuntu&labelColor=070707&color=e95420&cacheSeconds=300" alt="Download the latest mymausbot for Ubuntu (.deb)" height="40">
-</a>
 
-<sub>[latest release](https://github.com/MashellHan/mymausbot/releases/latest) &nbsp;·&nbsp; macOS: Apple silicon & Intel · .dmg &nbsp;·&nbsp; Windows: x64 installer &nbsp;·&nbsp; Ubuntu 24.04 x64: .deb or AppImage beta &nbsp;·&nbsp; [all releases](https://github.com/MashellHan/mymausbot/releases)</sub>
+<sub>[latest release](https://github.com/MashellHan/mymausbot/releases/latest) &nbsp;·&nbsp; macOS: Apple silicon & Intel · .dmg &nbsp;·&nbsp; [all releases](https://github.com/MashellHan/mymausbot/releases)</sub>
 
 <br>
 
