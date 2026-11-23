@@ -17,7 +17,7 @@ const saved: Message = {
     teamMemoryRequest: { section: "", entryId: "e", kind: "person", revision: "v1" },
   },
 };
-const render = () => renderToStaticMarkup(createElement(ApprovalCard, { bot: { name: "Luna" }, message: saved, threadId: "thread-1" }));
+const render = (compact?: boolean) => renderToStaticMarkup(createElement(ApprovalCard, { bot: { name: "Luna" }, message: saved, threadId: "thread-1", compact }));
 
 beforeEach(() => { fixture.admin = false; });
 
@@ -30,4 +30,12 @@ it("offers no Undo on a department memory notice to a session that may not revie
 it("keeps Undo for an admin", () => {
   fixture.admin = true;
   expect(render()).toContain(">Undo<");
+});
+
+it("hides Undo, Details and entry body in compact Simple mode even for an admin", () => {
+  fixture.admin = true;
+  const html = render(true);
+  expect(html).toContain("Saved to department memory");
+  expect(html).not.toContain("Ada Lovelace");
+  expect(html).not.toMatch(/<button|Undo|Details/);
 });

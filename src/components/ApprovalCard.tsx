@@ -45,6 +45,15 @@ const SKILL_SETTLED_LABEL = {
   delete: "approval.status.skillDeleted",
 } as const;
 
+const AUTOMATION_SETTLED_LABEL = {
+  create: "approval.status.automationSetUp",
+  update: "approval.status.automationUpdated",
+  pause: "approval.status.automationPaused",
+  resume: "approval.status.automationResumed",
+  run_now: "approval.status.automationRunQueued",
+  delete: "approval.status.automationDeleted",
+} as const;
+
 /** Schedules and webhooks alike are "automations" to a person. */
 const AUTOMATION_APPLIED_LINE = {
   create: "approval.applied.automation.create",
@@ -142,6 +151,82 @@ function CompactRoutineReceipt({ request, card }: { request: RoutineRequestCardD
       ) : <span className="min-w-0 [overflow-wrap:anywhere]">{title}</span>}
     </div>
   );
+}
+
+function compactReceipt(card: OptionCardData, botName: string): ReactNode {
+  if (card.routineRequest && (card.autoApplied || card.routineRequest.appliedAt !== undefined || card.routineRequest.resultId)) {
+    return <CompactRoutineReceipt request={card.routineRequest} card={card} />;
+  }
+  if (card.profileRequest && (card.autoApplied || card.profileRequest.appliedAt !== undefined)) {
+    return <div data-profile-receipt="" className={COMPACT_RECEIPT}>{t(card.undone ? "approval.status.undone" : "approval.status.profileUpdated")}</div>;
+  }
+  if (!card.autoApplied) return null;
+  if (card.teamMemoryRequest) {
+    return <div data-team-memory-receipt="" className={COMPACT_RECEIPT}>{t(card.undone ? "approval.status.undone" : "approval.status.teamMemorySaved")}</div>;
+  }
+  if (card.skillRequest) {
+    return (
+      <div data-skill-receipt={card.skillRequest.action} className={COMPACT_RECEIPT}>
+        <span>{t(card.undone ? "approval.status.undone" : SKILL_SETTLED_LABEL[card.skillRequest.action])}</span>
+        <span className="min-w-0 [overflow-wrap:anywhere]">{card.skillRequest.name}</span>
+      </div>
+    );
+  }
+  if (card.modelRequest) {
+    return (
+      <div data-model-receipt="" className={COMPACT_RECEIPT}>
+        <span>{t(card.undone ? "approval.status.undone" : "approval.status.modelChanged")}</span>
+        <span className="min-w-0 [overflow-wrap:anywhere]">{card.modelRequest.selection.model}</span>
+      </div>
+    );
+  }
+  if (card.teamSetupRequest) {
+    return (
+      <div data-team-setup-receipt="" className={COMPACT_RECEIPT}>
+        {t(card.undone ? "approval.status.undone" : card.teamSetupRequest.deletion ? "approval.status.botDeleted" : "approval.status.teamApplied")}
+      </div>
+    );
+  }
+  if (card.appSettingRequest) {
+    return (
+      <div data-app-setting-receipt="" className={COMPACT_RECEIPT}>
+        <span>{t(card.undone ? "approval.status.undone" : "approval.status.settingUpdated")}</span>
+        <span className="min-w-0 [overflow-wrap:anywhere]">{card.appSettingRequest.label}</span>
+      </div>
+    );
+  }
+  if (card.webhookRequest) {
+    const action = card.webhookRequest.operation.action;
+    const title = card.webhookRequest.undo?.name ?? card.title;
+    return (
+      <div data-webhook-receipt={action} className={COMPACT_RECEIPT}>
+        <span>{t(card.undone ? "approval.status.undone" : AUTOMATION_SETTLED_LABEL[action])}</span>
+        {title && <span className="min-w-0 [overflow-wrap:anywhere]">{title}</span>}
+      </div>
+    );
+  }
+  if (card.appTriggerRequest) {
+    const action = card.appTriggerRequest.operation.action;
+    const title = card.appTriggerRequest.undo?.name
+      ?? (card.appTriggerRequest.operation.action === "create" ? card.appTriggerRequest.operation.trigger.name : card.title);
+    return (
+      <div data-app-trigger-receipt={action} className={COMPACT_RECEIPT}>
+        <span>{t(card.undone ? "approval.status.undone" : AUTOMATION_SETTLED_LABEL[action])}</span>
+        {title && <span className="min-w-0 [overflow-wrap:anywhere]">{title}</span>}
+      </div>
+    );
+  }
+  if (card.waitRequest) {
+    return (
+      <div data-wait-receipt={card.waitRequest.settled ?? "waiting"} className={COMPACT_RECEIPT}>
+        {t(card.undone ? "approval.status.undone" : WAIT_APPLIED_LINE[card.waitRequest.settled ?? "waiting"], {
+          name: botName,
+          title: card.waitRequest.label,
+        })}
+      </div>
+    );
+  }
+  return null;
 }
 
 export function toolLabel(tool?: string): string {
@@ -497,12 +582,8 @@ export function ApprovalCard({
   const card = message.card;
   if (!card) return null;
   if (compact && card.answered === "allow" && !card.held && !card.expired && !card.pendingAnswer) {
-    if (card.routineRequest && (card.autoApplied || card.routineRequest.appliedAt !== undefined || card.routineRequest.resultId)) {
-      return <CompactRoutineReceipt request={card.routineRequest} card={card} />;
-    }
-    if (card.profileRequest && (card.autoApplied || card.profileRequest.appliedAt !== undefined)) {
-      return <div data-profile-receipt="" className={COMPACT_RECEIPT}>{t(card.undone ? "approval.status.undone" : "approval.status.profileUpdated")}</div>;
-    }
+    const receipt = compactReceipt(card, bot?.name ?? t("approval.someone"));
+    if (receipt) return receipt;
   }
   if (cardAutomation(card)) return <TriggerCard card={card} threadId={threadId} />;
   const applied = card.autoApplied === true && card.answered === "allow" && !card.held

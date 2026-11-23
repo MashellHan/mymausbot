@@ -102,6 +102,7 @@ export const Transcript = memo(function Transcript({
   emergingId,
   unreadDividerId = null,
   unreadDividerFading = false,
+  compact = false,
   onReply,
 }: {
   group: Group;
@@ -112,6 +113,7 @@ export const Transcript = memo(function Transcript({
   emergingId?: string | null;
   unreadDividerId?: string | null;
   unreadDividerFading?: boolean;
+  compact?: boolean;
   onReply: (message: Message) => void;
 }) {
   const dispatch = useStoreDispatch(), store = useStoreRef(), config = useStoreSelector((s) => s.config), focus = useStoreSelector((s) => s.focusMessage);
@@ -235,7 +237,7 @@ export const Transcript = memo(function Transcript({
           ) : m.kind === "options" && m.card?.requestId && m.card.tool ? (
             <div className="flex justify-start">
               <MessageBoundary fallbackText={m.card.subtitle || m.card.title || ""}>
-                <ApprovalCard bot={memberOf(m.from?.botId)} message={m} threadId={group.threadId} />
+                <ApprovalCard bot={memberOf(m.from?.botId)} message={m} threadId={group.threadId} compact={compact} />
               </MessageBoundary>
             </div>
           ) : m.kind === "options" && m.card && m.from?.botId ? (
@@ -881,6 +883,7 @@ export function GroupView({ group, inForkPanel = false }: { group: Group; inFork
             emergingId={popping?.id}
             unreadDividerId={unreadDivider.messageId}
             unreadDividerFading={unreadDivider.fading}
+            compact={!advancedMode}
             onReply={selectReply}
           />
           {laterCount > 0 && (
