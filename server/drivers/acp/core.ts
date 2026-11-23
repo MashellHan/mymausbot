@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import { PROVIDER_CREDENTIAL_ENV, stripControlPlaneEnv, WORKSPACE_CREDENTIAL_ENV } from "../../config.ts";
 import { openStartupModelCatalog } from "../../startup-model-catalog.ts";
 import { acpModelCatalog } from "./model-catalog.ts";
+import { acpDiscoveryProblem } from "./custom-model-catalog.ts";
 import { decodeInjectId } from "../local-inject.ts";
 import { DeviceAuthController, deviceAuthInstanceSurface, type DeviceSignIn } from "../device-auth.ts";
 import { AcpBrowserAuth, acpBrowserAuthInstanceSurface, type AcpBrowserSignInSpec } from "./browser-auth.ts";
@@ -358,6 +359,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         fixed: support.models,
         startFromSaved: Boolean(support.resolveModels) && support.resolveModelsOnCreate === false,
         resolve: support.resolveModels && ((fresh) => { const env = childEnv(); return support.resolveModels!(env, config, instanceId, fresh, instanceEnvNames(input.environment, env)); }),
+        explain: (error) => acpDiscoveryProblem(error, support.classifyError),
       });
       const refreshModels = (fresh?: boolean) => catalog.refresh(fresh);
       let startupModelRefresh: Promise<void> | null = null;
@@ -1602,12 +1604,9 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         displayName: input.displayName,
         ...(support.backgroundText === false ? {} : { generateMemoryText }),
         enabled: input.enabled,
-        get models() {
-          return catalog.models;
-        },
-        get modelsUnconfirmed() {
-          return catalog.unconfirmed;
-        },
+        get models() { return catalog.models; },
+        get modelsUnconfirmed() { return catalog.unconfirmed; },
+        get modelsUnreadable() { return catalog.unreadable; },
         refreshModels: support.resolveModels ? () => refreshModels(true) : undefined,
         ...(startupModelRefresh ? { startupModelRefresh } : {}),
         ...(support.deviceSignIn && deviceSignIn ? deviceAuthInstanceSurface(deviceSignIn, support.deviceSignIn) : {}), ...(support.browserSignIn && browserSignIn ? acpBrowserAuthInstanceSurface(browserSignIn, support.browserSignIn) : {}),

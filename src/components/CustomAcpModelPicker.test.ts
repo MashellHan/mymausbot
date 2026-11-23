@@ -36,6 +36,7 @@ vi.mock("@/state/store", async (original) => ({
 }));
 const { ModelPicker, ModelVariantRow, modelSelectionForPick } = await import("./ModelPicker");
 const { SimpleModelMenu } = await import("./SimpleModelMenu");
+const { InstanceAccountNotes } = await import("./EngineSetup");
 let nativeDirectory: string;
 let discovered: InstanceInfo["models"];
 beforeAll(async () => {
@@ -165,4 +166,18 @@ it("keeps an agent's native default label and uses a provider-neutral clear hint
   expect(row).toContain("the agent keeps its session or configured setting");
   expect(renderPicker(selected).html).toContain("Agent decides");
   expect(renderPicker(selected).html).not.toContain("OpenCode default");
+});
+
+
+it.each([
+  ["failed", "model list could not be read"],
+  ["signedOut", "isn&#x27;t signed in"],
+  ["timedOut", "took too long to list its models"],
+] as const)("shows the %s model-list note only while listing unconfirmed models", (modelsUnreadable, expected) => {
+  const instance: InstanceInfo = { ...engine("ACP fixture"), modelsUnconfirmed: true, modelsUnreadable };
+  const render = (info: InstanceInfo, listsModels: boolean) =>
+    renderToStaticMarkup(createElement(InstanceAccountNotes, { instance: info, listsModels }));
+  expect(render(instance, true)).toContain(expected);
+  expect(render(instance, false)).toBe("");
+  expect(render({ ...instance, modelsUnconfirmed: undefined }, true)).toBe("");
 });
