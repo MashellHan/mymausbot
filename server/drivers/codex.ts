@@ -869,7 +869,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       // Each bot's Codex reads auth.json when it starts, possibly while another one rewrites it.
       const retryLoginRace = (raw: string, refused: boolean): boolean => {
         const missing = CODEX_MISSING_CREDENTIALS.test(raw);
-        if (!chatgptTurn || loginRaceRetried || state.streamed || attempt >= RETRY_MAX_ATTEMPTS - 1 || !(refused || missing)) return false;
+        if (!chatgptTurn || loginRaceRetried || (reused && promptSubmitted) || state.streamed || attempt >= RETRY_MAX_ATTEMPTS - 1 || !(refused || missing)) return false;
         const mark = loginMark();
         if (!mark || (!missing && mark[1] === launchedLogin)) return false;
         loginRaceRetried = true;
@@ -1185,6 +1185,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             invalid
               ? "Codex rejected its configuration as invalid. Check ~/.codex/config.toml (or CODEX_HOME) for a broken entry, then retry."
               : "Could not read Codex configuration; cannot safely update bot instructions. Retry after checking Codex.",
+            { cause: error },
           );
         }
         // config/read reads the files again (codex-cli 0.160.1); the loaded thread keeps what it started with.
@@ -1364,7 +1365,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         try {
           await startTurn();
         } catch (error) {
-          if (!approvalParams.fallback || !permissionProfileUnsupported(error)) throw error;
+          if (reused || !approvalParams.fallback || !permissionProfileUnsupported(error)) throw error;
           approvalParams = approvalParams.fallback;
           await startTurn();
         }
@@ -1374,13 +1375,16 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       } catch (e) {
         const failure = e instanceof Error ? e : { text: String(e) };
         const raw = e instanceof Error ? e.message : String(e);
-        if (!state.settled && !abandoned && codexConnectionInputRefused(e)) return failConnection(CONNECTION_INPUT_REFUSAL);
-        if (!state.settled && !abandoned && route === "other" && isCodexToolConversionRefusal(raw)) return failConnection(CODEX_TOOL_CONVERSION_REFUSAL);
-        const refused = chatgptTurn && loginMark() !== null && codexSignInRefused({ message: raw });
+        const detail = e instanceof Error && e.cause !== undefined ? e.cause : e;
+        const detailRaw = detail instanceof Error ? detail.message : typeof detail === "object" && detail && "message" in detail && typeof (detail as { message?: unknown }).message === "string" ? (detail as { message: string }).message : String(detail);
+        if (!state.settled && !abandoned && (codexConnectionInputRefused(e) || codexConnectionInputRefused(detail))) return failConnection(CONNECTION_INPUT_REFUSAL);
+        if (!state.settled && !abandoned && route === "other" && (isCodexToolConversionRefusal(raw) || isCodexToolConversionRefusal(detailRaw))) return failConnection(CODEX_TOOL_CONVERSION_REFUSAL);
+        const refused = chatgptTurn && loginMark() !== null && (codexSignInRefused({ message: raw }) || codexSignInRefused(detail));
         hideRefusedModel(raw);
+        if (detailRaw !== raw) hideRefusedModel(detailRaw);
         const reported: ReturnType<typeof codexUserFailure> = refused ? { message: codexSignInExpired(raw) } : codexUserFailure(raw, route);
-        const needsAuth = refused || /(?:\b401\b|unauthorized|missing bearer|authentication required)/i.test(raw);
-        const verdict = classifyError(failure);
+        const needsAuth = refused || /(?:\b401\b|unauthorized|missing bearer|authentication required)/i.test(raw) || /(?:\b401\b|unauthorized|missing bearer|authentication required)/i.test(detailRaw);
+        const verdict = detail === e || detail instanceof Error ? classifyError(failure) : classifyError({ text: `${raw} ${detailRaw}` });
         if (reused && !promptSubmitted && !state.settled && !abandoned && !stopRequested && !needsAuth && verdict.reason !== "auth" && verdict.reason !== "provider_safety" && verdict.reason !== "quota" && verdict.reason !== "unknown_model" && codexTurnId === null && earlyNotifications.length === 0) {
           return relaunch("", reported.message, "rpc_error", true);
         }
@@ -1388,11 +1392,11 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           return relaunch(verdict.reason, reported.message, "rpc_error");
         }
         if (!state.settled && !abandoned) {
-          if (refused) loginRefused(); else if (chatgptTurn && CODEX_MISSING_CREDENTIALS.test(raw)) loginCheck.forget();
+          if (refused) loginRefused(); else if (chatgptTurn && (CODEX_MISSING_CREDENTIALS.test(raw) || CODEX_MISSING_CREDENTIALS.test(detailRaw))) loginCheck.forget();
           emit({
             ...base(threadId, turnId), type: "runtime.error",
             ...codexActionFailure(reported.message, earlyNotifications.some((event) => ["commandExecution", "fileChange", "mcpToolCall", "webSearch"].includes(event.params?.item?.type)), reported.text),
-            ...(needsAuth ? { setup: true } : codexLimitFacts(raw, route)),
+            ...(needsAuth ? { setup: true } : codexLimitFacts(detailRaw, route)),
           });
           await settle(false, needsAuth ? "auth_required" : verdict.reason === "provider_safety" ? "provider_safety" : "rpc_error");
         }

@@ -3642,16 +3642,23 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     });
 
     it.each([
-      ["pre-submit auth", "thread/inject_items", { code: -32603, message: "unexpected status 401 Unauthorized: missing bearer" }, "auth_required", true],
-      ["pre-submit provider_safety", "thread/inject_items", { code: -32603, message: "HTTP 503: This task was blocked by our safety systems." }, "provider_safety", false],
-      ["post-submit auth", "turn/start", { code: -32603, message: "unexpected status 401 Unauthorized: missing bearer" }, "auth_required", true],
-      ["post-submit provider_safety", "turn/start", { code: -32603, message: "HTTP 503: This task was blocked by our safety systems." }, "provider_safety", false],
-    ])("preserves terminal %s on a kept process without warm restart or retry", async (_label, method, error, stopReason, expectSetup) => {
+      ["pre-submit auth", "thread/inject_items", { code: -32603, message: "unexpected status 401 Unauthorized: missing bearer" }, "auth_required", true, false],
+      ["pre-submit provider_safety", "thread/inject_items", { code: -32603, message: "HTTP 503: This task was blocked by our safety systems." }, "provider_safety", false, false],
+      ["config/read auth", "config/read", { code: -32603, message: "unexpected status 401 Unauthorized: missing bearer secret-config-token" }, "auth_required", true, true],
+      ["config/read provider_safety", "config/read", { code: -32603, message: "HTTP 503: This task was blocked by our safety systems. secret-config-detail" }, "provider_safety", false, true],
+      ["post-submit auth", "turn/start", { code: -32603, message: "unexpected status 401 Unauthorized: missing bearer" }, "auth_required", true, false],
+      ["post-submit provider_safety", "turn/start", { code: -32603, message: "HTTP 503: This task was blocked by our safety systems." }, "provider_safety", false, false],
+    ])("preserves terminal %s on a kept process without warm restart or retry", async (_label, method, error, stopReason, expectSetup, waitBackgroundConfigRead) => {
       const faultFile = join(scratch, "terminal-fault.json");
+      const log = join(scratch, "terminal-log.ndjson");
       vi.stubEnv("FAKE_CODEX_FAULT_FILE", faultFile);
+      if (waitBackgroundConfigRead) vi.stubEnv("FAKE_CODEX_STARTUP_LOG", log);
       await create({ mode: "resume" });
       await runTurn({ threadId: "t-warm-terminal", text: "one", system: "Bot rules." });
       const { pid } = seen();
+      if (waitBackgroundConfigRead) {
+        await expect.poll(() => readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line)).filter((entry) => entry.pid === pid && entry.event === "config/read")).toHaveLength(2);
+      }
       writeFileSync(faultFile, JSON.stringify({ method, error }));
       const second = await runTurn({ threadId: "t-warm-terminal", text: "two", system: "Updated rules.", resumeCursor: "codex-thread-1" });
       expect(second.done).toMatchObject({ ok: false, stopReason });
@@ -3659,9 +3666,69 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
       expect(second.events.some((event) => event.type === "turn.retrying")).toBe(false);
       const errors = second.events.filter((event) => event.type === "runtime.error");
       expect(errors).toHaveLength(1);
+      if (method === "config/read") {
+        expect(errors[0]).toMatchObject({ message: "Could not read Codex configuration; cannot safely update bot instructions. Retry after checking Codex." });
+        expect(JSON.stringify(errors[0])).not.toContain("secret-config");
+      }
       if (expectSetup) expect(errors[0]).toMatchObject({ setup: true });
       else expect(errors[0]).not.toHaveProperty("setup");
-      expect(methods("turn/start")).toHaveLength(method === "thread/inject_items" ? 1 : 2);
+      expect(methods("turn/start")).toHaveLength(method === "turn/start" ? 2 : 1);
+    });
+
+    it("fences Custom permission-profile fallback after turn/start on a kept process while preserving cold fallback", async () => {
+      const faultFile = join(scratch, "profile-fault.json");
+      vi.stubEnv("FAKE_CODEX_FAULT_FILE", faultFile);
+      writeFileSync(faultFile, JSON.stringify({ method: "turn/start", error: { code: -32602, message: "experimental API required for permissions" } }));
+      await create({ mode: "config-profile" });
+      const cold = await runTurn({ threadId: "t-cold-profile-fallback", text: "one", approvalMode: "custom" });
+      expect(cold.done).toMatchObject({ ok: true });
+      expect(methods("turn/start")).toHaveLength(2);
+      await instance.dispose();
+
+      recorder.stop();
+      await create({ mode: "config-profile" });
+      const first = await runTurn({ threadId: "t-warm-profile-fence", text: "one", approvalMode: "custom" });
+      expect(first.done).toMatchObject({ ok: true });
+      const { pid } = seen();
+      writeFileSync(faultFile, JSON.stringify({ method: "turn/start", error: { code: -32602, message: "experimental API required for permissions" } }));
+      const second = await runTurn({ threadId: "t-warm-profile-fence", text: "two", approvalMode: "custom", resumeCursor: "codex-thread-1" });
+      expect(second.done).toMatchObject({ ok: false, stopReason: "rpc_error" });
+      expect(seen().pid).toBe(pid);
+      expect(methods("turn/start").map((call) => call.params.input)).toEqual([
+        [{ type: "text", text: "one" }],
+        [{ type: "text", text: "two" }],
+      ]);
+      expect(second.events.some((event) => event.type === "turn.retrying")).toBe(false);
+    });
+
+    it("does not relaunch on login race after a warm turn has been acknowledged", async () => {
+      const codexHome = join(scratch, ".codex");
+      mkdirSync(codexHome, { recursive: true });
+      writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: { refresh_token: "initial-fixture" } }));
+      const faultFile = join(scratch, "login-race-fault.json");
+      vi.stubEnv("FAKE_CODEX_FAULT_FILE", faultFile);
+      vi.stubEnv("FAKE_CODEX_RETRY_SCALE", "0.001");
+      await create({ mode: "resume", environment: { HOME: scratch, USERPROFILE: scratch, CODEX_HOME: codexHome } });
+      await runTurn({ threadId: "t-warm-login-race", text: "one" });
+      const { pid } = seen();
+      writeFileSync(faultFile, JSON.stringify({
+        method: "turn/start",
+        turnError: {
+          message: "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header",
+          codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } },
+        },
+      }));
+      const second = await runTurn({ threadId: "t-warm-login-race", text: "two", resumeCursor: "codex-thread-1" });
+      expect(second.done).toMatchObject({ ok: false });
+      expect(seen().pid).toBe(pid);
+      expect(methods("turn/start").map((call) => call.params.input)).toEqual([
+        [{ type: "text", text: "one" }],
+        [{ type: "text", text: "two" }],
+      ]);
+      expect(second.events.some((event) => event.type === "turn.retrying")).toBe(false);
+      expect(second.events.filter((event) => event.type === "runtime.error")).toEqual([
+        expect.objectContaining({ setup: true }),
+      ]);
     });
 
     it("ends the process when a turn on it is stopped, and the next turn resumes in a new one", async () => {
