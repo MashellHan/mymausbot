@@ -40,16 +40,18 @@ export function decodeBase64Chunk(text: unknown, maxDecodedBytes: number): Buffe
   return buf;
 }
 
-function sanitizeHeaders(raw: unknown): HeaderMap | undefined {
+function sanitizeHeaders(raw: unknown, strictRequestCheck: boolean): HeaderMap | undefined {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
   const out: HeaderMap = {};
   for (const [k, v] of Object.entries(raw)) {
     const key = k.toLowerCase();
-    if (!key || /[\r\n:]/.test(key)) return undefined;
+    if (!key) return undefined;
+    if (strictRequestCheck && /[\r\n:]/.test(key)) return undefined;
     if (typeof v === "string") {
-      if (/[\r\n]/.test(v)) return undefined;
+      if (strictRequestCheck && /[\r\n]/.test(v)) return undefined;
       out[key] = v;
-    } else if (Array.isArray(v) && v.every((item) => typeof item === "string" && !/[\r\n]/.test(item))) {
+    } else if (Array.isArray(v) && v.every((item) => typeof item === "string")) {
+      if (strictRequestCheck && v.some((item) => /[\r\n]/.test(item))) return undefined;
       out[key] = v;
     } else {
       return undefined;
@@ -89,7 +91,7 @@ export function parseBridgeFrame(rawText: string, maxFrameBytes: number): Bridge
       ) {
         return undefined;
       }
-      const headers = sanitizeHeaders(obj.headers);
+      const headers = sanitizeHeaders(obj.headers, true);
       if (!headers) return undefined;
       return {
         type: "req.open",
@@ -127,7 +129,7 @@ export function parseBridgeFrame(rawText: string, maxFrameBytes: number): Bridge
       ) {
         return undefined;
       }
-      const headers = sanitizeHeaders(obj.headers);
+      const headers = sanitizeHeaders(obj.headers, false);
       if (!headers) return undefined;
       return { type: "res.head", streamId: obj.streamId, status: obj.status, headers };
     }

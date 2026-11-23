@@ -15,6 +15,7 @@ export interface BridgeConfig {
   maxFrameBytes: number;
   maxConcurrentStreams: number;
   maxStreamBufferBytes: number;
+  maxWsBufferedBytes: number;
   heartbeatIntervalMs: number;
   maxMissedPongs: number;
   authDeadlineMs: number;
@@ -132,6 +133,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): BridgeConfig {
     maxFrameBytes,
     maxConcurrentStreams: parsePositiveInt(env.MAX_CONCURRENT_STREAMS, 128, "MAX_CONCURRENT_STREAMS", 1, 4096),
     maxStreamBufferBytes: parsePositiveInt(env.MAX_STREAM_BUFFER_BYTES, 4 * MiB, "MAX_STREAM_BUFFER_BYTES", 64 * KiB, 32 * MiB),
+    maxWsBufferedBytes: parsePositiveInt(env.MAX_WS_BUFFERED_BYTES, 64 * MiB, "MAX_WS_BUFFERED_BYTES", 1024, 512 * MiB),
     heartbeatIntervalMs: parsePositiveInt(env.HEARTBEAT_INTERVAL_MS, 15_000, "HEARTBEAT_INTERVAL_MS", 200, 120_000),
     maxMissedPongs: parsePositiveInt(env.MAX_MISSED_PONGS, 2, "MAX_MISSED_PONGS", 1, 10),
     authDeadlineMs: parsePositiveInt(env.AUTH_DEADLINE_MS, 5_000, "AUTH_DEADLINE_MS", 200, 30_000),

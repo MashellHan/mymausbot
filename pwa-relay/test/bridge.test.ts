@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { createServer as createHttpServer, request as httpRequest } from "node:http";
+import { dirname, resolve as resolvePath } from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
 import { startBridge, type BridgeServer } from "../src/bridge.ts";
 import { loadConfig, type BridgeConfig } from "../src/config.ts";
@@ -423,5 +427,231 @@ describe("pwa-relay bridge", () => {
     const closed = await mac.closePromise;
     assert.equal(closed.code, 1006);
     assert.equal(bridge.hostConnected(), false);
+  });
+
+  it("rejects oversized req.open frames (431) without poisoning the host tunnel", async () => {
+    const bridge = await startBridge(makeConfig({ maxFrameBytes: 4096 }), { log: () => {} });
+    bridges.push(bridge);
+
+    const mac = await connectMockMac(bridge.port);
+    await mac.waitForFrame((f) => f.type === "hello");
+
+    const hugePath = `/api/bots?pad=${"a".repeat(5000)}`;
+    const tooBigRes = await fetch(`http://127.0.0.1:${bridge.port}${hugePath}`);
+    assert.equal(tooBigRes.status, 431);
+    assertCorsAndNoStore(tooBigRes.headers);
+    assert.deepEqual(await tooBigRes.json(), { error: "Request headers too large", code: "headers_too_large" });
+    assert.equal(mac.frames.filter((f) => f.type === "req.open").length, 0);
+
+    // Subsequent valid request still succeeds on the same tunnel
+    const okPromise = fetch(`http://127.0.0.1:${bridge.port}/api/health`);
+    const open = (await mac.waitForFrame((f) => f.type === "req.open")) as Extract<BridgeFrame, { type: "req.open" }>;
+    mac.sendFrame({ type: "res.head", streamId: open.streamId, status: 200, headers: { "content-type": "application/json" } });
+    mac.sendFrame({ type: "res.body", streamId: open.streamId, chunkB64: Buffer.from('{"ok":true}').toString("base64"), eof: true });
+    assert.equal((await okPromise).status, 200);
+    assert.equal(bridge.hostConnected(), true);
+
+    mac.ws.close();
+  });
+
+  it("fails only the affected stream (502 + req.cancel) on invalid res.head headers without dropping the tunnel", async () => {
+    const bridge = await startBridge(makeConfig({ upstreamHeaderTimeoutMs: 2_000 }), { log: () => {} });
+    bridges.push(bridge);
+
+    const mac = await connectMockMac(bridge.port);
+    await mac.waitForFrame((f) => f.type === "hello");
+
+    const healthyPromise = fetch(`http://127.0.0.1:${bridge.port}/api/health`);
+    const healthyOpen = (await mac.waitForFrame((f) => f.type === "req.open" && f.path === "/api/health")) as Extract<
+      BridgeFrame,
+      { type: "req.open" }
+    >;
+
+    const badPromise = fetch(`http://127.0.0.1:${bridge.port}/api/bots`);
+    const badOpen = (await mac.waitForFrame((f) => f.type === "req.open" && f.path === "/api/bots")) as Extract<
+      BridgeFrame,
+      { type: "req.open" }
+    >;
+
+    mac.sendFrame({
+      type: "res.head",
+      streamId: badOpen.streamId,
+      status: 200,
+      headers: { "bad header name": "value", "x-nul": "ok\u0000bad" },
+    });
+
+    const badRes = await badPromise;
+    assert.equal(badRes.status, 502);
+    assertCorsAndNoStore(badRes.headers);
+    assert.deepEqual(await badRes.json(), { error: "Upstream sent invalid response headers", code: "bad_gateway" });
+    await mac.waitForFrame((f) => f.type === "req.cancel" && f.streamId === badOpen.streamId);
+
+    // Concurrent healthy stream and tunnel remain unaffected
+    assert.equal(bridge.hostConnected(), true);
+    mac.sendFrame({ type: "res.head", streamId: healthyOpen.streamId, status: 200, headers: { "content-type": "application/json" } });
+    mac.sendFrame({
+      type: "res.body",
+      streamId: healthyOpen.streamId,
+      chunkB64: Buffer.from('{"ok":true}').toString("base64"),
+      eof: true,
+    });
+    const healthyRes = await healthyPromise;
+    assert.equal(healthyRes.status, 200);
+    assert.deepEqual(await healthyRes.json(), { ok: true });
+
+    mac.ws.close();
+  });
+
+  it("applies backpressure and rejects new requests with 503 bridge_busy when ws bufferedAmount reaches MAX_WS_BUFFERED_BYTES", async () => {
+    const bridge = await startBridge(
+      makeConfig({ maxWsBufferedBytes: 16 * 1024, maxFrameBytes: 32 * 1024, uploadHeaderTimeoutMs: 5_000, upstreamHeaderTimeoutMs: 2_000 }),
+      { log: () => {} },
+    );
+    bridges.push(bridge);
+
+    const mac = await connectMockMac(bridge.port);
+    await mac.waitForFrame((f) => f.type === "hello");
+
+    // Pause reads on the mock Mac socket so loopback TCP buffers fill and ws.bufferedAmount exceeds maxWsBufferedBytes
+    const macSocket = (mac.ws as unknown as { _socket?: { pause: () => void; resume: () => void } })._socket;
+    assert.ok(macSocket, "Expected underlying socket on mock ws");
+    macSocket.pause();
+
+    const payload = Buffer.alloc(4 * 1024 * 1024, 0x7a);
+    let settled = false;
+    const uploadPromise = fetch(`http://127.0.0.1:${bridge.port}/api/attachments?uploadId=bp1`, {
+      method: "POST",
+      body: payload,
+    }).then((r) => {
+      settled = true;
+      return r;
+    });
+
+    // Wait until ws.bufferedAmount hits maxWsBufferedBytes and new requests are rejected with 503 bridge_busy
+    let busyRes: Response | undefined;
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline) {
+      const probe = await fetch(`http://127.0.0.1:${bridge.port}/api/bots`);
+      if (probe.status === 503) {
+        const body = (await probe.json()) as { code?: string };
+        if (body.code === "bridge_busy") {
+          busyRes = probe;
+          break;
+        }
+      }
+      await new Promise((r) => setTimeout(r, 15));
+    }
+    assert.ok(busyRes, "Expected 503 bridge_busy while ws.bufferedAmount is saturated");
+    assert.equal(busyRes.headers.get("retry-after"), "1");
+    assertCorsAndNoStore(busyRes.headers);
+    assert.equal(settled, false);
+
+    // Resume reading on the mock Mac socket so bufferedAmount drains and the paused upload completes
+    macSocket.resume();
+    const uploadOpen = (await mac.waitForFrame((f) => f.type === "req.open" && f.path.includes("uploadId=bp1"))) as Extract<
+      BridgeFrame,
+      { type: "req.open" }
+    >;
+    await mac.waitForFrame((f) => f.type === "req.body" && f.streamId === uploadOpen.streamId && f.eof, 5000);
+
+    const uploadedFrames = mac.frames.filter(
+      (f): f is Extract<BridgeFrame, { type: "req.body" }> => f.type === "req.body" && f.streamId === uploadOpen.streamId,
+    );
+    assert.ok(Buffer.concat(uploadedFrames.map((f) => Buffer.from(f.chunkB64, "base64"))).equals(payload));
+
+    mac.sendFrame({ type: "res.head", streamId: uploadOpen.streamId, status: 200, headers: { "content-type": "application/json" } });
+    mac.sendFrame({ type: "res.body", streamId: uploadOpen.streamId, chunkB64: Buffer.from('{"ok":true}').toString("base64"), eof: true });
+    assert.equal((await uploadPromise).status, 200);
+
+    mac.ws.close();
+  });
+
+  it("cancels stalled backpressured uploads with 504 + req.cancel on uploadHeaderTimeoutMs", async () => {
+    const bridge = await startBridge(
+      makeConfig({ maxWsBufferedBytes: 16 * 1024, maxFrameBytes: 32 * 1024, uploadHeaderTimeoutMs: 200 }),
+      { log: () => {} },
+    );
+    bridges.push(bridge);
+
+    const mac = await connectMockMac(bridge.port);
+    await mac.waitForFrame((f) => f.type === "hello");
+
+    const macSocket = (mac.ws as unknown as { _socket?: { pause: () => void; resume: () => void } })._socket;
+    assert.ok(macSocket);
+    macSocket.pause();
+
+    const uploadRes = await fetch(`http://127.0.0.1:${bridge.port}/api/attachments?uploadId=bp-stall`, {
+      method: "POST",
+      body: Buffer.alloc(4 * 1024 * 1024, 0x63),
+    });
+    assert.equal(uploadRes.status, 504);
+    assertCorsAndNoStore(uploadRes.headers);
+    assert.deepEqual(await uploadRes.json(), { error: "Upstream response timed out", code: "upstream_timeout" });
+
+    macSocket.resume();
+    await mac.waitForFrame((f) => f.type === "req.cancel");
+    assert.equal(bridge.hostConnected(), true);
+    mac.ws.close();
+  });
+
+  it("propagates SSE client cancellation through an HTTP reverse proxy and enforces Caddyfile hardening", async () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const caddyfile = readFileSync(resolvePath(here, "../deploy/Caddyfile"), "utf8");
+    assert.ok(!caddyfile.includes("flush_interval -1"), "Caddyfile must not set flush_interval -1 (breaks SSE cancellation)");
+    assert.match(caddyfile, /handle_errors\s*\{[\s\S]*Access-Control-Allow-Origin\s+\{\$PWA_ORIGIN\}/);
+    assert.match(caddyfile, /handle_errors\s*\{[\s\S]*Cache-Control\s+"no-store"/);
+    assert.match(caddyfile, /replace ticket REDACTED/);
+    assert.match(caddyfile, /request>headers>Authorization delete/);
+
+    const bridge = await startBridge(makeConfig(), { log: () => {} });
+    bridges.push(bridge);
+    const mac = await connectMockMac(bridge.port);
+    await mac.waitForFrame((f) => f.type === "hello");
+
+    // Simulate a reverse proxy forwarding SSE and tearing down upstream request on client close
+    const proxy = createHttpServer((clientReq, clientRes) => {
+      const upstreamReq = httpRequest(
+        {
+          host: "127.0.0.1",
+          port: bridge.port,
+          method: clientReq.method,
+          path: clientReq.url,
+          headers: clientReq.headers,
+        },
+        (upstreamRes) => {
+          clientRes.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
+          upstreamRes.pipe(clientRes);
+        },
+      );
+      clientRes.on("close", () => {
+        if (!clientRes.writableEnded) upstreamReq.destroy();
+      });
+      upstreamReq.on("error", () => {
+        if (!clientRes.writableEnded) clientRes.destroy();
+      });
+      clientReq.pipe(upstreamReq);
+    });
+    await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+    const proxyPort = (proxy.address() as { port: number }).port;
+
+    try {
+      const ac = new AbortController();
+      const ssePromise = fetch(`http://127.0.0.1:${proxyPort}/api/events?ticket=tk-proxy`, { signal: ac.signal });
+      const open = (await mac.waitForFrame((f) => f.type === "req.open")) as Extract<BridgeFrame, { type: "req.open" }>;
+      mac.sendFrame({ type: "res.head", streamId: open.streamId, status: 200, headers: { "content-type": "text/event-stream" } });
+      mac.sendFrame({ type: "res.body", streamId: open.streamId, chunkB64: Buffer.from("data: ok\n\n").toString("base64"), eof: false });
+
+      const sseRes = await ssePromise;
+      const reader = sseRes.body!.getReader();
+      await reader.read();
+
+      ac.abort();
+      const cancel = await mac.waitForFrame((f) => f.type === "req.cancel" && f.streamId === open.streamId);
+      assert.equal(cancel.type, "req.cancel");
+    } finally {
+      proxy.closeAllConnections();
+      await new Promise<void>((resolve) => proxy.close(() => resolve()));
+      mac.ws.close();
+    }
   });
 });

@@ -1,9 +1,20 @@
 # TLS terminator for pwa-relay. Caddy replaces X-Forwarded-For with the real client IP.
-# Access logs are intentionally disabled so ?ticket=, Authorization, and cookies never touch disk.
+# Access logs stay disabled; error logs filter query strings, credentials, and client IPs so ?ticket= never hits disk.
 {
 	admin off
-	log {
+	log default {
 		level ERROR
+		format filter {
+			request>uri query {
+				replace ticket REDACTED
+			}
+			request>headers>Authorization delete
+			request>headers>Cookie delete
+			request>headers>X-Forwarded-For delete
+			request>remote_ip delete
+			request>client_ip delete
+			wrap json
+		}
 	}
 	servers {
 		protocols h1 h2
@@ -16,8 +27,21 @@
 
 {$PWA_RELAY_DOMAIN} {
 	header -Server
+
+	handle_errors {
+		header -Server
+		header Access-Control-Allow-Origin {$PWA_ORIGIN}
+		header Vary Origin
+		header Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+		header Access-Control-Allow-Headers "Authorization, Content-Type, x-omb-background"
+		header Access-Control-Expose-Headers "Retry-After"
+		header Access-Control-Max-Age "86400"
+		header Cache-Control "no-store"
+		header Content-Type "application/json; charset=utf-8"
+		respond `{"error":"Relay unavailable","code":"relay_unavailable"}` {err.status_code}
+	}
+
 	reverse_proxy 127.0.0.1:8080 {
-		flush_interval -1
 		stream_close_delay 5m
 	}
 }

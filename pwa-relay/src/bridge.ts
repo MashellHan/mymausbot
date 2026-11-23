@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import {
+  createServer,
+  validateHeaderName,
+  validateHeaderValue,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import type { AddressInfo } from "node:net";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { verifyHostTokenHash, type BridgeConfig } from "./config.ts";
@@ -52,6 +59,10 @@ interface InFlightStream {
   headerTimer: NodeJS.Timeout | undefined;
   bodyBytesReceived: number;
   isSse: boolean;
+  pausedForBackpressure: boolean;
+  pendingChunks: Buffer[];
+  pendingEof: boolean;
+  onDrain: () => void;
 }
 
 interface HostSession {
@@ -61,6 +72,7 @@ interface HostSession {
   pingTimer: NodeJS.Timeout | undefined;
   awaitingPong: boolean;
   missedPongs: number;
+  drainWaiters: Set<() => void>;
 }
 
 export interface BridgeServer {
@@ -110,8 +122,12 @@ function sendJsonError(
   status: number,
   body: Record<string, unknown>,
   extraHeaders?: Record<string, string>,
+  onFlushed?: () => void,
 ): void {
-  if (res.writableEnded) return;
+  if (res.writableEnded) {
+    onFlushed?.();
+    return;
+  }
   if (!res.headersSent) {
     applyCorsAndNoStore(res, pwaOrigin);
     res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -120,7 +136,7 @@ function sendJsonError(
     }
     res.statusCode = status;
   }
-  res.end(JSON.stringify(body));
+  res.end(JSON.stringify(body), onFlushed);
 }
 
 function filterRequestHeaders(raw: IncomingMessage["headers"]): HeaderMap {
@@ -133,10 +149,44 @@ function filterRequestHeaders(raw: IncomingMessage["headers"]): HeaderMap {
   return out;
 }
 
-function sendFrame(ws: WebSocket, frame: unknown): boolean {
+function sendWsPayload(ws: WebSocket, payload: string, onFlushed?: () => void): boolean {
   if (ws.readyState !== WebSocket.OPEN) return false;
-  ws.send(JSON.stringify(frame));
+  ws.send(payload, onFlushed);
   return true;
+}
+
+function sendSessionPayload(session: HostSession, payload: string, maxWsBufferedBytes: number): boolean {
+  return sendWsPayload(session.ws, payload, () => {
+    if (session.ws.bufferedAmount < maxWsBufferedBytes && session.drainWaiters.size > 0) {
+      const waiters = Array.from(session.drainWaiters);
+      session.drainWaiters.clear();
+      for (const wake of waiters) wake();
+    }
+  });
+}
+
+function sendFrame(ws: WebSocket, frame: unknown): boolean {
+  return sendWsPayload(ws, JSON.stringify(frame));
+}
+
+function validateUpstreamHeaders(headers: HeaderMap): Array<[string, string | string[]]> | undefined {
+  const filtered: Array<[string, string | string[]]> = [];
+  for (const [k, v] of Object.entries(headers)) {
+    const lower = k.toLowerCase();
+    if (HOP_BY_HOP_AND_MANAGED_RESPONSE_HEADERS.has(lower)) continue;
+    try {
+      validateHeaderName(lower);
+      if (typeof v === "string") {
+        validateHeaderValue(lower, v);
+      } else {
+        for (const item of v) validateHeaderValue(lower, item);
+      }
+    } catch {
+      return undefined;
+    }
+    filtered.push([lower, v]);
+  }
+  return filtered;
 }
 
 export async function startBridge(
@@ -158,15 +208,82 @@ export async function startBridge(
     cancelUpstream: boolean,
   ) => {
     if (!host.streams.delete(stream.streamId)) return;
+    stream.finished = true;
+    stream.pendingChunks.length = 0;
+    stream.pendingEof = false;
+    host.drainWaiters.delete(stream.onDrain);
     if (stream.headerTimer) clearTimeout(stream.headerTimer);
     if (cancelUpstream) {
       sendFrame(host.ws, { type: "req.cancel", streamId: stream.streamId });
     }
+    const closeReqAfterEnd = !stream.req.readableEnded && !stream.req.destroyed;
     if (!stream.headersSent && !stream.res.writableEnded) {
       log({ ev: "stream_error", status, reason: code });
-      sendJsonError(stream.res, config.pwaOrigin, status, { error: message, code });
-    } else if (!stream.res.writableEnded) {
-      stream.res.destroy();
+      sendJsonError(
+        stream.res,
+        config.pwaOrigin,
+        status,
+        { error: message, code },
+        closeReqAfterEnd ? { Connection: "close" } : undefined,
+        closeReqAfterEnd
+          ? () => {
+              if (!stream.req.destroyed) stream.req.destroy();
+            }
+          : undefined,
+      );
+    } else {
+      if (!stream.res.writableEnded) stream.res.destroy();
+      if (!stream.req.destroyed) stream.req.destroy();
+    }
+  };
+
+  const flushStreamBody = (host: HostSession, stream: InFlightStream) => {
+    if (stream.finished || !host.streams.has(stream.streamId) || host.ws.readyState !== WebSocket.OPEN) return;
+    while (stream.pendingChunks.length > 0) {
+      if (host.ws.bufferedAmount >= config.maxWsBufferedBytes) {
+        if (!stream.pausedForBackpressure) {
+          stream.pausedForBackpressure = true;
+          stream.req.pause();
+        }
+        host.drainWaiters.add(stream.onDrain);
+        return;
+      }
+      const head = stream.pendingChunks[0]!;
+      const slice = head.length <= maxRawChunk ? stream.pendingChunks.shift()! : head.subarray(0, maxRawChunk);
+      if (head.length > maxRawChunk) {
+        stream.pendingChunks[0] = head.subarray(maxRawChunk);
+      }
+      sendSessionPayload(
+        host,
+        JSON.stringify({
+          type: "req.body",
+          streamId: stream.streamId,
+          chunkB64: slice.toString("base64"),
+          eof: false,
+        }),
+        config.maxWsBufferedBytes,
+      );
+    }
+    if (stream.pendingEof) {
+      if (host.ws.bufferedAmount >= config.maxWsBufferedBytes) {
+        host.drainWaiters.add(stream.onDrain);
+        return;
+      }
+      stream.pendingEof = false;
+      sendSessionPayload(
+        host,
+        JSON.stringify({
+          type: "req.body",
+          streamId: stream.streamId,
+          chunkB64: "",
+          eof: true,
+        }),
+        config.maxWsBufferedBytes,
+      );
+    }
+    if (stream.pausedForBackpressure) {
+      stream.pausedForBackpressure = false;
+      stream.req.resume();
     }
   };
 
@@ -175,6 +292,7 @@ export async function startBridge(
       clearInterval(host.pingTimer);
       host.pingTimer = undefined;
     }
+    host.drainWaiters.clear();
     const inFlight = host.streams.size;
     if (activeHost === host) {
       activeHost = null;
@@ -222,7 +340,7 @@ export async function startBridge(
     }
 
     const host = activeHost;
-    if (host.streams.size >= config.maxConcurrentStreams) {
+    if (host.streams.size >= config.maxConcurrentStreams || host.ws.bufferedAmount >= config.maxWsBufferedBytes) {
       sendJsonError(
         res,
         config.pwaOrigin,
@@ -237,13 +355,49 @@ export async function startBridge(
     if (typeof contentLengthHeader === "string") {
       const declared = Number(contentLengthHeader);
       if (Number.isFinite(declared) && declared > config.maxBodyBytes) {
-        sendJsonError(res, config.pwaOrigin, 413, { error: "Request body too large", code: "payload_too_large" });
-        req.resume();
+        const closeAfter = !req.readableEnded && !req.destroyed;
+        sendJsonError(
+          res,
+          config.pwaOrigin,
+          413,
+          { error: "Request body too large", code: "payload_too_large" },
+          closeAfter ? { Connection: "close" } : undefined,
+          closeAfter
+            ? () => {
+                if (!req.destroyed) req.destroy();
+              }
+            : undefined,
+        );
         return;
       }
     }
 
     const streamId = randomUUID();
+    const openPayload = JSON.stringify({
+      type: "req.open",
+      streamId,
+      method: req.method ?? "GET",
+      path: req.url ?? "/",
+      headers: filterRequestHeaders(req.headers),
+      remoteAddr: resolveRemoteAddr(req),
+    });
+    if (Buffer.byteLength(openPayload, "utf8") > config.maxFrameBytes) {
+      const closeAfter = !req.readableEnded && !req.destroyed;
+      sendJsonError(
+        res,
+        config.pwaOrigin,
+        431,
+        { error: "Request headers too large", code: "headers_too_large" },
+        closeAfter ? { Connection: "close" } : undefined,
+        closeAfter
+          ? () => {
+              if (!req.destroyed) req.destroy();
+            }
+          : undefined,
+      );
+      return;
+    }
+
     const headerTimeoutMs = isUploadPath(pathname) ? config.uploadHeaderTimeoutMs : config.upstreamHeaderTimeoutMs;
 
     const stream: InFlightStream = {
@@ -255,6 +409,10 @@ export async function startBridge(
       headerTimer: undefined,
       bodyBytesReceived: 0,
       isSse: false,
+      pausedForBackpressure: false,
+      pendingChunks: [],
+      pendingEof: false,
+      onDrain: () => flushStreamBody(host, stream),
     };
 
     host.streams.set(streamId, stream);
@@ -263,14 +421,7 @@ export async function startBridge(
       failStream(host, stream, 504, "upstream_timeout", "Upstream response timed out", true);
     }, headerTimeoutMs);
 
-    const opened = sendFrame(host.ws, {
-      type: "req.open",
-      streamId,
-      method: req.method ?? "GET",
-      path: req.url ?? "/",
-      headers: filterRequestHeaders(req.headers),
-      remoteAddr: resolveRemoteAddr(req),
-    });
+    const opened = sendSessionPayload(host, openPayload, config.maxWsBufferedBytes);
 
     if (!opened) {
       failStream(host, stream, 503, "mac_offline", "Mac host is offline", false);
@@ -279,6 +430,10 @@ export async function startBridge(
 
     const onClientAbort = () => {
       if (!stream.finished && host.streams.has(streamId)) {
+        stream.finished = true;
+        stream.pendingChunks.length = 0;
+        stream.pendingEof = false;
+        host.drainWaiters.delete(stream.onDrain);
         if (stream.headerTimer) clearTimeout(stream.headerTimer);
         host.streams.delete(streamId);
         sendFrame(host.ws, { type: "req.cancel", streamId });
@@ -292,34 +447,22 @@ export async function startBridge(
     let bodyDone = false;
 
     req.on("data", (chunk: Buffer) => {
-      if (bodyExceeded || bodyDone || !host.streams.has(streamId)) return;
+      if (bodyExceeded || bodyDone || stream.finished || !host.streams.has(streamId)) return;
       stream.bodyBytesReceived += chunk.length;
       if (stream.bodyBytesReceived > config.maxBodyBytes) {
         bodyExceeded = true;
         failStream(host, stream, 413, "payload_too_large", "Request body too large", true);
-        req.destroy();
         return;
       }
-      for (let offset = 0; offset < chunk.length; offset += maxRawChunk) {
-        const slice = chunk.subarray(offset, offset + maxRawChunk);
-        sendFrame(host.ws, {
-          type: "req.body",
-          streamId,
-          chunkB64: slice.toString("base64"),
-          eof: false,
-        });
-      }
+      stream.pendingChunks.push(chunk);
+      flushStreamBody(host, stream);
     });
 
     req.on("end", () => {
-      if (bodyExceeded || bodyDone || !host.streams.has(streamId)) return;
+      if (bodyExceeded || bodyDone || stream.finished || !host.streams.has(streamId)) return;
       bodyDone = true;
-      sendFrame(host.ws, {
-        type: "req.body",
-        streamId,
-        chunkB64: "",
-        eof: true,
-      });
+      stream.pendingEof = true;
+      flushStreamBody(host, stream);
     });
 
     req.on("error", () => {
@@ -434,6 +577,7 @@ export async function startBridge(
           pingTimer: undefined,
           awaitingPong: false,
           missedPongs: 0,
+          drainWaiters: new Set(),
         };
 
         session.pingTimer = setInterval(() => {
@@ -470,28 +614,43 @@ export async function startBridge(
         }
         case "res.head": {
           const stream = session.streams.get(frame.streamId);
-          if (!stream || stream.headersSent) return;
+          if (!stream || stream.headersSent || stream.finished) return;
+          if (frame.status < 200 || frame.status > 599) {
+            failStream(session, stream, 502, "bad_gateway", "Upstream sent invalid response status", true);
+            return;
+          }
+          const validatedHeaders = validateUpstreamHeaders(frame.headers);
+          if (!validatedHeaders) {
+            failStream(session, stream, 502, "bad_gateway", "Upstream sent invalid response headers", true);
+            return;
+          }
           if (stream.headerTimer) {
             clearTimeout(stream.headerTimer);
             stream.headerTimer = undefined;
           }
-          stream.headersSent = true;
-          applyCorsAndNoStore(stream.res, config.pwaOrigin);
-          let contentType = "";
-          for (const [k, v] of Object.entries(frame.headers)) {
-            const lower = k.toLowerCase();
-            if (HOP_BY_HOP_AND_MANAGED_RESPONSE_HEADERS.has(lower)) continue;
-            if (lower === "content-type") {
-              contentType = Array.isArray(v) ? (v[0] ?? "") : v;
+          try {
+            applyCorsAndNoStore(stream.res, config.pwaOrigin);
+            let contentType = "";
+            for (const [lower, v] of validatedHeaders) {
+              if (lower === "content-type") {
+                contentType = Array.isArray(v) ? (v[0] ?? "") : v;
+              }
+              stream.res.setHeader(lower, v);
             }
-            stream.res.setHeader(lower, v);
+            stream.isSse = contentType.toLowerCase().startsWith("text/event-stream");
+            if (stream.isSse) {
+              stream.res.setHeader("X-Accel-Buffering", "no");
+            }
+            stream.res.statusCode = frame.status;
+            stream.res.flushHeaders();
+            stream.headersSent = true;
+          } catch {
+            if (!stream.res.headersSent) {
+              failStream(session, stream, 502, "bad_gateway", "Upstream sent invalid response headers", true);
+            } else {
+              failStream(session, stream, 502, "bad_gateway", "Upstream response failed", true);
+            }
           }
-          stream.isSse = contentType.toLowerCase().startsWith("text/event-stream");
-          if (stream.isSse) {
-            stream.res.setHeader("X-Accel-Buffering", "no");
-          }
-          stream.res.statusCode = frame.status;
-          stream.res.flushHeaders();
           break;
         }
         case "res.body": {
@@ -572,6 +731,7 @@ export async function startBridge(
       if (activeHost) {
         teardownHost(activeHost, CloseCode.Unavailable, true, "closing");
       }
+      httpServer.closeAllConnections();
       await new Promise<void>((resolve) => wss.close(() => resolve()));
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
     },
