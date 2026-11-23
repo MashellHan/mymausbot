@@ -5,7 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 
 import { writeFileAtomic } from "../atomic.ts";
-import { createLoopStalls, markRequestArrival, requestArrivedBefore, stallStats, timeBlocking } from "./loop-stalls.ts";
+import { createLoopStalls, markRequestArrival, requestArrivedBefore, STALL_RESOLUTION_MS, stallStats, timeBlocking } from "./loop-stalls.ts";
 import { PERF_HEALTH_MAX_BYTES, perfHealth, stallLines } from "./perf-report.ts";
 
 const tally = { n: 0, ms: 0, maxMs: 0 };
@@ -26,18 +26,22 @@ describe("loop stall percentiles", () => {
 });
 
 describe("the loop stall recorder", () => {
+  it("samples at most ten times per second while idle", () => {
+    expect(STALL_RESOLUTION_MS).toBeGreaterThanOrEqual(100);
+  });
+
   it("sees a stall the once-a-minute sampler would miss, and counts whole-file saves", async () => {
     const stalls = createLoopStalls({ minuteMs: 60_000 });
     const dir = mkdtempSync(join(tmpdir(), "loop-stalls-"));
     stalls.start();
     try {
-      await delay(60);
+      await delay(5 * STALL_RESOLUTION_MS);
       const before = stalls.report().saves.m1.n;
       writeFileAtomic(join(dir, "a.json"), "{}");
       timeBlocking("runtimeReads", () => { const until = Date.now() + 300; while (Date.now() < until) { /* the stall */ } });
-      await delay(60);
+      await delay(5 * STALL_RESOLUTION_MS);
       const report = stalls.report();
-      expect(report.m1!.max).toBeGreaterThanOrEqual(250);
+      expect(report.m1!.max).toBeGreaterThanOrEqual(300 - STALL_RESOLUTION_MS);
       expect(report.m1!.over100ms).toBeGreaterThanOrEqual(1);
       // One stall does not set the median; the rest is timer slop, a few ms late on a busy runner (Windows ticks every 15.6 ms).
       expect(report.m1!.p50).toBeLessThan(50);
