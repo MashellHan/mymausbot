@@ -264,6 +264,17 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(warned).toContain("[codex] unsupported tool call (provider dropped the MCP namespace): retry_thread");
   });
 
+  it.each([
+    ["item/completed functionCallOutput", "1", "retry_thread"],
+    ["rawResponseItem/completed function_call_output", "raw", "coordinate_bots"],
+  ])("preserves the unsupported-tool notice on an ephemeral thread via %s", async (_label, mode, tool) => {
+    const rollout = join(scratch, "ignored-ephemeral-rollout.jsonl");
+    await create({ environment: { HOME: scratch, CODEX_HOME: join(scratch, ".codex"), FAKE_CODEX_ROLLOUT: rollout, FAKE_CODEX_UNSUPPORTED_ITEM: mode } });
+    await instance.adapter.sendTurn({ threadId: "ephemeral-unsupported", text: "Fixture", ephemeral: true });
+    await recorder.until((event) => event.type === "turn.completed");
+    expect(recorder.events.filter((e) => e.type === "runtime.notice").map((e) => (e as { message: string }).message)).toEqual([unsupportedCallsNotice([tool])]);
+  });
+
   it("refuses native selection before a Codex prompt, including resumed Full-access turns", async () => {
     const dump = join(scratch, "scope-refused.json"); process.env.FAKE_CODEX_DUMP = dump;
     await create({ fullAuto: true, environment: { HOME: scratch, CODEX_HOME: join(scratch, ".codex") } });

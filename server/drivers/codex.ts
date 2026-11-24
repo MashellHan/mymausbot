@@ -6,7 +6,7 @@ import { codexShellDisabled, codexTurnConfigArgs } from "./codex-guest.ts";
 import { TEAM_TOOLS_FAILED, teamToolsFailed } from "./team-tools.ts";
 import { enabledMcpMounts, mcpStartupTracker, supportsMcpStartup } from "./codex-mcp-startup.ts";
 import { boxAdmittedEnv, boxProxyEnvNames, customServerEnvBox, type McpApprovalMode, mountMcpServer } from "./codex-mcp-mount.ts";
-import { reportUnsupportedCalls, rolloutMark, type RolloutMark } from "./codex-unsupported-calls.ts";
+import { reportUnsupportedCalls, rolloutMark, unsupportedCallFromItem, type RolloutMark } from "./codex-unsupported-calls.ts";
 // The `codex` CLI headless over its app-server JSON-RPC (NDJSON on stdio): completion is
 // `turn/completed`, approvals arrive as server→client requests, resumeCursor is the codex thread id.
 import { createHash } from "node:crypto";
@@ -850,6 +850,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       let reviewWarning = false;
       let teamToolsNoticed = false;
       let rolloutAt: RolloutMark | null = null; // where the native rollout ended when this turn began: a refused call's only trace
+      const unsupportedCalls = new Set<string>();
       let timedOutReview = false;
       const retryMode = approvalMode[0].toUpperCase() + approvalMode.slice(1);
       const reviewNotice = (status: "warning" | "timedOut" | "denied", action?: any) => {
@@ -1035,7 +1036,15 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
               }
             } else if (item.type === "reasoning") {
               emit({ ...base(threadId, turnId), type: "item.updated", itemType: "reasoning", tokens: null });
+            } else {
+              const refused = unsupportedCallFromItem(item);
+              if (refused) unsupportedCalls.add(refused);
             }
+            break;
+          }
+          case "rawResponseItem/completed": {
+            const refused = unsupportedCallFromItem(p.item);
+            if (refused) unsupportedCalls.add(refused);
             break;
           }
           case "thread/tokenUsage/updated": {
@@ -1082,7 +1091,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
               turnError({ message: state.retryError });
             }
             if (abandoned || state.settled) break;
-            reportUnsupportedCalls(rolloutAt, (message, text) => emit({ ...base(threadId, turnId), type: "runtime.notice", message, ...(text ? { text } : {}) }));
+            reportUnsupportedCalls(rolloutAt, (message, text) => emit({ ...base(threadId, turnId), type: "runtime.notice", message, ...(text ? { text } : {}) }), [...unsupportedCalls]);
             void settle(t.status === "completed", t.status === "completed" ? null :
               (classifyError({ text: state.lastError }).reason === "provider_safety" ? "provider_safety" : (state.lastError || t.status || "failed")));
             break;
