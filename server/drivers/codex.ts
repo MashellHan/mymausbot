@@ -1042,11 +1042,6 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             }
             break;
           }
-          case "rawResponseItem/completed": {
-            const refused = unsupportedCallFromItem(p.item);
-            if (refused) unsupportedCalls.add(refused);
-            break;
-          }
           case "thread/tokenUsage/updated": {
             // `total` covers this app-server process, `last` the latest model call; codex's inputTokens
             // already includes cachedInputTokens.

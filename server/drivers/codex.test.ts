@@ -264,15 +264,19 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(warned).toContain("[codex] unsupported tool call (provider dropped the MCP namespace): retry_thread");
   });
 
-  it.each([
-    ["item/completed functionCallOutput", "1", "retry_thread"],
-    ["rawResponseItem/completed function_call_output", "raw", "coordinate_bots"],
-  ])("preserves the unsupported-tool notice on an ephemeral thread via %s", async (_label, mode, tool) => {
+  it("preserves the unsupported-tool notice on an ephemeral thread via item/completed functionCallOutput", async () => {
     const rollout = join(scratch, "ignored-ephemeral-rollout.jsonl");
-    await create({ environment: { HOME: scratch, CODEX_HOME: join(scratch, ".codex"), FAKE_CODEX_ROLLOUT: rollout, FAKE_CODEX_UNSUPPORTED_ITEM: mode } });
+    await create({ environment: { HOME: scratch, CODEX_HOME: join(scratch, ".codex"), FAKE_CODEX_ROLLOUT: rollout, FAKE_CODEX_UNSUPPORTED_ITEM: "1" } });
     await instance.adapter.sendTurn({ threadId: "ephemeral-unsupported", text: "Fixture", ephemeral: true });
     await recorder.until((event) => event.type === "turn.completed");
-    expect(recorder.events.filter((e) => e.type === "runtime.notice").map((e) => (e as { message: string }).message)).toEqual([unsupportedCallsNotice([tool])]);
+    expect(recorder.events.filter((e) => e.type === "runtime.notice").map((e) => (e as { message: string }).message)).toEqual([unsupportedCallsNotice(["retry_thread"])]);
+  });
+
+  it("does not rely on unnegotiated rawResponseItem/completed events", async () => {
+    await create({ environment: { HOME: scratch, CODEX_HOME: join(scratch, ".codex"), FAKE_CODEX_UNSUPPORTED_ITEM: "raw" } });
+    await instance.adapter.sendTurn({ threadId: "ephemeral-raw-filtered", text: "Fixture", ephemeral: true });
+    await recorder.until((event) => event.type === "turn.completed");
+    expect(recorder.events.filter((e) => e.type === "runtime.notice")).toEqual([]);
   });
 
   it("refuses native selection before a Codex prompt, including resumed Full-access turns", async () => {
