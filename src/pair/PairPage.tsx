@@ -16,7 +16,7 @@ import {
   type SessionState,
 } from "../lib/session";
 import { pairedDestination } from "../lib/phone-pairing";
-import { remoteFetch } from "../lib/pwa-config";
+import { activatePwaPairing, parsePwaPairHash, remoteFetch } from "../lib/pwa-config";
 import { t } from "../lib/i18n";
 import { formatPairingCode, PAIRING_INPUT_PROBLEM_KEY, readPairingInput } from "../../shared/pairing-code";
 import { isPrivateHost } from "../../shared/private-host";
@@ -36,13 +36,34 @@ export function pairIntro({ mode, sent, email, cloudHome }: { mode: "email" | "c
   return t("pair.intro.code");
 }
 
+export function parsePwaLinkInput(raw: string): ReturnType<typeof parsePwaPairHash> | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("#") || trimmed.startsWith("pair=")) {
+    const normalized = trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
+    return /[#&]pair=/.test(normalized) ? parsePwaPairHash(normalized) : null;
+  }
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      if (/[#&]pair=/.test(parsed.hash)) return parsePwaPairHash(parsed.hash);
+    } catch {
+    }
+  }
+  return null;
+}
+
 /** The sentence for a wrong kind of code (an email's sign-in code, an old six-digit code, a script key), else null. */
 export function codeProblem(code: string): string | null {
+  const pwa = parsePwaLinkInput(code);
+  if (pwa) return pwa.ok ? null : pwa.error;
   const read = readPairingInput(code);
   return read.kind === "wrong" && read.problem !== "notACode" ? t(PAIRING_INPUT_PROBLEM_KEY[read.problem]) : null;
 }
 
 export function codeReady(code: string): boolean {
+  const pwa = parsePwaLinkInput(code);
+  if (pwa) return pwa.ok;
   const kind = readPairingInput(code).kind;
   return kind === "code" || kind === "credential";
 }
@@ -133,7 +154,10 @@ export function PairPage({ initialCode, initialEmail = null, reason }: { initial
     e.preventDefault();
     setBusy(true);
     setError(null);
-    const result = await pairWithCode({ code, label, attemptId });
+    const pwa = parsePwaLinkInput(code);
+    const result = pwa?.ok
+      ? await activatePwaPairing(pwa.payload, { deviceName: label })
+      : await pairWithCode({ code, label, attemptId });
     setBusy(false);
     if (result.ok) {
       location.replace(pairedDestination(location.search));
