@@ -188,11 +188,11 @@ describe("verified Agent Team card metadata", () => {
     expect(first).toEqual(concurrent);
     expect(await data.provider.get()).toEqual(first);
     expect(data.run.mock.calls.map(([args]) => args.join(" ")).sort()).toEqual([
-      "--session default agent list", "--session default workspace list",
+      "--session default agent list", "--session default agent list", "--session default workspace list",
     ]);
     await data.append([message("Appended without another discovery", "final")]);
     expect((await data.member()).messagePreview).toBe("Appended without another discovery");
-    expect(data.run).toHaveBeenCalledTimes(4);
+    expect(data.run).toHaveBeenCalledTimes(6);
   });
 
   it("does not let an older pending snapshot restore metadata after a fresh occupant observation", async () => {
@@ -236,7 +236,7 @@ describe("verified Agent Team card metadata", () => {
     expect(read.mock.calls.map(([, file]) => file)).toEqual([join(data.project, "AGENTS.md"), data.playbook]);
     data.state.agents = members;
     expect((await data.provider.get()).teams[0]!.agents.every((member) => member.role === "Developer")).toBe(true);
-    expect(data.run).toHaveBeenCalledTimes(2);
+    expect(data.run).toHaveBeenCalledTimes(3);
   });
 
   it("revalidates declarations without a stale role cache and rejects ambiguous or redirected documents", async () => {
