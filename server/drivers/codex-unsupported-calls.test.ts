@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { reportUnsupportedCalls, rolloutMark, unsupportedCallFromItem, unsupportedCallsIn, unsupportedCallsNotice, unsupportedCallsSince } from "./codex-unsupported-calls.ts";
+import { rolloutMark, unsupportedCallsIn, unsupportedCallsNotice, unsupportedCallsSince } from "./codex-unsupported-calls.ts";
 
 const item = (payload: unknown) => `${JSON.stringify({ timestamp: "2026-10-26T02:17:00.000Z", type: "response_item", payload })}\n`;
 // What a provider that drops `namespace` makes codex write: the bare-named call, then codex's own refusal.
@@ -64,13 +64,4 @@ describe("unsupportedCallsSince", () => {
 it("names the refused tools and what to do", () => {
   expect(unsupportedCallsNotice(["retry_thread"])).toMatch(/^Codex could not run the tool retry_thread \("unsupported call"\)/);
   expect(unsupportedCallsNotice(["a", "b", "c", "d", "e", "f", "g", "h"])).toContain("a, b, c, d, e, f and 2 more");
-});
-
-it("reads non-persistent unsupported call items and deduplicates them against rollout marks", () => {
-  expect(unsupportedCallFromItem({ type: "functionCallOutput", name: "retry_thread", output: "unsupported call: retry_thread" })).toBe("retry_thread");
-  expect(unsupportedCallFromItem({ type: "function_call_output", output: [{ type: "input_text", text: "unsupported call: coordinate_bots" }] })).toBe("coordinate_bots");
-  expect(unsupportedCallFromItem({ type: "agentMessage", output: "unsupported call: nope" })).toBeUndefined();
-  const notices: string[] = [];
-  reportUnsupportedCalls(null, (message) => notices.push(message), ["retry_thread", "retry_thread", "coordinate_bots"]);
-  expect(notices).toEqual([unsupportedCallsNotice(["retry_thread", "coordinate_bots"])]);
 });

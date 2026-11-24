@@ -221,7 +221,6 @@ const logStartup = (event: string) => {
 };
 let decision: unknown = null;
 let experimentalApi = false;
-let experimentalRawEvents = false;
 
 const out = (obj: unknown) => process.stdout.write(JSON.stringify(obj) + "\n");
 let nativeThreadId = "codex-thread-1";
@@ -414,12 +413,6 @@ const finishTurn = () => {
         savedPath: "/tmp/provider-owned-path-must-not-be-read.png",
       },
     });
-  }
-  if (process.env.FAKE_CODEX_UNSUPPORTED_ITEM === "1") {
-    notify("item/completed", { item: { id: "u1", type: "functionCallOutput", name: "retry_thread", output: "unsupported call: retry_thread" } });
-  }
-  if (process.env.FAKE_CODEX_UNSUPPORTED_ITEM === "raw" && experimentalRawEvents) {
-    notify("rawResponseItem/completed", { item: { type: "function_call_output", call_id: "call_u1", output: [{ type: "input_text", text: "unsupported call: coordinate_bots" }] } });
   }
   notify("item/completed", { item: { id: "m1", type: "agentMessage", text: "done from fake codex" } });
   const carried = process.env.FAKE_CODEX_RESTORED_USAGE ? { inputTokens: 100, cachedInputTokens: 50, outputTokens: 10 } : { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
@@ -753,7 +746,6 @@ process.stdin.on("data", (chunk) => {
         notify("turn/completed", { turn: { status: "interrupted" } });
         break;
       case "thread/start":
-        experimentalRawEvents = Boolean(msg.params?.experimentalRawEvents);
         dump();
         developerInstructions = msg.params?.developerInstructions ?? "";
         if (process.env.FAKE_CODEX_MCP_FAILED) {
@@ -769,7 +761,7 @@ process.stdin.on("data", (chunk) => {
           const reply = { jsonrpc: "2.0", id: msg.id, result: { thread: { id: "codex-thread-1" }, model: "fake-codex-model", sandbox: resolvedSandbox(msg.params ?? {}) } };
           void startMcpServers().then((startup) => { mcpStartup = startup; dump(); threadReply(reply); });
         } else {
-          threadReply({ jsonrpc: "2.0", id: msg.id, result: { thread: { id: "codex-thread-1", ...(!msg.params?.ephemeral && process.env.FAKE_CODEX_ROLLOUT ? { path: process.env.FAKE_CODEX_ROLLOUT } : {}) }, model: "fake-codex-model", sandbox: resolvedSandbox(msg.params ?? {}) } });
+          threadReply({ jsonrpc: "2.0", id: msg.id, result: { thread: { id: "codex-thread-1", ...(process.env.FAKE_CODEX_ROLLOUT ? { path: process.env.FAKE_CODEX_ROLLOUT } : {}) }, model: "fake-codex-model", sandbox: resolvedSandbox(msg.params ?? {}) } });
         }
         break;
       case "turn/start": {

@@ -31,13 +31,6 @@ const outputText = (output: unknown): string => typeof output === "string" ? out
   : Array.isArray(output) ? output.map((part) => typeof part?.text === "string" ? part.text : "").join("")
     : output && typeof output === "object" && typeof (output as { content?: unknown }).content === "string" ? (output as { content: string }).content : "";
 
-export function unsupportedCallFromItem(item: unknown): string | undefined {
-  if (!item || typeof item !== "object") return undefined;
-  const entry = item as { type?: unknown; output?: unknown };
-  if (entry.type !== "functionCallOutput" && entry.type !== "function_call_output") return undefined;
-  return UNSUPPORTED.exec(outputText(entry.output))?.[1];
-}
-
 function refusedTool(line: string): string | undefined {
   let record: { type?: unknown; payload?: { type?: unknown; output?: unknown } };
   try {
@@ -45,8 +38,8 @@ function refusedTool(line: string): string | undefined {
   } catch {
     return undefined;
   }
-  if (record.type !== "response_item") return undefined;
-  return unsupportedCallFromItem(record.payload);
+  if (record.type !== "response_item" || record.payload?.type !== "function_call_output") return undefined;
+  return UNSUPPORTED.exec(outputText(record.payload.output))?.[1];
 }
 
 /** The tools codex refused in these rollout lines, each once, in the order it refused them. Only the lines that carry
@@ -96,9 +89,9 @@ export function unsupportedCallsNotice(tools: readonly string[]): string {
   return unsupportedCallsFailure(tools).message;
 }
 
-/** Logs and tells the thread about every call codex refused since `mark` or observed in-turn, so a dropped namespace is never silent. */
-export function reportUnsupportedCalls(mark: RolloutMark | null, notice: (message: string, text?: ServerText) => void, observed: readonly string[] = []): void {
-  const tools = [...new Set([...unsupportedCallsSince(mark), ...observed])];
+/** Logs and tells the thread about every call codex refused since `mark`, so a dropped namespace is never silent. */
+export function reportUnsupportedCalls(mark: RolloutMark | null, notice: (message: string, text?: ServerText) => void): void {
+  const tools = unsupportedCallsSince(mark);
   if (!tools.length) return;
   console.warn(`[codex] unsupported tool call (provider dropped the MCP namespace): ${tools.join(", ")}`);
   const failure = unsupportedCallsFailure(tools);
