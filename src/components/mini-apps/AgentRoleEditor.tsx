@@ -6,6 +6,7 @@ import { t } from "@/lib/i18n";
 import { api, ApiError } from "@/state/store";
 import { LOCAL_AGENT_ROLE_DOCUMENT_MAX_BYTES, type LocalAgentRoleDocument,
   type LocalAgentRoleDocumentTarget } from "../../../shared/local-dashboard";
+import { AgentDocumentMarkdown } from "../AgentDocumentMarkdown";
 import { MarkdownTextEditor } from "../bot-panel/MemoryTextEditor";
 
 export type AgentRoleEditorSelection = LocalAgentRoleDocumentTarget & { appId: string; revision: number };
@@ -23,6 +24,7 @@ export function AgentRoleEditor({ selection, onClose, onSaved }: {
   const [attempt, setAttempt] = useState(0);
   const [doc, setDoc] = useState<LocalAgentRoleDocument | null>(null);
   const [failed, setFailed] = useState(false);
+  const [preview, setPreview] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [copyStatus, setCopyStatus] = useState<"copied" | "empty" | "failed">();
@@ -70,7 +72,12 @@ export function AgentRoleEditor({ selection, onClose, onSaved }: {
         <h2 id={title} className="text-[15px] font-semibold">{t("agentRoleEditor.title")}</h2>
         {doc && <p className="break-words text-[13px] text-ink-secondary" dir="auto">{doc.agentName} · {doc.file}</p>}
       </div>
-      <button type="button" className="ui-button" onClick={close} disabled={saving}>{t("common.close")}</button>
+      <div className="flex shrink-0 items-center gap-2">
+        <button type="button" className="ui-button" disabled={!doc || failed || saving} onClick={() => setPreview(!preview)}>
+          {t(preview ? "agentRoleEditor.edit" : "agentRoleEditor.preview")}
+        </button>
+        <button type="button" className="ui-button" onClick={close} disabled={saving}>{t("common.close")}</button>
+      </div>
     </header>
     {failed ? <div className="space-y-2">
       <p role="alert" className="text-[13px] text-danger">{t("agentRoleEditor.loadFailed")}</p>
@@ -80,6 +87,11 @@ export function AgentRoleEditor({ selection, onClose, onSaved }: {
         {t("agentRoleEditor.shared", { names: doc.memberNames.join(", ") })}
       </p>}
       <MarkdownTextEditor key={doc.hash} file={doc.file} doc={doc} document showConflictCurrent maxBytes={LOCAL_AGENT_ROLE_DOCUMENT_MAX_BYTES}
+        renderPreview={preview ? (draft, region) => <section ref={region} aria-label={t("agentRoleEditor.preview")} tabIndex={0}
+          className="min-h-[280px] max-h-[50dvh] overflow-auto rounded-lg border border-hairline bg-inset p-3 focus-visible:outline-2 focus-visible:outline-accent
+            [&_th]:text-start [&_:is(th,td)]:px-2 [&_:is(th,td)]:py-1 [&_tr]:border-b [&_tr]:border-hairline">
+          <AgentDocumentMarkdown markdown={draft} />
+        </section> : undefined}
         save={save} onDone={(result) => {
           if (!result) return;
           setDoc(result);

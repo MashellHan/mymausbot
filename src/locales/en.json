@@ -3457,6 +3457,8 @@
   "common.checking": "Checking…",
   "common.close": "Close",
   "agentRoleEditor.title": "Edit Agent MD",
+  "agentRoleEditor.preview": "Preview",
+  "agentRoleEditor.edit": "Edit",
   "agentRoleEditor.shared": "Shared by {names}",
   "agentRoleEditor.loadFailed": "Could not open the current role file. Reopen Agent MD or try again.",
   "agentRoleEditor.saveFailed": "Could not save this role file. Reopen Agent MD and check the current version.",
