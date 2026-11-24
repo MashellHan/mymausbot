@@ -2,6 +2,7 @@ import { FolderOpen, LayoutGrid, Puzzle, Rocket, Search, UsersRound, X, Zap } fr
 
 import { useCloudFilesReady } from "@/lib/cloud-files";
 import { t } from "@/lib/i18n";
+import { isRemotePwaMode } from "@/lib/pwa-transport";
 import { useStore } from "@/state/store";
 
 import { CloudRoomCard } from "./CloudRoomCard";
@@ -15,6 +16,7 @@ export function SidebarPhoneBar({ query, onQuery }: { query: string; onQuery: (q
   const { state, dispatch } = useStore();
   const automationsNeedYou = useAutomationsNeedYou();
   const filesReady = useCloudFilesReady();
+  const remotePwa = isRemotePwaMode();
   const items: SidebarMenuItem[] = [
     {
       key: "automations",
@@ -38,7 +40,7 @@ export function SidebarPhoneBar({ query, onQuery }: { query: string; onQuery: (q
       active: state.activeView === "files",
       onSelect: () => dispatch({ type: "showFiles" }),
     }] : []),
-    {
+    ...(!remotePwa ? [{
       key: "published-apps",
       label: t("sidebar.nav.publishedApps"),
       icon: <Rocket size={18} />,
@@ -51,7 +53,7 @@ export function SidebarPhoneBar({ query, onQuery }: { query: string; onQuery: (q
       icon: <Puzzle size={18} />,
       active: state.pluginsOpen,
       onSelect: () => dispatch({ type: "togglePlugins", open: true }),
-    },
+    }] : []),
   ];
   return (
     <div data-sidebar-phone-bar className="px-3 pb-3 pt-1">

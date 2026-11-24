@@ -6,6 +6,7 @@ import { t } from "@/lib/i18n";
 export { useSettingsPlace, type PlaceKind, type SettingsPlace } from "./settings-place";
 import { useAdvancedMode } from "@/lib/interface-mode";
 import { railShown, usePlaces, type RailPlace } from "@/lib/places";
+import { isRemoteClientSession } from "@/lib/pwa-transport";
 import { useOwnerOrAdmin } from "@/lib/use-owner-or-admin";
 import { useStore } from "@/state/store";
 import { workspacesAvailable } from "../WorkspacesSection";
@@ -18,7 +19,7 @@ export function useSettingsContext(): SettingsContext {
   const places = usePlaces();
   const known = useKnownPlaceCount();
   const ogb = typeof window === "undefined" ? undefined : window.ogb;
-  const client = ogb?.remoteClient?.active === true;
+  const client = isRemoteClientSession();
   const cloud = state.config?.cloudHome === true;
   const team = Boolean(state.config?.team);
   const desktop = Boolean(ogb);

@@ -13,6 +13,7 @@ import { loadConfig as loadRelayConfig } from "../pwa-relay/src/config.ts";
 import type { PwaPairingPayload } from "../shared/pwa-bridge.ts";
 import { json, readBody } from "./harness/http.ts";
 import { PWA_BRIDGE_SUBPROTOCOL, isPwaBridgeRequest, pwaBridgePairingRefusal, startPwaBridge } from "./pwa-bridge.ts";
+import { isBridgeRouteAllowed } from "./pwa-bridge-wire.ts";
 import { PWA_BRIDGE_CONFIG_FILE, loadPwaBridgeConfig } from "./pwa-bridge-config.ts";
 import { resolveRequestAuth, type RequestAuth } from "./request-auth.ts";
 import { createPwaBridgeRoutes } from "./routes/pwa-bridge.ts";
@@ -396,6 +397,7 @@ describe("PWA bridge unit, config, and route enforcement", () => {
       { method: "GET", path: "/api/desktop-viewer/status" },
       { method: "GET", path: "/api/setup-import/grok" },
       { method: "GET", path: "/api/pwa-bridge" },
+      { method: "GET", path: "/api/instances" },
       { method: "POST", path: "/api/auth/pairing" },
     ]) {
       const res = await relay.request(blocked);
@@ -403,6 +405,21 @@ describe("PWA bridge unit, config, and route enforcement", () => {
       expect(res.json.code).toBe("bridge_route_forbidden");
     }
     expect(seenSocketProps.length).toBe(beforeCalls);
+
+    // Routine endpoints are allowed on the bridge allowlist; /api/instances stays blocked.
+    for (const [method, path] of [
+      ["GET", "/api/routines"],
+      ["POST", "/api/routines"],
+      ["PATCH", "/api/routines/r1"],
+      ["DELETE", "/api/routines/r1"],
+      ["POST", "/api/routines/r1/run"],
+      ["POST", "/api/routine-runs/run-1/cancel"],
+      ["POST", "/api/routine-runs/run-1/seen"],
+      ["POST", "/api/routine-runs/seen-all"],
+    ] as const) {
+      expect(isBridgeRouteAllowed(method, path), `${method} ${path}`).toBe(true);
+    }
+    expect(isBridgeRouteAllowed("GET", "/api/instances")).toBe(false);
 
     // Mint a PWA invite (never includes bridgeSecret) and verify client-scoped session cannot access /api/pwa-bridge.
     const invite = await adminCall("POST", "/api/pwa-bridge/invite", { label: "Test iPhone" });
@@ -1137,6 +1154,7 @@ describe("PWA bridge real handleRequest integration", () => {
       { method: "GET", path: "/api/local-computer" },
       { method: "GET", path: "/api/desktop-viewer/status" },
       { method: "GET", path: "/api/setup-import/grok" },
+      { method: "GET", path: "/api/instances" },
     ]) {
       const res = await relay.request({
         method: blocked.method,
@@ -1149,6 +1167,55 @@ describe("PWA bridge real handleRequest integration", () => {
       });
       expect(res.status).toBe(403);
     }
+
+    // 7b. Client-scoped routine routes work over the PWA bridge.
+    const routinesGet = await relay.request({
+      method: "GET",
+      path: "/api/routines",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(routinesGet.status).toBe(200);
+    expect(Array.isArray(routinesGet.json.routines)).toBe(true);
+    expect(Array.isArray(routinesGet.json.runs)).toBe(true);
+
+    const routineCreate = await relay.request({
+      method: "POST",
+      path: "/api/routines",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Bridge Routine",
+        prompt: "Say hello",
+        botId,
+        enabled: false,
+        schedule: { type: "interval", everyMinutes: 60, anchorAt: Date.now() + 3_600_000 },
+      }),
+    });
+    expect(routineCreate.status).toBe(201);
+    const routineId = String(routineCreate.json.routine.id);
+
+    const routinePatch = await relay.request({
+      method: "PATCH",
+      path: `/api/routines/${routineId}`,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ name: "Updated Bridge Routine" }),
+    });
+    expect(routinePatch.status).toBe(200);
+    expect(routinePatch.json.routine.name).toBe("Updated Bridge Routine");
+
+    const seenAll = await relay.request({
+      method: "POST",
+      path: "/api/routine-runs/seen-all",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(seenAll.status).toBe(200);
+
+    const routineDelete = await relay.request({
+      method: "DELETE",
+      path: `/api/routines/${routineId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(routineDelete.status).toBe(200);
 
     // 8. Client-scoped POST /api/bots/:id/messages over the bridge succeeds (202).
     const sendId = randomUUID();

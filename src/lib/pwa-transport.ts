@@ -50,6 +50,11 @@ export function isRemotePwaMode(): boolean {
   return getPwaAuth() !== null;
 }
 
+export function isRemoteClientSession(): boolean {
+  const win = (globalThis as { window?: { ogb?: { remoteClient?: { active?: boolean } } } }).window;
+  return win?.ogb?.remoteClient?.active === true || isRemotePwaMode();
+}
+
 export function isJsonResponse(res: Pick<Response, "headers">): boolean {
   const contentType = res.headers.get("content-type") ?? "";
   return /^application\/(?:[\w.+-]+\+)?json\b/i.test(contentType);

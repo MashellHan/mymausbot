@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { fetchMemoryDoc, fetchMemoryOverview, MEMORY_INDEX, type MemoryDoc } from "@/lib/memory";
+import { isRemotePwaMode } from "@/lib/pwa-transport";
 import { useStore, type Bot } from "@/state/store";
 
 export interface MemoryNotesState {
@@ -35,13 +36,14 @@ export function useMemoryDoc(bot: Pick<Bot, "id" | "memoryEnabled" | "busy">): M
     }
   };
 
+  const remotePwa = isRemotePwaMode();
   const busy = Boolean(bot.busy);
   useEffect(() => {
-    if (!memoryOn) return;
+    if (!memoryOn || remotePwa) return;
     let cancelled = false;
     void read(bot.id, () => cancelled);
     return () => { cancelled = true; };
-  }, [bot.id, memoryOn, busy, mine]);
+  }, [bot.id, memoryOn, busy, mine, remotePwa]);
 
   const own = state.botId === bot.id;
   return {
@@ -53,6 +55,6 @@ export function useMemoryDoc(bot: Pick<Bot, "id" | "memoryEnabled" | "busy">): M
       docs: (current.botId === bot.id ? current.docs ?? [] : []).map((existing) => existing.path === doc.path ? doc : existing),
       error: false,
     })),
-    reload: () => read(bot.id),
+    reload: () => (remotePwa ? Promise.resolve() : read(bot.id)),
   };
 }

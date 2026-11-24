@@ -3,6 +3,7 @@ import { api, useStore } from "@/state/store";
 import { companionBridge } from "@/lib/companion-bridge";
 import { readMembership } from "@/lib/membership";
 import { isOwnerOrAdmin, readSessionState } from "@/lib/session";
+import { isRemoteClientSession } from "@/lib/pwa-transport";
 import { useSidebarPhoneStatus } from "../SidebarPhoneButton";
 
 export type PhonePlaceState =
@@ -17,12 +18,13 @@ export type PhonePlaceState =
 /** Phones paired with the place on screen, as the outer menu and the nav say it in a few words. */
 export function usePhonePlaceState(enabled = true): PhonePlaceState {
   const { state } = useStore();
-  const here = companionBridge() !== null && window.ogb?.remoteClient?.active !== true;
+  const remoteClient = isRemoteClientSession();
+  const here = companionBridge() !== null && !remoteClient;
   const local = useSidebarPhoneStatus();
   const [server, setServer] = useState<PhonePlaceState>({ kind: "checking" });
   const policy = state.config?.managedPolicy;
   useEffect(() => {
-    if (here || !enabled) return;
+    if (here || !enabled || remoteClient) return;
     let alive = true;
     void readSessionState().then(async (session) => {
       const config: unknown = await api("/api/config").catch(() => null);
@@ -37,7 +39,7 @@ export function usePhonePlaceState(enabled = true): PhonePlaceState {
       if (alive) setServer(count > 0 ? { kind: "paired", count, connected: false } : { kind: "none" });
     }).catch(() => { if (alive) setServer({ kind: "none" }); });
     return () => { alive = false; };
-  }, [here, enabled]);
+  }, [here, enabled, remoteClient]);
   if (policy?.remoteAccess === false) return { kind: "managed", organization: policy.organizationName };
   if (!here) return server;
   if (local.kind === "checking") return { kind: "checking" };

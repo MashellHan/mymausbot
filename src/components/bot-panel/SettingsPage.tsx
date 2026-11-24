@@ -9,6 +9,7 @@ import { CALL_MODES, callModeHint, effectiveCallMode, setCallMode, useCallMode, 
 import { callCapabilityHelp } from "@/lib/call-capability";
 import { listensHere, missingListenKey, speechBridge } from "@/lib/speech";
 import { requestNotificationPermission } from "@/lib/notify";
+import { isRemotePwaMode } from "@/lib/pwa-transport";
 import { firstSentence } from "@/lib/soul";
 import { currentTaskBot, useStore, type Bot } from "@/state/store";
 import type { ApprovalMode } from "../../../shared/approval-mode";
@@ -96,6 +97,7 @@ export function SettingsPage({ bot, derived, onOpen, editingInstructions = false
   };
   const alwaysAllow = bot.alwaysAllow ?? [];
 
+  const remotePwa = isRemotePwaMode();
   const soulOpen = editingInstructions || Boolean(bot.soulDrift);
   const enabledApps = [
     ...apps.apps.filter((app) => app.scope !== null).map((app) => app.label),
@@ -105,7 +107,7 @@ export function SettingsPage({ bot, derived, onOpen, editingInstructions = false
   return (
     <div data-panel-settings>
       <PackageProvenance bot={bot} />
-      <Card anchor="instructions">
+      {!remotePwa && <Card anchor="instructions">
         {soulOpen ? (
           <ColRow data-panel-row="soul">
             <SoulField
@@ -141,7 +143,7 @@ export function SettingsPage({ bot, derived, onOpen, editingInstructions = false
             <ChevronRight size={15} className="shrink-0 text-ink-tertiary" aria-hidden="true" />
           </button>
         )}
-      </Card>
+      </Card>}
 
       <HeavyBotRow bot={bot} />
 
