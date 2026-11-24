@@ -1,5 +1,6 @@
 // Remote PWA pairing, IndexedDB (`omb-pwa-v1`) auth store, authenticated fetch wrappers, and blob media cache.
 import type { PwaPairingPayload } from "../../shared/pwa-bridge.ts";
+import { randomUuid } from "./random-uuid.ts";
 import {
   getPwaAuth,
   isElectronDesktop,
@@ -226,25 +227,18 @@ async function pairAttemptKey(relayUrl: string, credential: string): Promise<str
   return (hash >>> 0).toString(16);
 }
 
-function generateRequestId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
-}
-
 async function getOrCreatePairRequestId(relayUrl: string, credential: string): Promise<string> {
   const key = `${PAIR_REQUEST_PREFIX}${await pairAttemptKey(relayUrl, credential)}`;
   try {
     const existing = globalThis.sessionStorage?.getItem(key);
     if (existing) return existing;
-    const created = generateRequestId();
+    const created = randomUuid();
     globalThis.sessionStorage?.setItem(key, created);
     return created;
   } catch {
     const existing = memoryPairRequests.get(key);
     if (existing) return existing;
-    const created = generateRequestId();
+    const created = randomUuid();
     memoryPairRequests.set(key, created);
     return created;
   }
