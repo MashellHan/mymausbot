@@ -385,10 +385,23 @@ export function reachLine(state: Pick<CompanionState, "routes">): string {
   return t("devices.reach.line", { ways: new Intl.ListFormat(undefined, { type: "conjunction" }).format(ways) });
 }
 
-export function PhoneDevicesSection({ profileEmail = "", focusRequest = 0, simple = false, placeName = t("rail.thisComputer"), top = null }: {
-  profileEmail?: string; focusRequest?: number; simple?: boolean; placeName?: string;
+export function PhoneDevicesSection({
+  profileEmail = "",
+  focusRequest = 0,
+  simple = false,
+  placeName = t("rail.thisComputer"),
+  top = null,
+  extraPairedRows = null,
+  extraPairedCount = 0,
+}: {
+  profileEmail?: string;
+  focusRequest?: number;
+  simple?: boolean;
+  placeName?: string;
   /** what leads the page: the door to pairing with My Cloud, when there is one */
   top?: React.ReactNode;
+  extraPairedRows?: React.ReactNode;
+  extraPairedCount?: number;
 }) {
   const c = usePhoneSetupController(profileEmail);
   const state = c.state;
@@ -432,6 +445,7 @@ export function PhoneDevicesSection({ profileEmail = "", focusRequest = 0, simpl
   }
 
   const pairedCount = state.devices.length;
+  const totalPairedCount = pairedCount + extraPairedCount;
   const accountActionError = companionAccountActionError(c.account, c.accountError);
   const tailscaleStatus = deriveTailscalePairingStatus(state);
   const tailscaleOn = state.routes?.tailscale?.on === true;
@@ -456,7 +470,7 @@ export function PhoneDevicesSection({ profileEmail = "", focusRequest = 0, simpl
       <RouteNotices c={c} notices={state.notices ?? []} />
       {pairing && <PairDeviceDialog c={c} state={state} placeName={placeName} onClose={() => setPairing(false)} secureAddress={pairing === "https"} />}
 
-      {pairedCount === 0 && !state.pairing ? (
+      {totalPairedCount === 0 && !state.pairing ? (
         <SettingsGroup block="pair">
           <SettingsRows>
             <PairRow reason={remoteBlocked}>{pairButton}</PairRow>
@@ -469,7 +483,7 @@ export function PhoneDevicesSection({ profileEmail = "", focusRequest = 0, simpl
           )}
           {remoteBlocked && <p role="status" className="px-4 text-[12px] leading-4 text-ink-secondary">{remoteBlocked}</p>}
           {state.pairing && <SettingsRows><OpenCodeRow c={c} state={state} /></SettingsRows>}
-          <PairedPhones c={c} state={state} onPairAgain={pairAgain} />
+          <PairedPhones c={c} state={state} onPairAgain={pairAgain} extraRows={extraPairedRows} hasExtraRows={extraPairedCount > 0} />
         </SettingsGroup>
       )}
 

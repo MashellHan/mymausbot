@@ -205,13 +205,13 @@ describe("PwaBridgeCard", () => {
     expect(host.textContent).not.toContain("omb_bridge_once_secret_value");
   });
 
-  it("saves relayUrl and defaultBotId, toggles bridge state, and handles pairing dialog keyboard and QR quiet zone", async () => {
+  it("places Relay settings above Pair PWA, enables Pair PWA once configured, and handles pairing dialog keyboard and QR quiet zone", async () => {
     let current = makeState({
       config: {
-        enabled: false,
-        relayUrl: "https://relay.mxhan.com",
+        enabled: true,
+        relayUrl: "",
         hostId: "mac-mini",
-        hasBridgeSecret: true,
+        hasBridgeSecret: false,
         pwaOrigin: "https://mausbot.mxhan.com",
         defaultBotId: null,
       },
@@ -227,13 +227,24 @@ describe("PwaBridgeCard", () => {
         current = {
           config: { ...current.config, ...body },
           status: {
-            state: body.enabled === false ? "off" : (body.enabled ?? current.config.enabled) ? "connected" : "off",
-            lastConnectedAt: 1_700_000_000_000,
+            state: current.config.hasBridgeSecret ? "connected" : "off",
+            lastConnectedAt: current.config.hasBridgeSecret ? 1_700_000_000_000 : null,
             lastError: null,
             activeStreams: 0,
           },
         };
         return current;
+      }
+      if (path === "/api/pwa-bridge/rotate-secret" && init?.method === "POST") {
+        current = {
+          config: { ...current.config, enabled: true, hasBridgeSecret: true },
+          status: { state: "connected", lastConnectedAt: 1_700_000_000_000, lastError: null, activeStreams: 0 },
+        };
+        return {
+          ...current,
+          bridgeSecret: "omb_bridge_ready_secret",
+          bridgeSecretSha256: "c".repeat(64),
+        };
       }
       if (path === "/api/pwa-bridge/invite" && init?.method === "POST") {
         return {
@@ -249,18 +260,17 @@ describe("PwaBridgeCard", () => {
 
     await renderCard();
 
-    const pairBtn = host.querySelector<HTMLButtonElement>("[data-pwa-pair-action]")!;
+    expect(host.querySelector("[data-pwa-bridge-switch]")).toBeNull();
+    expect(host.textContent).not.toContain("Fast mobile PWA relay");
+
+    const rowsEl = host.querySelector('[data-settings-block="pwa-bridge"] [data-settings-rows]')!;
+    const relayDisclosure = rowsEl.querySelector('[data-settings-disclosure="pwa-bridge-settings"]')!;
+    const pairBtn = rowsEl.querySelector<HTMLButtonElement>("[data-pwa-pair-action]")!;
+    expect(relayDisclosure.compareDocumentPosition(pairBtn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(pairBtn.disabled).toBe(true);
 
-    const toggle = host.querySelector<HTMLButtonElement>("[data-pwa-bridge-switch]")!;
     await act(async () => {
-      toggle.click();
-    });
-    expect(toggle.getAttribute("aria-checked")).toBe("true");
-    expect(pairBtn.disabled).toBe(false);
-
-    await act(async () => {
-      host.querySelector<HTMLButtonElement>('[data-settings-disclosure="pwa-bridge-settings"] button')!.click();
+      relayDisclosure.querySelector<HTMLButtonElement>("button")!.click();
     });
 
     const relayInput = host.querySelector<HTMLInputElement>("#pwa-bridge-relay-url")!;
@@ -279,6 +289,12 @@ describe("PwaBridgeCard", () => {
     });
     expect(current.config.relayUrl).toBe("https://sg-relay.mxhan.com");
     expect(current.config.defaultBotId).toBe("acct-bot");
+    expect(pairBtn.disabled).toBe(true);
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>("[data-pwa-rotate-secret]")!.click();
+    });
+    expect(pairBtn.disabled).toBe(false);
 
     pairBtn.focus();
     await act(async () => {
@@ -485,8 +501,8 @@ describe("PwaBridgeCard", () => {
     expect(mocks.api.mock.calls.length).toBe(countAt403);
   });
 
-  it("allows disabling an already-enabled relay under managed policy and localizes relay and validation errors", async () => {
-    let current = makeState({
+  it("disables Pair PWA under managed policy and localizes relay and validation errors", async () => {
+    const current = makeState({
       config: { enabled: true },
       status: {
         state: "error",
@@ -508,10 +524,6 @@ describe("PwaBridgeCard", () => {
             { status: 400 },
           );
         }
-        current = {
-          config: { ...current.config, ...body },
-          status: { state: "off", lastConnectedAt: null, lastError: null, activeStreams: 0 },
-        };
         return current;
       }
       throw new Error(`unexpected api call: ${path}`);
@@ -521,6 +533,8 @@ describe("PwaBridgeCard", () => {
       root.render(createElement(PwaBridgeCard, { remoteBlocked: "Remote access is turned off by your organization." }));
     });
     await vi.waitFor(() => expect(host.querySelector('[data-settings-block="pwa-bridge"]')).not.toBeNull());
+
+    expect(host.querySelector<HTMLButtonElement>("[data-pwa-pair-action]")!.disabled).toBe(true);
 
     await act(async () => {
       host.querySelector<HTMLButtonElement>('[data-settings-disclosure="pwa-bridge-settings"] button')!.click();
@@ -537,25 +551,8 @@ describe("PwaBridgeCard", () => {
     expect(alertEl?.textContent).toBe("Host ID must use 1 to 64 letters, numbers, dots, underscores, or hyphens.");
     expect(alertEl?.textContent).not.toContain("1 to 64 characters");
 
-    const toggle = host.querySelector<HTMLButtonElement>("[data-pwa-bridge-switch]")!;
-    expect(toggle.disabled).toBe(false);
-    await act(async () => {
-      toggle.click();
-    });
-    expect(current.config.enabled).toBe(false);
-    expect(toggle.disabled).toBe(true);
-
     act(() => root.unmount());
     root = createRoot(host);
-    current = makeState({
-      config: { enabled: true },
-      status: {
-        state: "error",
-        lastConnectedAt: null,
-        lastError: "bridge authentication rejected (4401)",
-        activeStreams: 0,
-      },
-    });
     await renderCard();
     expect(host.textContent).toContain("Relay rejected the relay secret.");
     expect(host.textContent).not.toContain("4401");

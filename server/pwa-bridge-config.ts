@@ -25,7 +25,7 @@ export interface PwaBridgeConfig {
 
 const storedSchema = z.object({
   version: z.literal(1),
-  enabled: z.boolean().default(false),
+  enabled: z.boolean().default(true),
   relayUrl: z.string().default(""),
   hostId: z.string().default(DEFAULT_PWA_HOST_ID),
   bridgeSecret: z.string().default(""),
@@ -84,7 +84,7 @@ export function normalizeBotId(raw: string | null | undefined): { ok: true; defa
 
 export function defaultPwaBridgeConfig(): PwaBridgeConfig {
   return {
-    enabled: false,
+    enabled: true,
     relayUrl: DEFAULT_PWA_RELAY_URL,
     hostId: DEFAULT_PWA_HOST_ID,
     bridgeSecret: "",

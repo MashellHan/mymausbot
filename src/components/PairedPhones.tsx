@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Smartphone } from "lucide-react";
 
 import { t } from "@/lib/i18n";
 import type { CompanionState, PhoneDevice, PhoneSetupController } from "./PhoneSetupFlow";
-import { SIMPLE_CARD, Switch } from "./SettingsPrimitives";
+import { SIMPLE_CARD, SettingsTag, Switch } from "./SettingsPrimitives";
 import { cn } from "@/lib/cn";
 import { relative } from "./PhoneDevicesSection";
 
@@ -51,7 +51,10 @@ export function PhoneRow({ device, connected, state, c, onRemoved, onPairAgain, 
           <Smartphone size={18} strokeWidth={1.75} aria-hidden="true" />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[14px] leading-5 text-ink">{device.name}</div>
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-[14px] leading-5 text-ink">{device.name}</span>
+            <SettingsTag>Native</SettingsTag>
+          </div>
           <div className="truncate text-[13px] leading-[18px] text-ink-secondary" data-phone-status={live ? "connected" : "seen"}>
             <PhoneStatus device={device} connected={live} />
             {e2eEnabled && device.routes === "local" && <>{" · "}{t("remote.devices.localOnly")}</>}
@@ -132,17 +135,30 @@ export function PhoneRow({ device, connected, state, c, onRemoved, onPairAgain, 
 }
 
 /** One grouped card: a dot, the name and one line per phone. Remove acts at once. */
-export function PairedPhones({ c, state, onPairAgain }: { c: PhoneSetupController; state: CompanionState; onPairAgain?: () => void }) {
+export function PairedPhones({
+  c,
+  state,
+  onPairAgain,
+  extraRows = null,
+  hasExtraRows = false,
+}: {
+  c: PhoneSetupController;
+  state: CompanionState;
+  onPairAgain?: () => void;
+  extraRows?: ReactNode;
+  hasExtraRows?: boolean;
+}) {
   const [removed, setRemoved] = useState<string | null>(null);
   const connected = new Set(state.connectedDeviceIds ?? []);
-  if (state.devices.length === 0 && !removed) return null;
+  if (state.devices.length === 0 && !hasExtraRows && !removed) return null;
   return (
     <>
-      {state.devices.length > 0 && (
+      {(state.devices.length > 0 || hasExtraRows) && (
         <ul data-settings-rows="" data-settings-icons="" className={cn(SIMPLE_CARD, "flex flex-col overflow-hidden")}>
           {sortPhones(state.devices, connected).map((device) => (
             <PhoneRow key={device.id} device={device} connected={connected.has(device.id)} state={state} c={c} onRemoved={setRemoved} onPairAgain={onPairAgain} />
           ))}
+          {extraRows}
         </ul>
       )}
       {removed && (

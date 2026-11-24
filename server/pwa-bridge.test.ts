@@ -330,7 +330,8 @@ describe("PWA bridge unit, config, and route enforcement", () => {
 
     const initial = await adminCall("GET", "/api/pwa-bridge");
     expect(initial.status).toBe(200);
-    expect(initial.body.config.enabled).toBe(false);
+    expect(initial.body.config.enabled).toBe(true);
+    expect(initial.body.status.state).toBe("off");
     expect(initial.body.config.hasBridgeSecret).toBe(false);
     expect("bridgeSecret" in initial.body.config).toBe(false);
 

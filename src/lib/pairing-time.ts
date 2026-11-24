@@ -13,3 +13,9 @@ export function lastSeen(lastSeenAt: number, now = Date.now()): string {
   if (minutes < 1440) return t("remote.serverPairing.hoursAgo", { hours: Math.round(minutes / 60) });
   return t("remote.serverPairing.daysAgo", { days: Math.round(minutes / 1440) });
 }
+
+export function serverDeviceTag(device: { pwa?: boolean; browser?: boolean }): string {
+  if (device.pwa) return "PWA";
+  if (device.browser) return t("place.browser");
+  return "Native";
+}
