@@ -27,6 +27,7 @@
 
 {$PWA_RELAY_DOMAIN} {
 	header -Server
+	encode zstd gzip
 
 	handle_errors {
 		header -Server

@@ -91,7 +91,7 @@ function errorMeta(cause: unknown): {
 
 function localizedActionError(
   cause: unknown,
-  action: "toggle" | "save" | "rotate" | "invite",
+  action: "save" | "rotate" | "invite",
   remoteBlocked: string | null,
 ): string {
   const { status, code, hasErrorKey, message } = errorMeta(cause);
@@ -196,6 +196,8 @@ export function PwaBridgeCard({
   const pairTriggerRef = useRef<HTMLButtonElement>(null);
   const pairRestoreTargetRef = useRef<HTMLElement | null>(null);
   const wasInviteOpenRef = useRef(false);
+  const onInviteChangeRef = useRef(onInviteChange);
+  onInviteChangeRef.current = onInviteChange;
 
   function syncFromResponse(next: PwaBridgeSettingsResponse, forceDrafts = false) {
     setData({ config: next.config, status: next.status });
@@ -260,13 +262,13 @@ export function PwaBridgeCard({
       wasInviteOpenRef.current = true;
       const timer = setInterval(() => {
         setNow(Date.now());
-        if (invite.expiresAt > Date.now()) onInviteChange?.();
+        if (invite.expiresAt > Date.now()) onInviteChangeRef.current?.();
       }, 15_000);
       return () => clearInterval(timer);
     }
     if (wasInviteOpenRef.current) {
       wasInviteOpenRef.current = false;
-      onInviteChange?.();
+      onInviteChangeRef.current?.();
       const target = pairRestoreTargetRef.current;
       pairRestoreTargetRef.current = null;
       if (target?.isConnected && !target.hasAttribute("disabled")) {
@@ -276,7 +278,7 @@ export function PwaBridgeCard({
       }
     }
     return undefined;
-  }, [invite, onInviteChange]);
+  }, [invite]);
 
   if (unavailable || !data) return null;
 
