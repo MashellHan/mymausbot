@@ -1799,26 +1799,36 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     });
 
     it("passes the person's proxy settings to the proxy, which Codex would otherwise drop", async () => {
-      plan();
-      await create({ authMode: "chatgpt-plan", environment: { HTTPS_PROXY: "http://proxy.example.test:3128", NODE_EXTRA_CA_CERTS: "/etc/corp-ca.pem" } });
-      const dump = join(scratch, "plan-proxy-env.json");
-      process.env.FAKE_CODEX_DUMP = dump;
-      const plain = { ...whop, url: "http://plain.example.test/mcp" };
-      await instance.adapter.sendTurn({ threadId: "t-plan-proxy-env", text: "go", model: "gpt-6.1-sol", integrations: { custom: { whop, plain } } });
-      await recorder.until((event) => event.type === "turn.completed");
-      const seen = JSON.parse(readFileSync(dump, "utf8"));
-      const envVars = JSON.parse(seen.argv.find((arg: string) => arg.startsWith("mcp_servers.whop.env_vars=")).split("=").slice(1).join("="));
-      expect(envVars).toEqual(expect.arrayContaining(["HTTPS_PROXY", "NODE_EXTRA_CA_CERTS"]));
-      expect(envVars).not.toContain("NODE_USE_ENV_PROXY");
-      expect(seen.argv).toContain('mcp_servers.whop.env={ "NODE_USE_ENV_PROXY" = "1", "NO_PROXY" = "localhost,127.0.0.1,::1,[::1]", "no_proxy" = "localhost,127.0.0.1,::1,[::1]" }');
-      expect(seen.env.NODE_USE_ENV_PROXY).toBeUndefined();
-      // Node 24's fetch hangs on a plain http request through an env proxy.
-      expect(seen.argv).toContain('mcp_servers.plain.env={ "NODE_USE_ENV_PROXY" = "0" }');
-      expect(JSON.parse(seen.argv.find((arg: string) => arg.startsWith("mcp_servers.plain.env_vars=")).split("=").slice(1).join("="))).not.toContain("NODE_USE_ENV_PROXY");
-      expect(seen.env.HTTPS_PROXY).toBe("http://proxy.example.test:3128");
-      const exclusions = seen.calls.find((call: { method: string }) => call.method === "thread/start").params.config["shell_environment_policy.exclude"];
-      expect(exclusions).not.toContain("HTTPS_PROXY");
-      expect(exclusions).not.toContain("NODE_EXTRA_CA_CERTS");
+      const proxyVars = ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy", "NODE_USE_ENV_PROXY"] as const;
+      const saved = Object.fromEntries(proxyVars.map((name) => [name, process.env[name]]));
+      for (const name of proxyVars) delete process.env[name];
+      try {
+        plan();
+        await create({ authMode: "chatgpt-plan", environment: { HTTPS_PROXY: "http://proxy.example.test:3128", NODE_EXTRA_CA_CERTS: "/etc/corp-ca.pem" } });
+        const dump = join(scratch, "plan-proxy-env.json");
+        process.env.FAKE_CODEX_DUMP = dump;
+        const plain = { ...whop, url: "http://plain.example.test/mcp" };
+        await instance.adapter.sendTurn({ threadId: "t-plan-proxy-env", text: "go", model: "gpt-6.1-sol", integrations: { custom: { whop, plain } } });
+        await recorder.until((event) => event.type === "turn.completed");
+        const seen = JSON.parse(readFileSync(dump, "utf8"));
+        const envVars = JSON.parse(seen.argv.find((arg: string) => arg.startsWith("mcp_servers.whop.env_vars=")).split("=").slice(1).join("="));
+        expect(envVars).toEqual(expect.arrayContaining(["HTTPS_PROXY", "NODE_EXTRA_CA_CERTS"]));
+        expect(envVars).not.toContain("NODE_USE_ENV_PROXY");
+        expect(seen.argv).toContain('mcp_servers.whop.env={ "NODE_USE_ENV_PROXY" = "1", "NO_PROXY" = "localhost,127.0.0.1,::1,[::1]", "no_proxy" = "localhost,127.0.0.1,::1,[::1]" }');
+        expect(seen.env.NODE_USE_ENV_PROXY).toBeUndefined();
+        // Node 24's fetch hangs on a plain http request through an env proxy.
+        expect(seen.argv).toContain('mcp_servers.plain.env={ "NODE_USE_ENV_PROXY" = "0" }');
+        expect(JSON.parse(seen.argv.find((arg: string) => arg.startsWith("mcp_servers.plain.env_vars=")).split("=").slice(1).join("="))).not.toContain("NODE_USE_ENV_PROXY");
+        expect(seen.env.HTTPS_PROXY).toBe("http://proxy.example.test:3128");
+        const exclusions = seen.calls.find((call: { method: string }) => call.method === "thread/start").params.config["shell_environment_policy.exclude"];
+        expect(exclusions).not.toContain("HTTPS_PROXY");
+        expect(exclusions).not.toContain("NODE_EXTRA_CA_CERTS");
+      } finally {
+        for (const name of proxyVars) {
+          if (saved[name] === undefined) delete process.env[name];
+          else process.env[name] = saved[name];
+        }
+      }
     });
 
     it.each([
