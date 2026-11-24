@@ -5,6 +5,7 @@ import { useEffect, useSyncExternalStore } from "react";
 import type { AppEventAttempt, AppEventCatalog, AppTrigger, AppTriggerFilter, AppTriggersSnapshot, AppTriggerService } from "../../shared/app-triggers";
 import type { ServerFrame } from "../../shared/wire";
 import { listenLiveFrames } from "@/lib/live-events";
+import { isRemoteClientSession } from "@/lib/pwa-transport";
 import { api } from "@/state/store";
 
 export type { AppEventAttempt, AppEventCatalog, AppEventType, AppTrigger, AppTriggerFilter, AppTriggerService } from "../../shared/app-triggers";
@@ -46,6 +47,7 @@ export function applyAppTriggerFrame(frame: ServerFrame): void {
 }
 
 export function loadAppTriggers(): Promise<void> {
+  if (isRemoteClientSession()) return Promise.resolve();
   loading ??= api<AppTriggersSnapshot>("/api/app-triggers")
     .then(applyAppTriggerSnapshot)
     .catch(() => {})
@@ -55,7 +57,7 @@ export function loadAppTriggers(): Promise<void> {
 
 function start(): void {
   // A remote client reaches only routines, as for webhooks.
-  if (started || (typeof window !== "undefined" && window.ogb?.remoteClient?.active)) return;
+  if (started || isRemoteClientSession()) return;
   started = true;
   listenLiveFrames({ onFrame: applyAppTriggerFrame, onMissedFrames: () => void loadAppTriggers() });
   void loadAppTriggers();

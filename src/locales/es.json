@@ -4054,6 +4054,7 @@
   "pwaBridge.secret.rotate": "Rotar secreto",
   "pwaBridge.secret.title": "Secreto del relay",
   "pwaBridge.secret.valueLabel": "Secreto del puente",
+  "pwaBridge.sectionTitle": "Aplicación web móvil mediante relay",
   "pwaBridge.settings.notSet": "Sin configurar",
   "pwaBridge.settings.saved": "Guardado",
   "pwaBridge.settings.saving": "Guardando…",

@@ -7,9 +7,11 @@ import {
   activatePwaPairing,
   bootstrapPwaConfig,
   clearPwaAuth,
+  downloadRemoteUrl,
   getPwaAuth,
   initPwaAuth,
   isRemotePwaMode,
+  openPwaDb,
   parsePwaPairHash,
   remoteFetch,
   remoteFetchInit,
@@ -277,7 +279,13 @@ describe("pwa pairing lifecycle, IndexedDB persistence, and authenticated fetch"
     const createObjectURL = vi.fn(() => "blob:https://mausbot.mxhan.com/1");
     const revokeObjectURL = vi.fn();
     vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
-    const mediaFetch = vi.fn(async () => new Response(new Blob(["img"]), { status: 200 })) as unknown as typeof fetch;
+    const mediaFetch = vi.fn(
+      async () =>
+        new Response(new Blob(["img"], { type: "image/png" }), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    ) as unknown as typeof fetch;
     const [u1, u2] = await Promise.all([
       resolveRemoteMediaUrl("/api/attachments/pic.png", mediaFetch),
       resolveRemoteMediaUrl("/api/attachments/pic.png", mediaFetch),
@@ -320,5 +328,285 @@ describe("pwa pairing lifecycle, IndexedDB persistence, and authenticated fetch"
     );
     expect(res.ok).toBe(false);
     expect(isRemotePwaMode()).toBe(false);
+  });
+
+  it("rejects openPwaDb cleanly when blocked instead of hanging", async () => {
+    const blockedIdb = {
+      open() {
+        const openReq: {
+          onupgradeneeded: ((ev: IDBVersionChangeEvent) => void) | null;
+          onsuccess: ((ev: Event) => void) | null;
+          onerror: ((ev: Event) => void) | null;
+          onblocked: ((ev: Event) => void) | null;
+        } = { onupgradeneeded: null, onsuccess: null, onerror: null, onblocked: null };
+        queueMicrotask(() => {
+          openReq.onblocked?.(new Event("blocked"));
+        });
+        return openReq as unknown as IDBOpenDBRequest;
+      },
+    } as unknown as IDBFactory;
+
+    await expect(openPwaDb(blockedIdb, { timeoutMs: 2000, blockedMs: 20 })).rejects.toThrow("IndexedDB open blocked");
+  });
+
+  it("keeps pairing working in-memory when IndexedDB storage is unavailable or rejects writes", async () => {
+    const throwingIdb = {
+      open() {
+        throw new DOMException("Storage disabled", "SecurityError");
+      },
+    } as unknown as IDBFactory;
+    const credential = `omb_pair_${"e".repeat(43)}`;
+    const encoded = encodeBase64Url({
+      relayUrl: "https://relay.mxhan.com",
+      credential,
+    });
+    vi.stubGlobal("location", {
+      origin: "https://mausbot.mxhan.com",
+      pathname: "/",
+      search: "",
+      hash: `#pair=${encoded}`,
+    });
+    vi.stubGlobal("history", { replaceState: vi.fn() });
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/pair")) {
+        return new Response(JSON.stringify({ token: "tok-mem-1", device: { id: "dev-m1" }, serverName: "Mac" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/auth/session")) {
+        return new Response(
+          JSON.stringify({ kind: "session", id: "sess-m1", environmentId: "env-m1", scopes: ["client"] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({ environmentId: "env-m1", label: "Mac" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+
+    const boot = await bootstrapPwaConfig({ idb: throwingIdb, fetchImpl: fetchMock });
+    expect(boot.status).toBe("paired");
+    expect(getPwaAuth()?.token).toBe("tok-mem-1");
+    expect(isRemotePwaMode()).toBe(true);
+  });
+
+  it("persists and restores PWA auth via localStorage backup when IndexedDB is unavailable across restart", async () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => { store.set(k, v); },
+      removeItem: (k: string) => { store.delete(k); },
+    });
+    vi.stubGlobal("indexedDB", {
+      open() {
+        throw new DOMException("Storage disabled", "SecurityError");
+      },
+    });
+    const credential = `omb_pair_${"f".repeat(43)}`;
+    const encoded = encodeBase64Url({
+      relayUrl: "https://relay.mxhan.com",
+      credential,
+    });
+    vi.stubGlobal("location", {
+      origin: "https://mausbot.mxhan.com",
+      pathname: "/",
+      search: "",
+      hash: `#pair=${encoded}`,
+    });
+    vi.stubGlobal("history", { replaceState: vi.fn() });
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/pair")) {
+        return new Response(JSON.stringify({ token: "tok-ls-1", device: { id: "dev-ls1" }, serverName: "Mac" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/auth/session")) {
+        return new Response(
+          JSON.stringify({ kind: "session", id: "sess-ls1", environmentId: "env-ls1", scopes: ["client"] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({ environmentId: "env-ls1", label: "Mac" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+
+    const boot1 = await bootstrapPwaConfig({ fetchImpl: fetchMock });
+    expect(boot1.status).toBe("paired");
+    expect(store.has("omb.pwa.auth.v1")).toBe(true);
+
+    // Simulate full browser restart: reset in-memory state and clear #pair= from location.
+    resetPwaConfigForTests();
+    vi.stubGlobal("location", {
+      origin: "https://mausbot.mxhan.com",
+      pathname: "/",
+      search: "",
+      hash: "",
+    });
+    const boot2 = await bootstrapPwaConfig({ fetchImpl: fetchMock });
+    expect(boot2.status).toBe("existing");
+    expect(getPwaAuth()?.token).toBe("tok-ls-1");
+    expect(isRemotePwaMode()).toBe(true);
+
+    await clearPwaAuth();
+    expect(store.has("omb.pwa.auth.v1")).toBe(false);
+  });
+
+  it("rejects stored auth records with disallowed relayUrl in localStorage backup", async () => {
+    const store = new Map<string, string>([
+      [
+        "omb.pwa.auth.v1",
+        JSON.stringify({
+          ownerKey: "https://evil.example.test::env-1::ses-1",
+          relayUrl: "https://evil.example.test",
+          token: "tok-bad",
+          deviceId: "d1",
+          environmentId: "env-1",
+          sessionId: "ses-1",
+          serverName: "Evil",
+          scopes: ["client"],
+          pairedAt: 1700000000000,
+        }),
+      ],
+    ]);
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => { store.set(k, v); },
+      removeItem: (k: string) => { store.delete(k); },
+    });
+    vi.stubGlobal("indexedDB", {
+      open() {
+        throw new DOMException("Storage disabled", "SecurityError");
+      },
+    });
+    expect(await initPwaAuth()).toBeNull();
+    expect(isRemotePwaMode()).toBe(false);
+  });
+
+  it("returns status: 'confirm' instead of overwriting an existing session when #pair= is present", async () => {
+    const idb = createMemoryIdb();
+    const store = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => { store.set(k, v); },
+      removeItem: (k: string) => { store.delete(k); },
+    });
+    const fetchMockFn = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/pair")) {
+        return new Response(JSON.stringify({ token: "tok-existing", device: { id: "dev-1" }, serverName: "Existing Mac" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/auth/session")) {
+        return new Response(
+          JSON.stringify({ kind: "session", id: "ses-existing", environmentId: "env-1", scopes: ["client"] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({ environmentId: "env-1", label: "Existing Mac" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    const fetchMock = fetchMockFn as unknown as typeof fetch;
+
+    const first = await activatePwaPairing(
+      { relayUrl: "https://relay.mxhan.com", credential: `omb_pair_${"a".repeat(43)}` },
+      { idb, fetchImpl: fetchMock },
+    );
+    expect(first.ok).toBe(true);
+    fetchMockFn.mockClear();
+
+    resetPwaConfigForTests();
+    const nextCred = `omb_pair_${"b".repeat(43)}`;
+    vi.stubGlobal("history", { replaceState: vi.fn() });
+    vi.stubGlobal("location", {
+      origin: "https://mausbot.mxhan.com",
+      hostname: "mausbot.mxhan.com",
+      pathname: "/",
+      search: "",
+      hash: `#pair=${encodeBase64Url({ relayUrl: "https://relay.mxhan.com", credential: nextCred })}`,
+    });
+
+    const boot = await bootstrapPwaConfig({ idb, fetchImpl: fetchMock });
+    expect(boot.status).toBe("confirm");
+    if (boot.status === "confirm") {
+      expect(boot.existing.token).toBe("tok-existing");
+      expect(boot.payload.credential).toBe(nextCred);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(getPwaAuth()?.token).toBe("tok-existing");
+  });
+
+  it("rejects non-media MIME types in resolveRemoteMediaUrl and forces application/octet-stream in downloadRemoteUrl", async () => {
+    const idb = createMemoryIdb();
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/pair")) {
+        return new Response(JSON.stringify({ token: "tok-media", device: { id: "d1" }, serverName: "Mac" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/auth/session")) {
+        return new Response(
+          JSON.stringify({ kind: "session", id: "s1", environmentId: "e1", scopes: ["client"] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ environmentId: "e1", label: "Mac" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    await activatePwaPairing({ relayUrl: "https://relay.mxhan.com", credential: `omb_pair_${"m".repeat(43)}` }, { idb, fetchImpl: fetchMock });
+
+    const createdBlobs: Blob[] = [];
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn((blob: Blob) => {
+        createdBlobs.push(blob);
+        return `blob:https://mausbot.mxhan.com/${createdBlobs.length}`;
+      }),
+      revokeObjectURL: vi.fn(),
+    });
+
+    for (const badType of ["image/svg+xml", "text/html", "application/javascript", ""]) {
+      const badFetch = vi.fn(async () =>
+        new Response(new Blob(["<svg/>"]), {
+          status: 200,
+          ...(badType ? { headers: { "content-type": badType } } : {}),
+        }),
+      ) as unknown as typeof fetch;
+      await expect(resolveRemoteMediaUrl(`/api/attachments/bad-${badType || "none"}`, badFetch)).rejects.toThrow();
+    }
+
+    for (const goodType of ["image/png", "audio/mpeg", "video/mp4"]) {
+      const goodFetch = vi.fn(async () =>
+        new Response(new Blob(["ok"], { type: goodType }), {
+          status: 200,
+          headers: { "content-type": goodType },
+        }),
+      ) as unknown as typeof fetch;
+      const url = await resolveRemoteMediaUrl(`/api/attachments/good-${goodType.replace("/", "-")}`, goodFetch);
+      expect(url.startsWith("blob:")).toBe(true);
+    }
+
+    const link = { href: "", download: "", style: { display: "" }, click: vi.fn(), remove: vi.fn() };
+    vi.stubGlobal("document", {
+      createElement: vi.fn(() => link),
+      body: { append: vi.fn() },
+    });
+    const htmlDownloadFetch = vi.fn(async () =>
+      new Response("<script>alert(1)</script>", { status: 200, headers: { "content-type": "text/html" } }),
+    ) as unknown as typeof fetch;
+    await downloadRemoteUrl("/api/threads/t1/messages/m1/file", "report.html", htmlDownloadFetch);
+    expect(createdBlobs.at(-1)?.type).toBe("application/octet-stream");
+    expect(link.click).toHaveBeenCalledTimes(1);
   });
 });

@@ -6,6 +6,7 @@ import { t } from "@/lib/i18n";
 import type { Place } from "@/lib/place";
 import { placeHasIssue, worksOnSimpleLabel } from "@/lib/place-view";
 import { useOwnerOrAdmin } from "@/lib/use-owner-or-admin";
+import { useRemoteMediaUrl } from "@/lib/use-remote-media";
 import { api, useStore, type Bot } from "@/state/store";
 import { BotAvatar } from "../Avatar";
 import { useDesktopCapabilities } from "../DesktopCapabilities";
@@ -136,6 +137,7 @@ export function ComputerTab({ bot, derived, onOpen }: { bot: Bot; derived: Deriv
 
   const screen = [...bot.messages].reverse().find((message) => message.kind === "screen" && (message.hasImage || message.png));
   const screenSrc = screen ? screenFramePreview({ threadId: bot.threadId, messageId: screen.id }, screen.mime).src : null;
+  const remoteScreen = useRemoteMediaUrl(screenSrc);
 
   return (
     <div data-panel-tabpanel="computer">
@@ -146,8 +148,8 @@ export function ComputerTab({ bot, derived, onOpen }: { bot: Bot; derived: Deriv
         onClick={() => openComputer()}
         className="group relative mt-2.5 flex aspect-[16/10] w-full flex-col items-center justify-center gap-2 overflow-hidden rounded-xl bg-composer ring-1 ring-inset ring-ink/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-border"
       >
-        {screenSrc ? (
-          <img src={screenSrc} alt="" className="absolute inset-0 size-full object-cover" />
+        {remoteScreen.url ? (
+          <img src={remoteScreen.url} alt="" className="absolute inset-0 size-full object-cover" />
         ) : bot.busy ? (
           <>
             <span className="opacity-55"><BotAvatar bot={bot} size={52} animated={false} /></span>

@@ -1,7 +1,7 @@
 // Loopback requests (Host and Origin both loopback) or paired sessions (bearer, cookie, stream ticket); a session swaps the loopback rule for same-origin (CSRF) and a scope check.
 // Browsers never get loopback trust: a page a bot opens is a browser on this machine too.
 import { TEAM_LEFT_REFUSAL } from "../shared/cloud-hints.ts";
-import type { IncomingMessage } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
 
@@ -734,4 +734,15 @@ export function resolveRequestAuth(req: IncomingMessage, options: ResolveOptions
     return deny(403, "forbidden: loopback host required (pair this device to use the server remotely)");
   }
   return deny(403, "forbidden: cross-origin request");
+}
+
+export function rejectNonLoopbackPreGate(req: IncomingMessage, res: ServerResponse, pairingCode = false): boolean {
+  if (isProxied(req) || isLoopbackHost(headerValue(req.headers.host))) return false;
+  req.resume();
+  const body = pairingCode
+    ? { error: "forbidden: loopback host required (pair this device to use the server remotely)", code: "pairing_bad_request" }
+    : { error: "forbidden: loopback host required (pair this device to use the server remotely)" };
+  res.writeHead(403, { "content-type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(body));
+  return true;
 }

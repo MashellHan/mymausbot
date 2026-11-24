@@ -3,6 +3,7 @@ import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import { closeInbox, openInbox, useInboxPanel, useInboxSupport, useInboxView } from "@/state/inbox";
 import { useTeamPeople } from "@/state/team-people";
+import { PHONE_TOP_BUTTON } from "./SidebarSimpleTop";
 import { inboxFixes, waitingCount } from "./inbox/inbox-view";
 
 export function SidebarInboxMenuItem({ className, onOpened }: { className: string; onOpened: () => void }) {
@@ -11,12 +12,13 @@ export function SidebarInboxMenuItem({ className, onOpened }: { className: strin
   </button>;
 }
 
-export function SidebarInboxRow({ icons, large, running, hideEmpty = false, onOpened }: {
+export function SidebarInboxRow({ icons, large, running, hideEmpty = false, compactIcon = false, onOpened }: {
   icons: boolean;
   /** Simple's row, sized as its bots' rows are. */
   large: boolean;
   running: boolean;
   hideEmpty?: boolean;
+  compactIcon?: boolean;
   onOpened?: () => void;
 }) {
   const support = useInboxSupport();
@@ -32,7 +34,17 @@ export function SidebarInboxRow({ icons, large, running, hideEmpty = false, onOp
     if (open) closeInbox();
     else { openInbox(); onOpened?.(); }
   };
-  const dot = running && <span data-inbox-running="" aria-hidden="true" className={cn("absolute -bottom-0.5 -right-0.5 rounded-full border-2 border-panel bg-success", icons ? "size-3" : "size-2.5")} />;
+  const dot = running && <span data-inbox-running="" aria-hidden="true" className={cn("absolute -bottom-0.5 -right-0.5 rounded-full border-2 bg-success", compactIcon ? "size-2.5 border-app" : icons ? "size-3 border-panel" : "size-2.5 border-panel")} />;
+  if (compactIcon) {
+    return (
+      <button type="button" data-sidebar-inbox={count} aria-label={label} title={label} aria-pressed={open} onClick={toggle}
+        className={cn("relative", PHONE_TOP_BUTTON, open && "bg-raised")}>
+        <Inbox size={18} strokeWidth={1.75} aria-hidden="true" />
+        {count > 0 && <span aria-hidden="true" data-inbox-count className="absolute -right-1 -top-1 flex min-w-4 items-center justify-center rounded-full bg-warning px-1 text-[10px] font-semibold leading-4 tabular-nums text-panel ring-2 ring-app">{shown}</span>}
+        {dot}
+      </button>
+    );
+  }
   if (icons) {
     return (
       <button type="button" data-sidebar-inbox={count} aria-label={label} title={label} aria-pressed={open} onClick={toggle}

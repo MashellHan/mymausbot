@@ -4917,6 +4917,7 @@
   "pwaBridge.secret.rotate": "시크릿 순환",
   "pwaBridge.secret.title": "릴레이 시크릿",
   "pwaBridge.secret.valueLabel": "브리지 시크릿",
+  "pwaBridge.sectionTitle": "릴레이를 통한 모바일 웹 앱",
   "pwaBridge.settings.notSet": "설정되지 않음",
   "pwaBridge.settings.saved": "저장됨",
   "pwaBridge.settings.saving": "저장 중…",

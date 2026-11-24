@@ -3582,6 +3582,7 @@
   "pwaBridge.secret.rotate": "Đổi khóa bí mật",
   "pwaBridge.secret.title": "Khóa bí mật chuyển tiếp",
   "pwaBridge.secret.valueLabel": "Khóa bí mật cầu nối",
+  "pwaBridge.sectionTitle": "Ứng dụng web di động qua relay",
   "pwaBridge.settings.notSet": "Chưa đặt",
   "pwaBridge.settings.saved": "Đã lưu",
   "pwaBridge.settings.saving": "Đang lưu…",

@@ -5112,6 +5112,7 @@
   "pwaBridge.secret.rotate": "シークレットをローテーション",
   "pwaBridge.secret.title": "リレーシークレット",
   "pwaBridge.secret.valueLabel": "ブリッジシークレット",
+  "pwaBridge.sectionTitle": "リレー経由のモバイル Web アプリ",
   "pwaBridge.settings.notSet": "未設定",
   "pwaBridge.settings.saved": "保存しました",
   "pwaBridge.settings.saving": "保存中…",

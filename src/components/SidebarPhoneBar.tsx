@@ -2,6 +2,7 @@ import { FolderOpen, LayoutGrid, Puzzle, Rocket, Search, UsersRound, X, Zap } fr
 
 import { useCloudFilesReady } from "@/lib/cloud-files";
 import { t } from "@/lib/i18n";
+import { isRemotePwaMode } from "@/lib/pwa-transport";
 import { useStore } from "@/state/store";
 
 import { CloudRoomCard } from "./CloudRoomCard";
@@ -11,11 +12,12 @@ import { SidebarPopoverMenu, type SidebarMenuItem } from "./SidebarPopoverMenu";
 import { UpdateIndicator } from "./UpdateIndicator";
 
 /** The phone's bottom bar: a round button for the tools that are rows in the desktop sidebar, and a search pill. */
-export function SidebarPhoneBar({ query, onQuery }: { query: string; onQuery: (query: string) => void }) {
+export function SidebarPhoneBar({ query, onQuery, onOpened }: { query: string; onQuery: (query: string) => void; onOpened?: () => void }) {
   const { state, dispatch } = useStore();
   const automationsNeedYou = useAutomationsNeedYou();
   const filesReady = useCloudFilesReady();
-  const items: SidebarMenuItem[] = [
+  const remotePwa = isRemotePwaMode();
+  const items: SidebarMenuItem[] = ([
     {
       key: "automations",
       label: t("sidebar.nav.automations"),
@@ -38,7 +40,7 @@ export function SidebarPhoneBar({ query, onQuery }: { query: string; onQuery: (q
       active: state.activeView === "files",
       onSelect: () => dispatch({ type: "showFiles" }),
     }] : []),
-    {
+    ...(!remotePwa ? [{
       key: "published-apps",
       label: t("sidebar.nav.publishedApps"),
       icon: <Rocket size={18} />,
@@ -51,8 +53,14 @@ export function SidebarPhoneBar({ query, onQuery }: { query: string; onQuery: (q
       icon: <Puzzle size={18} />,
       active: state.pluginsOpen,
       onSelect: () => dispatch({ type: "togglePlugins", open: true }),
+    }] : []),
+  ] satisfies SidebarMenuItem[]).map((item) => ({
+    ...item,
+    onSelect: () => {
+      item.onSelect();
+      onOpened?.();
     },
-  ];
+  }));
   return (
     <div data-sidebar-phone-bar className="px-3 pb-3 pt-1">
       <CloudRoomCard />

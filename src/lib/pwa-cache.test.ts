@@ -316,7 +316,7 @@ describe("pwa-cache", () => {
     expect(shouldRegisterPwaServiceWorker({ protocol: "https:", isDev: false, isElectron: true, serviceWorker: { register } })).toBe(false);
 
     await registerPwaServiceWorker({ protocol: "https:", isDev: false, isElectron: false, serviceWorker: { register } });
-    expect(register).toHaveBeenCalledWith("/sw.js", { scope: "/" });
+    expect(register).toHaveBeenCalledWith("/sw.js", { scope: "/", updateViaCache: "none" });
   });
 
   it("keeps public/sw.js scoped to static shell caches without touching /api/* or IndexedDB", () => {
@@ -327,5 +327,169 @@ describe("pwa-cache", () => {
     expect(sw).not.toContain("deleteDatabase");
     expect(OMB_PWA_DB_NAME).toBe("omb-pwa-v1");
     expect(OMB_PWA_DB_VERSION).toBe(3);
+  });
+
+  it("never caches or serves redirected responses for navigation or HTML fallbacks for /assets/*", async () => {
+    const sw = readFileSync(new URL("../../public/sw.js", import.meta.url), "utf8");
+    const listeners = new Map<string, (event: any) => void>();
+    const cacheEntries = new Map<string, Map<string, Response>>();
+    const ensureCache = (name: string) => {
+      let store = cacheEntries.get(name);
+      if (!store) {
+        store = new Map();
+        cacheEntries.set(name, store);
+      }
+      return {
+        put: async (req: string | Request, res: Response) => {
+          const key = typeof req === "string" ? req : new URL(req.url).pathname;
+          store!.set(key, res);
+        },
+        match: async (req: string | Request) => {
+          const key = typeof req === "string" ? req : new URL(req.url).pathname;
+          return store!.get(key);
+        },
+        delete: async (req: string | Request) => {
+          const key = typeof req === "string" ? req : new URL(req.url).pathname;
+          return store!.delete(key);
+        },
+      };
+    };
+    cacheEntries.set("omb-pwa-shell-v1", new Map([["/index.html", new Response("stale")]]));
+
+    const mockFetch = vi.fn(async (input: string | Request) => {
+      const path = typeof input === "string" ? input : new URL(input.url).pathname;
+      const res = new Response(`<html>${path}</html>`, { status: 200, headers: { "content-type": "text/html" } });
+      Object.defineProperty(res, "type", { value: "basic" });
+      Object.defineProperty(res, "redirected", { value: path !== "/manifest.webmanifest" && path !== "/app-icon.svg" && path !== "/app-icon-192.png" && path !== "/app-icon-512.png" && path !== "/apple-touch-icon.png" && path !== "/" && !path.startsWith("/assets/") });
+      return res;
+    });
+
+    const navigate = vi.fn(async () => null);
+    const swGlobal = {
+      location: { origin: "https://mausbot.mxhan.com" },
+      skipWaiting: vi.fn(async () => {}),
+      clients: {
+        claim: vi.fn(async () => {}),
+        matchAll: vi.fn(async () => [{ url: "https://mausbot.mxhan.com/", navigate }]),
+      },
+      caches: {
+        open: async (name: string) => ensureCache(name),
+        keys: async () => Array.from(cacheEntries.keys()),
+        delete: async (name: string) => cacheEntries.delete(name),
+      },
+      fetch: mockFetch,
+      Response,
+      Headers,
+      URL,
+      addEventListener: (type: string, handler: (event: any) => void) => {
+        listeners.set(type, handler);
+      },
+    };
+
+    new Function("self", "caches", "fetch", "Response", "Headers", "URL", sw)(
+      swGlobal,
+      swGlobal.caches,
+      swGlobal.fetch,
+      Response,
+      Headers,
+      URL,
+    );
+
+    const installPromises: Promise<unknown>[] = [];
+    listeners.get("install")!({ waitUntil: (p: Promise<unknown>) => installPromises.push(p) });
+    await Promise.all(installPromises);
+
+    const precachedPaths = mockFetch.mock.calls.map((call) => String(call[0]));
+    expect(precachedPaths).toContain("/");
+    expect(precachedPaths).not.toContain("/index.html");
+    expect(cacheEntries.has("omb-pwa-shell-v4")).toBe(true);
+
+    const activatePromises: Promise<unknown>[] = [];
+    listeners.get("activate")!({ waitUntil: (p: Promise<unknown>) => activatePromises.push(p) });
+    await Promise.all(activatePromises);
+    expect(cacheEntries.has("omb-pwa-shell-v1")).toBe(false);
+
+    // Online navigation serves fresh HTML within timeout (never stale cached "/") and strips `.redirected`.
+    const poisoned = new Response("<html>poisoned</html>", { status: 200 });
+    Object.defineProperty(poisoned, "redirected", { value: true });
+    cacheEntries.get("omb-pwa-shell-v4")!.set("/", poisoned);
+
+    let navResponsePromise!: Promise<Response>;
+    const bgPromises: Promise<unknown>[] = [];
+    listeners.get("fetch")!({
+      request: { method: "GET", mode: "navigate", url: "https://mausbot.mxhan.com/" },
+      respondWith: (p: Promise<Response>) => { navResponsePromise = p; },
+      waitUntil: (p: Promise<unknown>) => { bgPromises.push(p); },
+    });
+    const navResponse = await navResponsePromise;
+    expect(navResponse.redirected).toBe(false);
+    expect(await navResponse.text()).toBe("<html>/</html>");
+    await Promise.all(bgPromises);
+
+    // Offline navigation falls back to cached "/" and still strips `.redirected`.
+    cacheEntries.get("omb-pwa-shell-v4")!.set("/", poisoned);
+    mockFetch.mockRejectedValueOnce(new Error("offline"));
+    let offlineNavPromise!: Promise<Response>;
+    const offlineBg: Promise<unknown>[] = [];
+    listeners.get("fetch")!({
+      request: { method: "GET", mode: "navigate", url: "https://mausbot.mxhan.com/" },
+      respondWith: (p: Promise<Response>) => { offlineNavPromise = p; },
+      waitUntil: (p: Promise<unknown>) => { offlineBg.push(p); },
+    });
+    const offlineNav = await offlineNavPromise;
+    expect(offlineNav.redirected).toBe(false);
+    expect(await offlineNav.text()).toBe("<html>poisoned</html>");
+    await Promise.all(offlineBg);
+
+    // SPA HTML fallback for a stale /assets/*.js request must return 404, not be cached, clear cached "/", and trigger one reload.
+    let staleAssetPromise!: Promise<Response>;
+    const staleWait: Promise<unknown>[] = [];
+    listeners.get("fetch")!({
+      request: { method: "GET", mode: "cors", url: "https://mausbot.mxhan.com/assets/App-stale.js" },
+      respondWith: (p: Promise<Response>) => { staleAssetPromise = p; },
+      waitUntil: (p: Promise<unknown>) => { staleWait.push(p); },
+    });
+    const staleAsset = await staleAssetPromise;
+    await Promise.all(staleWait);
+    expect(staleAsset.status).toBe(404);
+    expect(cacheEntries.get("omb-pwa-shell-v4")!.has("/assets/App-stale.js")).toBe(false);
+    expect(cacheEntries.get("omb-pwa-shell-v4")!.has("/")).toBe(false);
+    expect(navigate).toHaveBeenCalledWith("https://mausbot.mxhan.com/");
+
+    // Cold cache redirected navigation (e.g. /legacy/) must also resolve with redirected === false.
+    cacheEntries.get("omb-pwa-shell-v4")!.delete("/");
+    let coldNavPromise!: Promise<Response>;
+    listeners.get("fetch")!({
+      request: { method: "GET", mode: "navigate", url: "https://mausbot.mxhan.com/legacy/" },
+      respondWith: (p: Promise<Response>) => { coldNavPromise = p; },
+      waitUntil: () => {},
+    });
+    const coldNav = await coldNavPromise;
+    expect(coldNav.redirected).toBe(false);
+    expect(await coldNav.text()).toBe("<html>/legacy/</html>");
+
+    // Non-HTML navigation response must not overwrite cached "/", and uppercase /API/ paths are bypassed by isApiOrDynamicPath.
+    cacheEntries.get("omb-pwa-shell-v4")!.delete("/");
+    const nonHtmlRes = new Response("{\"not\":\"html\"}", { status: 200, headers: { "content-type": "application/json" } });
+    Object.defineProperty(nonHtmlRes, "type", { value: "basic" });
+    Object.defineProperty(nonHtmlRes, "redirected", { value: false });
+    mockFetch.mockResolvedValueOnce(nonHtmlRes);
+    let nonHtmlNavPromise!: Promise<Response>;
+    listeners.get("fetch")!({
+      request: { method: "GET", mode: "navigate", url: "https://mausbot.mxhan.com/non-html" },
+      respondWith: (p: Promise<Response>) => { nonHtmlNavPromise = p; },
+      waitUntil: () => {},
+    });
+    const nonHtmlNav = await nonHtmlNavPromise;
+    expect(await nonHtmlNav.text()).toBe("{\"not\":\"html\"}");
+    expect(cacheEntries.get("omb-pwa-shell-v4")!.has("/")).toBe(false);
+
+    let apiHandled = false;
+    listeners.get("fetch")!({
+      request: { method: "GET", mode: "cors", url: "https://mausbot.mxhan.com/API/bots" },
+      respondWith: () => { apiHandled = true; },
+      waitUntil: () => {},
+    });
+    expect(apiHandled).toBe(false);
   });
 });

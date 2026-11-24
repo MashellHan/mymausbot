@@ -99,6 +99,36 @@ export interface LocalAgentConfigurationDocument {
   markdown: string | null;
 }
 
+export const LOCAL_AGENT_ROLE_DOCUMENT_MAX_BYTES = 128 * 1024;
+
+export interface LocalAgentRoleDocumentTarget {
+  agentId: string;
+  occupantId: string;
+}
+
+/** The editable Markdown body and an opaque revision of its bound role file. */
+export interface LocalAgentRoleDocument {
+  file: string;
+  sourcePath: string;
+  documentId: string;
+  agentName: string;
+  memberNames: string[];
+  runtime: string;
+  text: string;
+  hash: string;
+}
+
+export interface LocalAgentRoleDocumentWrite extends LocalAgentRoleDocumentTarget {
+  text: string;
+  expectedHash: string;
+  documentId: string;
+}
+
+export type LocalAgentRoleSaveResult =
+  | { status: "saved"; doc: LocalAgentRoleDocument }
+  | { status: "conflict"; doc: LocalAgentRoleDocument }
+  | { status: "unavailable" };
+
 export interface LocalAgentConfigurationSkill {
   id: string;
   name: string;

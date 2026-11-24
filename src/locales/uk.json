@@ -2361,6 +2361,7 @@
   "pwaBridge.secret.rotate": "Оновити секрет",
   "pwaBridge.secret.title": "Секрет ретранслятора",
   "pwaBridge.secret.valueLabel": "Секрет мосту",
+  "pwaBridge.sectionTitle": "Мобільний вебзастосунок через ретранслятор",
   "pwaBridge.settings.notSet": "Не задано",
   "pwaBridge.settings.saved": "Збережено",
   "pwaBridge.settings.saving": "Збереження…",

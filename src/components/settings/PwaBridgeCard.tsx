@@ -21,7 +21,6 @@ import {
   SettingsFormFoot,
   SettingsGroup,
   SettingsRows,
-  Switch,
 } from "../SettingsPrimitives";
 import { SettingsDialog } from "./SettingsDialog";
 
@@ -92,7 +91,7 @@ function errorMeta(cause: unknown): {
 
 function localizedActionError(
   cause: unknown,
-  action: "toggle" | "save" | "rotate" | "invite",
+  action: "save" | "rotate" | "invite",
   remoteBlocked: string | null,
 ): string {
   const { status, code, hasErrorKey, message } = errorMeta(cause);
@@ -155,7 +154,13 @@ function SecretCopyRow({
   );
 }
 
-export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string | null }) {
+export function PwaBridgeCard({
+  remoteBlocked = null,
+  onInviteChange,
+}: {
+  remoteBlocked?: string | null;
+  onInviteChange?: () => void;
+}) {
   const { state } = useStore();
   const bots = state.bots ?? [];
 
@@ -178,7 +183,7 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
   const readSeqRef = useRef(0);
   const writeEpochRef = useRef(0);
 
-  const [busyAction, setBusyAction] = useState<"toggle" | "save" | "rotate" | "invite" | null>(null);
+  const [busyAction, setBusyAction] = useState<"save" | "rotate" | "invite" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
   const [revealedSecret, setRevealedSecret] = useState<{
@@ -191,6 +196,8 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
   const pairTriggerRef = useRef<HTMLButtonElement>(null);
   const pairRestoreTargetRef = useRef<HTMLElement | null>(null);
   const wasInviteOpenRef = useRef(false);
+  const onInviteChangeRef = useRef(onInviteChange);
+  onInviteChangeRef.current = onInviteChange;
 
   function syncFromResponse(next: PwaBridgeSettingsResponse, forceDrafts = false) {
     setData({ config: next.config, status: next.status });
@@ -253,11 +260,15 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
   useEffect(() => {
     if (invite) {
       wasInviteOpenRef.current = true;
-      const timer = setInterval(() => setNow(Date.now()), 15_000);
+      const timer = setInterval(() => {
+        setNow(Date.now());
+        if (invite.expiresAt > Date.now()) onInviteChangeRef.current?.();
+      }, 15_000);
       return () => clearInterval(timer);
     }
     if (wasInviteOpenRef.current) {
       wasInviteOpenRef.current = false;
+      onInviteChangeRef.current?.();
       const target = pairRestoreTargetRef.current;
       pairRestoreTargetRef.current = null;
       if (target?.isConnected && !target.hasAttribute("disabled")) {
@@ -273,42 +284,8 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
 
   const busy = busyAction !== null;
   const expired = invite ? invite.expiresAt <= now : false;
-  const canPair = data.config.enabled && data.config.hasBridgeSecret && !remoteBlocked;
-
-  async function toggleEnabled(enabled: boolean) {
-    if (busy || (enabled && remoteBlocked)) return;
-    writeEpochRef.current += 1;
-    setBusyAction("toggle");
-    setError(null);
-    setSavedNotice(null);
-    try {
-      const payload = enabled && dirty
-        ? {
-          enabled,
-          relayUrl: relayUrl.trim(),
-          hostId: hostId.trim(),
-          pwaOrigin: pwaOrigin.trim(),
-          defaultBotId: defaultBotId.trim() || null,
-        }
-        : { enabled };
-      const next = await api<PwaBridgeSettingsResponse>("/api/pwa-bridge", {
-        method: "PUT",
-        body: JSON.stringify(payload),
-      });
-      writeEpochRef.current += 1;
-      syncFromResponse(next, enabled && dirty);
-      if (enabled && !next.config.hasBridgeSecret) {
-        setSettingsOpen(true);
-      }
-      if (!enabled) {
-        setInvite(null);
-      }
-    } catch (cause) {
-      setError(localizedActionError(cause, "toggle", remoteBlocked));
-    } finally {
-      setBusyAction(null);
-    }
-  }
+  const relayConfigured = Boolean(data.config.relayUrl.trim() && data.config.hostId.trim());
+  const canPair = data.config.enabled && relayConfigured && data.config.hasBridgeSecret && !remoteBlocked;
 
   async function saveSettings(event: FormEvent) {
     event.preventDefault();
@@ -321,6 +298,7 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
       const next = await api<PwaBridgeSettingsResponse>("/api/pwa-bridge", {
         method: "PUT",
         body: JSON.stringify({
+          enabled: true,
           relayUrl: relayUrl.trim(),
           hostId: hostId.trim(),
           pwaOrigin: pwaOrigin.trim(),
@@ -398,11 +376,21 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
     if (result !== "empty") setCopied(result);
   }
 
-  const pairSubtitle = !data.config.enabled
-    ? t("pwaBridge.pair.needEnable")
-    : !data.config.hasBridgeSecret
-      ? t("pwaBridge.pair.needSecret")
-      : t("pwaBridge.pair.ready");
+  const pairSubtitle = remoteBlocked
+    ? remoteBlocked
+    : !relayConfigured
+      ? t("pwaBridge.status.missingConfig")
+      : !data.config.hasBridgeSecret
+        ? t("pwaBridge.pair.needSecret")
+        : !data.config.enabled
+          ? t("pwaBridge.pair.needEnable")
+          : t("pwaBridge.pair.ready");
+
+  const relaySubtitle = !relayConfigured || !data.config.hasBridgeSecret
+    ? t("pwaBridge.status.missingConfig")
+    : data.status.state === "error" || data.status.state === "connecting" || data.status.state === "connected" || remoteBlocked
+      ? bridgeStatusText(data, remoteBlocked)
+      : t("pwaBridge.settings.subtitle");
 
   const hasSavedMissingBot = Boolean(
     defaultBotId && !bots.some((bot) => bot.id === defaultBotId),
@@ -469,40 +457,12 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
         </SettingsDialog>
       )}
 
-      <SettingsGroup label={t("pwaBridge.title")} block="pwa-bridge">
+      <SettingsGroup label={t("pwaBridge.sectionTitle")} block="pwa-bridge">
         <SettingsRows>
-          <SettingRow
-            title={t("pwaBridge.title")}
-            subtitle={bridgeStatusText(data, remoteBlocked)}
-            message={error ? <span role="alert" className="text-danger">{error}</span> : undefined}
-          >
-            <Switch
-              id="pwa-bridge-enabled"
-              data-pwa-bridge-switch=""
-              checked={data.config.enabled}
-              disabled={busy || (Boolean(remoteBlocked) && !data.config.enabled)}
-              aria-label={t("pwaBridge.enable")}
-              onClick={() => void toggleEnabled(!data.config.enabled)}
-            />
-          </SettingRow>
-
-          <SettingRow title={t("pwaBridge.pair.title")} subtitle={pairSubtitle}>
-            <button
-              ref={pairTriggerRef}
-              type="button"
-              data-pwa-pair-action=""
-              disabled={busy || !canPair}
-              onClick={() => void createInvite()}
-              className={cn("ui-button ui-button-primary", !canPair && "opacity-40")}
-            >
-              {busyAction === "invite" ? t("pwaBridge.pair.creating") : t("pwaBridge.pair.button")}
-            </button>
-          </SettingRow>
-
           <SettingsFoldRow
             id="pwa-bridge-settings"
             title={t("pwaBridge.settings.title")}
-            subtitle={t("pwaBridge.settings.subtitle")}
+            subtitle={relaySubtitle}
             value={relayHostLabel(data.config.relayUrl)}
             open={settingsOpen}
             onToggle={() => {
@@ -513,8 +473,8 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
               });
             }}
           >
-            <div className="flex flex-col gap-4">
-              <form data-pwa-bridge-form="" onSubmit={(event) => void saveSettings(event)} className="flex flex-col gap-3">
+            <form data-pwa-bridge-form="" onSubmit={(event) => void saveSettings(event)} className="flex flex-col">
+              <div className="flex flex-col gap-3 px-4 pt-3 pb-1">
                 <SettingsField label={t("pwaBridge.field.relayUrl")}>
                   <input
                     id="pwa-bridge-relay-url"
@@ -597,56 +557,73 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
                     ))}
                   </Select>
                 </SettingsField>
-
-                <SettingsFormFoot status={savedNotice ? <span role="status">{savedNotice}</span> : undefined}>
-                  <button type="submit" data-pwa-bridge-save="" disabled={busy || !dirty} className="ui-button ui-button-primary">
-                    {busyAction === "save" ? t("pwaBridge.settings.saving") : t("common.save")}
-                  </button>
-                </SettingsFormFoot>
-              </form>
-
-              <div className="flex flex-col gap-3 border-t-[0.5px] border-(--settings-edge) pt-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex min-w-0 flex-col gap-0.5">
-                    <span className="text-[14px] leading-5 text-ink">{t("pwaBridge.secret.title")}</span>
-                    <span data-pwa-secret-status="" className="text-[13px] leading-[18px] text-ink-secondary">
-                      {t(data.config.hasBridgeSecret ? "pwaBridge.secret.configured" : "pwaBridge.secret.missing")}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    data-pwa-rotate-secret=""
-                    disabled={busy}
-                    onClick={() => void rotateSecret()}
-                    className="ui-button shrink-0"
-                  >
-                    {t(data.config.hasBridgeSecret ? "pwaBridge.secret.rotate" : "pwaBridge.secret.generate")}
-                  </button>
-                </div>
-
-                {revealedSecret && (
-                  <div data-pwa-secret-revealed="" className="flex flex-col gap-3 rounded-[12px] border-[0.5px] border-(--settings-edge) bg-ink/[0.04] p-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="text-[12px] leading-4 text-ink-secondary">{t("pwaBridge.secret.onceNote")}</p>
-                      <button type="button" onClick={() => setRevealedSecret(null)} className="settings-quiet shrink-0 cursor-pointer">
-                        {t("pwaBridge.secret.hide")}
-                      </button>
-                    </div>
-                    <SecretCopyRow
-                      label={t("pwaBridge.secret.hashLabel")}
-                      value={revealedSecret.bridgeSecretSha256}
-                      dataAttr="data-pwa-secret-hash"
-                    />
-                    <SecretCopyRow
-                      label={t("pwaBridge.secret.valueLabel")}
-                      value={revealedSecret.bridgeSecret}
-                      dataAttr="data-pwa-secret-value"
-                    />
-                  </div>
-                )}
               </div>
+
+              <SettingsFormFoot status={savedNotice ? <span role="status">{savedNotice}</span> : undefined}>
+                <button type="submit" data-pwa-bridge-save="" disabled={busy || !dirty} className="ui-button ui-button-primary">
+                  {busyAction === "save" ? t("pwaBridge.settings.saving") : t("common.save")}
+                </button>
+              </SettingsFormFoot>
+            </form>
+
+            <div data-pwa-secret-row="" className="flex flex-col gap-3 px-4 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex min-w-0 flex-col gap-0.5">
+                  <span className="text-[14px] leading-5 text-ink">{t("pwaBridge.secret.title")}</span>
+                  <span data-pwa-secret-status="" className="text-[13px] leading-[18px] text-ink-secondary">
+                    {t(data.config.hasBridgeSecret ? "pwaBridge.secret.configured" : "pwaBridge.secret.missing")}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  data-pwa-rotate-secret=""
+                  disabled={busy}
+                  onClick={() => void rotateSecret()}
+                  className="ui-button shrink-0"
+                >
+                  {t(data.config.hasBridgeSecret ? "pwaBridge.secret.rotate" : "pwaBridge.secret.generate")}
+                </button>
+              </div>
+
+              {revealedSecret && (
+                <div data-pwa-secret-revealed="" className="flex flex-col gap-3 rounded-[12px] border-[0.5px] border-(--settings-edge) bg-ink/[0.04] p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-[12px] leading-4 text-ink-secondary">{t("pwaBridge.secret.onceNote")}</p>
+                    <button type="button" onClick={() => setRevealedSecret(null)} className="settings-quiet shrink-0 cursor-pointer">
+                      {t("pwaBridge.secret.hide")}
+                    </button>
+                  </div>
+                  <SecretCopyRow
+                    label={t("pwaBridge.secret.hashLabel")}
+                    value={revealedSecret.bridgeSecretSha256}
+                    dataAttr="data-pwa-secret-hash"
+                  />
+                  <SecretCopyRow
+                    label={t("pwaBridge.secret.valueLabel")}
+                    value={revealedSecret.bridgeSecret}
+                    dataAttr="data-pwa-secret-value"
+                  />
+                </div>
+              )}
             </div>
           </SettingsFoldRow>
+
+          <SettingRow
+            title={t("pwaBridge.pair.title")}
+            subtitle={pairSubtitle}
+            message={error ? <span role="alert" className="text-danger">{error}</span> : undefined}
+          >
+            <button
+              ref={pairTriggerRef}
+              type="button"
+              data-pwa-pair-action=""
+              disabled={busy || !canPair}
+              onClick={() => void createInvite()}
+              className={cn("ui-button ui-button-primary", !canPair && "opacity-40")}
+            >
+              {busyAction === "invite" ? t("pwaBridge.pair.creating") : t("pwaBridge.pair.button")}
+            </button>
+          </SettingRow>
         </SettingsRows>
       </SettingsGroup>
     </>

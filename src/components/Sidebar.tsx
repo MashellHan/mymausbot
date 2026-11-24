@@ -92,8 +92,6 @@ import { SidebarNoBots, SidebarTileGrid } from "./SidebarTiles";
 import { BotContextMenu } from "./SidebarBotMenu";
 export { BotContextMenu };
 import { AvatarActivityDot, AvatarCornerDot, RowDot, RowStatusText, rowSelectedSurface, rowSurface } from "./SidebarRowMarkers";
-
-
 import { SidebarAttentionPanel } from "./SidebarAttentionPanel";
 import { SidebarPinnedThreadsPanel } from "./SidebarPinnedThreadsPanel";
 import { useLiveMedia } from "@/lib/live-call-media";
@@ -189,7 +187,8 @@ export const GroupListItem = memo(function GroupListItem({
       className={cn(
         "relative flex w-full items-center rounded-md text-left", SIMPLE_ROW_FOCUS,
         density === "icons" ? (railTile ? "h-[54px] justify-center" : "justify-center px-1 py-1.5") : simpleRow
-          ? cn("gap-2 rounded-[8px] py-2 pr-2 group-hover:pr-9 group-focus-within:pr-9 max-md:pr-9 touch:pr-9 md:h-[54px] md:py-0", !group.dm && hasThreadList ? "pl-6" : "pl-2") : "gap-2 py-1.5 pl-6 pr-9",
+          ? cn("gap-2 rounded-[8px] py-2 pr-2 group-hover:pr-9 group-focus-within:pr-9 max-md:gap-3 max-md:pr-2.5 touch:pr-9 md:h-[54px] md:py-0", !group.dm && hasThreadList ? "pl-6" : "pl-2") : "gap-2 py-1.5 pl-6 pr-9",
+        density !== "icons" && cn("max-md:rounded-2xl max-md:px-2.5 max-md:py-2.5 max-md:transition-[transform,background-color] max-md:duration-100 max-md:active:scale-[0.985]", !group.dm && hasThreadList && "max-md:pl-7"),
         selected && !expanded ? rowSelectedSurface : "hover:bg-raised/50",
       )}
       title={density === "icons" ? group.name : undefined}
@@ -197,14 +196,14 @@ export const GroupListItem = memo(function GroupListItem({
     >
       {group.dm ? <StackedMauses members={members} density={railTile ? "comfortable" : density} large={simpleRow || railTile} /> : <RoomMark density={railTile ? "comfortable" : density} large={simpleRow || railTile} />}
       <div className={cn("min-w-0 flex-1", density === "icons" && "hidden")}>
-        <div className={cn("flex items-baseline justify-between gap-2", simpleRow && "pr-7")}>
-          <span className={cn("truncate text-[14px] text-ink", simpleRow ? "font-medium leading-5" : "font-semibold")}>{group.name}</span>
-          {advanced && selected && last && !expanded && <span className="shrink-0 text-[10px] text-ink-secondary">{formatTime(last.at)}</span>}
+        <div className={cn("flex items-baseline justify-between gap-2", simpleRow && "pr-7 max-md:pr-0")}>
+          <span className={cn("truncate text-[14px] text-ink max-md:text-[16px] max-md:font-semibold max-md:leading-[22px]", simpleRow ? "font-medium leading-5" : "font-semibold")}>{group.name}</span>
+          {advanced && selected && last && !expanded && <span className="shrink-0 text-[10px] text-ink-secondary max-md:text-[12px] max-md:text-ink-tertiary">{formatTime(last.at)}</span>}
           {!simpleRow && expanded && group.unread && <span className="size-1.5 shrink-0 rounded-full bg-accent" aria-label={t("task.unreadMany")} />}
           {simpleRow && !expanded && group.unread && <RowDot />}
         </div>
         {!expanded && <div className="flex items-center justify-between gap-2">
-          <span className={cn("truncate text-ink-secondary", simpleRow ? "text-[13px] leading-[18px]" : "text-[11px]")}>{group.description || groupPreview(group, bots, instances, advanced)}</span>
+          <span className={cn("truncate text-ink-secondary max-md:text-[14px] max-md:leading-[20px]", simpleRow ? "text-[13px] leading-[18px]" : "text-[11px]")}>{group.description || groupPreview(group, bots, instances, advanced)}</span>
           {!simpleRow && group.unread && <span className="size-2 shrink-0 rounded-full bg-accent" />}
         </div>}
         {simpleRow && <RowStatusText unread={group.unread} />}
@@ -219,7 +218,7 @@ export const GroupListItem = memo(function GroupListItem({
     </button>}
     {!group.dm && density !== "icons" && <button type="button" disabled={roomBusy} aria-label={t("task.newShort")} title={t(roomBusy ? "task.newBusy" : "task.newShort")}
       onClick={() => { setThreadsOpen(true); dispatch({ type: "newGroupTask", groupId: group.id }); }}
-      className="pointer-events-none absolute right-1 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded text-ink-secondary opacity-0 hover:bg-raised hover:text-ink disabled:opacity-40 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 max-md:pointer-events-auto max-md:opacity-70 touch:pointer-events-auto touch:opacity-70 touch:disabled:opacity-40"><Plus size={14} /></button>}
+      className="pointer-events-none absolute right-1 max-md:right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded text-ink-secondary opacity-0 hover:bg-raised hover:text-ink disabled:opacity-40 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 max-md:pointer-events-auto max-md:opacity-70 touch:pointer-events-auto touch:opacity-70 touch:disabled:opacity-40"><Plus size={14} /></button>}
     </div>
     {expanded && <GroupThreadList group={group} selected={selected} query={group.name.toLowerCase().includes(query.toLowerCase()) ? "" : query} />}
     </>
@@ -724,9 +723,9 @@ export const BotListItem = memo(function BotListItem(props: BotRowProps) {
     "flex w-full items-center rounded-xl text-left transition-colors duration-150", SIMPLE_ROW_FOCUS,
     iconOnly
       ? railTile ? "h-[54px] justify-center" : "justify-center px-1 py-1.5"
-      : simpleRow ? "gap-2 rounded-[8px] py-2 pl-2 pr-2 md:h-[54px] md:py-0"
-        : cn(showThreads ? "gap-2 py-2" : "gap-3 py-2", showThreads ? "pl-6 pr-9 group-hover:pr-[5.75rem] group-focus-within:pr-[5.75rem] max-md:pr-9 touch:pr-[5.75rem]" : "pl-2.5 pr-9"),
-    !iconOnly && "max-md:rounded-2xl max-md:py-2.5",
+      : simpleRow ? "gap-2 rounded-[8px] py-2 pl-2 pr-2 max-md:gap-3 md:h-[54px] md:py-0"
+        : cn(showThreads ? "gap-2 py-2" : "gap-3 py-2", showThreads ? "pl-6 pr-9 group-hover:pr-[5.75rem] group-focus-within:pr-[5.75rem] max-md:pr-2.5 touch:pr-[5.75rem]" : "pl-2.5 pr-9 max-md:pr-2.5"),
+    !iconOnly && "max-md:rounded-2xl max-md:px-2.5 max-md:py-2.5 max-md:transition-[transform,background-color] max-md:duration-100 max-md:active:scale-[0.985]",
     selected ? rowSelectedSurface : "hover:bg-raised/50",
     simpleRow && rowSurface(selected),
   );
@@ -775,8 +774,8 @@ export const BotListItem = memo(function BotListItem(props: BotRowProps) {
         )}
       </span>
       <div className={cn("min-w-0 flex-1", iconOnly && "hidden")}>
-        <div className={cn("flex items-baseline justify-between gap-2", simpleRow && "pe-7 group-hover:pe-[3.25rem] group-focus-within:pe-[3.25rem] touch:pe-[3.25rem] max-md:touch:pe-7")}>
-          <span className={cn("flex min-w-0 grow items-center gap-1.5 truncate text-ink", simpleRow ? "text-[14px] font-medium leading-5" : "text-[15px] font-semibold leading-5")}>
+        <div className={cn("flex items-baseline justify-between gap-2", simpleRow && "pe-7 group-hover:pe-[3.25rem] group-focus-within:pe-[3.25rem] touch:pe-[3.25rem] max-md:pe-0 max-md:touch:pe-0")}>
+          <span className={cn("flex min-w-0 grow items-center gap-1.5 truncate text-ink max-md:text-[16px] max-md:font-semibold max-md:leading-[22px]", simpleRow ? "text-[14px] font-medium leading-5" : "text-[15px] font-semibold leading-5")}>
             {!simpleList && bot.pinned && <Pin size={12} className="shrink-0 text-ink-secondary" />}
             <RenameTitle
               key={iconOnly ? "icons" : "expanded"}
@@ -810,7 +809,7 @@ export const BotListItem = memo(function BotListItem(props: BotRowProps) {
           </span>
           {last && !renaming && !expanded && (
             <span className={cn(
-              "shrink-0 text-[12px] tabular-nums text-ink-secondary transition-opacity",
+              "shrink-0 text-[12px] tabular-nums text-ink-secondary transition-opacity max-md:text-ink-tertiary",
               // Phones show the time on every row; elsewhere only the selected row, until its actions appear.
               selected && !simpleList ? "group-hover:opacity-0 group-focus-within:opacity-0 touch:opacity-0 max-md:touch:opacity-100" : "hidden max-md:inline",
             )}>
@@ -822,12 +821,12 @@ export const BotListItem = memo(function BotListItem(props: BotRowProps) {
         </div>
         {(!expanded || deleting) && <div className="flex items-center justify-between gap-2">
           {deleting ? (
-            <span role="status" className="flex min-w-0 items-center gap-1.5 truncate text-[13px] leading-[18px] text-ink-secondary">
+            <span role="status" className="flex min-w-0 items-center gap-1.5 truncate text-[13px] leading-[18px] text-ink-secondary max-md:text-[14px] max-md:leading-[20px]">
               <Loader2 size={12} className="shrink-0 animate-spin" />
               {t("sidebar.bot.deletingRow")}
             </span>
           ) : (
-            <span className={cn("flex min-w-0 items-center gap-1.5 truncate text-[13px] leading-[18px]", waiting ? simpleRow ? "text-warning" : "font-semibold text-warning" : "text-ink-secondary")}>
+            <span className={cn("flex min-w-0 items-center gap-1.5 truncate text-[13px] leading-[18px] max-md:text-[14px] max-md:leading-[20px]", waiting ? simpleRow ? "text-warning" : "font-semibold text-warning" : "text-ink-secondary")}>
               {working ? (
                 <SidebarWorkingStep bot={bot} last={last} />
               ) : (
@@ -902,8 +901,8 @@ export const BotListItem = memo(function BotListItem(props: BotRowProps) {
         {showThreads && <button type="button" aria-label={t("folder.newNamed", { name: bot.name })} title={t("folder.new")} onClick={() => { setThreadsOpen(true); setCreatingProject(true); }}
           className="pointer-events-none absolute right-8 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded text-ink-secondary opacity-0 hover:bg-raised hover:text-ink group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 max-md:hidden touch:pointer-events-auto touch:opacity-70"><FolderPlus size={14} /></button>}
         <button type="button" data-bot-actions={bot.id} aria-label={t("sidebar.bot.actions", { name: bot.name })} title={t("sidebar.bot.actions", { name: bot.name })} aria-haspopup="menu" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); onMenu({ botId: bot.id, x: rect.left, y: rect.bottom }); }}
-          className={cn("absolute top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded text-ink-secondary hover:bg-raised hover:text-ink", simpleRow ? "end-[3px] top-1.5 size-6 translate-y-0 rounded-lg" : "right-1",
-            selected && !simpleRow ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 max-md:pointer-events-auto max-md:opacity-70 touch:pointer-events-auto touch:opacity-70")}><MoreHorizontal size={15} /></button>
+          className={cn("absolute top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded text-ink-secondary hover:bg-raised hover:text-ink max-md:hidden", simpleRow ? "end-[3px] top-1.5 size-6 translate-y-0 rounded-lg" : "right-1",
+            selected && !simpleRow ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 touch:pointer-events-auto touch:opacity-70")}><MoreHorizontal size={15} /></button>
       </>}{!renaming && !deleting && simpleRow && <SidebarBotThreadsPeek bot={bot} onScreen={selected} dispatch={dispatch} />}
       {deleting && iconOnly && (
         <span className="pointer-events-none absolute bottom-1 right-1 rounded-full bg-card p-1 text-ink-secondary">
@@ -1035,7 +1034,6 @@ export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = 
     const timer = window.setTimeout(() => setTeamFeedback(null), 5000);
     return () => window.clearTimeout(timer);
   }, [teamFeedback]);
-
 
   const requestArchive = (bot: Bot) => {
     const current = currentArchivableBot(state.bots, bot.id);
@@ -1233,6 +1231,7 @@ export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = 
       aria-label={t("sidebar.aria")}
       data-native-view-overlay
       data-sidebar
+      inert={phone && !open ? true : undefined}
       onClick={(event) => {
         // The phone's list covers the whole screen: choosing the bot that is already open has to dismiss it too.
         if (phone && open && event.target instanceof Element && !(event.target instanceof HTMLInputElement) && event.target.closest("[data-sidebar-bot-row], [data-sidebar-hero]")) onClose();
@@ -1246,8 +1245,8 @@ export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = 
         // max-md: rather than an md: cancel: Tailwind v4 emits the native `translate`, and any value but `none` makes
         // this a containing block for its `fixed` descendants.
         "max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-40 max-md:w-full max-md:bg-app",
-        "max-md:transition-transform max-md:duration-200",
-        open ? "max-md:translate-x-0" : "max-md:-translate-x-full",
+        "max-md:transition-transform max-md:duration-[240ms] max-md:ease-[cubic-bezier(0.22,1,0.36,1)] max-md:will-change-transform max-md:[contain:layout_style_paint] max-md:motion-reduce:transition-none",
+        open ? "max-md:translate-x-0" : "max-md:-translate-x-full max-md:pointer-events-none",
       )}
     >
       <GlassScrollFrame className="flex-1" fade><PlaceTint />
@@ -1257,8 +1256,8 @@ export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = 
         className={cn(
           "flex items-center",
           // The corner is no drag region and takes no clicks but its buttons': the tiles rise into the rest of it.
-          density === "icons" ? "flex-col gap-1 px-2 pt-3.5 pb-1" : corner ? "pointer-events-none relative h-[34px] items-start justify-end px-1.5 pt-1.5" : simpleDesk ? "relative h-[60px] items-start pl-4 pr-4 pt-3" : "relative pl-4 pr-2",
-          density !== "icons" && !simpleDesk && !lights && "h-12 max-md:h-16",
+          density === "icons" ? "flex-col gap-1 px-2 pt-3.5 pb-1" : corner ? "pointer-events-none relative h-[34px] items-start justify-end px-1.5 pt-1.5" : simpleDesk ? "relative h-[60px] items-start pl-4 pr-4 pt-3" : phone ? "relative px-3" : "relative pl-4 pr-2",
+          density !== "icons" && !simpleDesk && !lights && "h-12 max-md:pt-1",
         )}
         style={corner ? undefined : density !== "icons" && lights && !simpleDesk ? { ...windowDragStyle, height: MAC_TRAFFIC_LIGHT_CENTER_Y * 2 } : windowDragStyle}
       >
@@ -1285,7 +1284,7 @@ export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = 
         ))}
         {!rail && <div
           data-sidebar-top-buttons
-          className={cn("relative flex shrink-0 items-center", density === "icons" ? "flex-col gap-1" : corner ? "pointer-events-auto" : simpleDesk ? "gap-2" : simple ? "gap-1 pl-0.5" : "ml-0.5 gap-0.5")}
+          className={cn("relative flex shrink-0 items-center", density === "icons" ? "flex-col gap-1" : corner ? "pointer-events-auto" : simpleDesk || phone ? "gap-2" : simple ? "gap-1 pl-0.5" : "ml-0.5 gap-0.5")}
           style={windowNoDragStyle}
         >
           {simpleDesk && <SidebarSearchToggle ref={searchToggleRef} corner={corner} open={searchShown} onToggle={() => (searchShown ? closeSearch() : setSearchOpen(true))} />}
@@ -1299,6 +1298,7 @@ export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = 
             <Search size={20} strokeWidth={1.5} />
           </button>}
           {advanced && inboxSupport === "no" && <SidebarActiveThreads entries={attention} icons={density === "icons"} phone={phone} dispatch={dispatch} />}
+          {phone && <SidebarInboxRow compactIcon icons={false} large={false} running={attentionHasRunningWork(attention)} hideEmpty={raw} onOpened={onClose} />}
           {plusControl}
         </div>}
       </div>
@@ -1319,7 +1319,7 @@ export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = 
         </div>
       </div>}
       {!q && <TeamSideSwitch compact={density === "icons"} listOnly={phone} />}
-      {!q && <SidebarInboxRow icons={density === "icons"} large={!advanced} running={attentionHasRunningWork(attention)} hideEmpty={raw} onOpened={phone ? onClose : undefined} />}
+      {!q && (!phone || rail) && <SidebarInboxRow icons={density === "icons"} large={!advanced} running={attentionHasRunningWork(attention)} hideEmpty={raw} onOpened={phone ? onClose : undefined} />}
       {universalPins && pinnedBots.length > 0 && (!simpleDesk || raw) && (
         <div
           data-sidebar-universal-pins=""
@@ -1368,8 +1368,8 @@ export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = 
       {!raw && !collapseToIcons && !phone && <SidebarResizeHandle sizing={sizing} sidebarRef={sidebarRef} avatars={density === "icons"} avatarsWidth={rail ? 92 : 80}
         onAvatars={(avatars) => setSidebarDensity(avatars ? "icons" : "comfortable")} style={windowNoDragStyle} />}
 
-      <GlassScroller className={rail ? "[scrollbar-gutter:stable_both-edges]" : simpleDesk ? "px-3" : "px-2"}>
-        <div className={cn("flex flex-col", simpleDesk ? cn("gap-0.5 pb-2", !tiles && "pt-2") : advanced ? "gap-0.5" : "gap-1 pb-2 pt-2")}>
+      <GlassScroller className={rail ? "[scrollbar-gutter:stable_both-edges]" : simpleDesk ? "px-3" : "px-2 max-md:px-3"}>
+        <div className={cn("flex flex-col", simpleDesk ? cn("gap-0.5 pb-2", !tiles && "pt-2") : advanced ? "gap-0.5 max-md:gap-2.5" : "gap-1 pb-2 pt-2 max-md:gap-2.5")}>
           {matchingBots.length === 0 && visibleGroups.length === 0 && q && q.length < MIN_QUERY && (
             <div className="px-3 py-6 text-center text-[13px] text-ink-secondary">{t("sidebar.noMatch", { query })}</div>
           )}
@@ -1418,7 +1418,7 @@ export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = 
                 {...drops.zone(id, layout.zone(id))}
                 className={cn(
                   "flex flex-col",
-                  advanced || simpleDesk ? "gap-0.5" : "gap-1",
+                  advanced || simpleDesk ? "gap-0.5 max-md:gap-2.5" : "gap-1 max-md:gap-2.5",
                   density !== "icons" && index > 0 && !simple && "pt-3",
                 )}
               >
@@ -1506,7 +1506,7 @@ export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = 
       {rail ? <SimpleRailFooter
         owner={cloudOwner}
         archived={archivedEntry}
-      /> : phone ? <SidebarPhoneBar query={query} onQuery={setQuery} /> : <SidebarFooter density={density} simple={simpleDesk} owner={cloudOwner} archived={archivedEntry} toolsCollapsed={sectionCollapsed(TOOLS_SECTION_ID)} onToggleTools={layoutInteractive ? () => toggleSection(TOOLS_SECTION_ID) : undefined} />}
+      /> : phone ? <SidebarPhoneBar query={query} onQuery={setQuery} onOpened={onClose} /> : <SidebarFooter density={density} simple={simpleDesk} owner={cloudOwner} archived={archivedEntry} toolsCollapsed={sectionCollapsed(TOOLS_SECTION_ID)} onToggleTools={layoutInteractive ? () => toggleSection(TOOLS_SECTION_ID) : undefined} />}
       </GlassBar>
       </GlassScrollFrame>
 

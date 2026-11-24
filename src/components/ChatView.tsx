@@ -74,7 +74,7 @@ import { useShowRunCard } from "@/lib/run-card-preferences";
 import { useColorUserBubbles } from "@/lib/user-bubble-preference";
 import { userBubbleStyle } from "@/lib/user-bubble-tone";
 import { ToolActivity } from "./ToolActivity";
-import { DataResultChip } from "./DataResultChip"; import { PublishedPageCard } from "./PublishedPageCard"; import { TemplateChatCard } from "./TemplateCard"; import { PublishedSiteCards } from "./published-apps/PublishedSiteCards";
+import { DataResultChip } from "./DataResultChip"; import { PublishedPageCard } from "./PublishedPageCard"; import { TemplateChatCard } from "./TemplateCard"; import { PublishedSiteCards } from "./published-apps/PublishedSiteCards"; import { isRemoteClientSession, isRemotePwaMode } from "@/lib/pwa-transport";
 import { ThreadRefText } from "./ThreadRefs"; import { WatchScreenButton } from "./WatchScreenButton";
 import { optionsCardRow } from "./OptionsCardRow";
 import { MessageBoundary } from "./MessageBoundary";
@@ -330,7 +330,7 @@ const Bubble = memo(function Bubble({
   const message = useLiveRow(threadId, row);
   const forkAction = !phone && message.kind === "text" && !message.id.startsWith("optimistic-")
     ? [forkMessageItem({ kind: "bot", ownerId: botId, threadId, messageId: message.id }, dispatch, busy)] : [];
-  const remoteClient = window.ogb?.remoteClient?.active === true;
+  const remoteClient = isRemoteClientSession();
   const peer = peerLine(message) ?? peerRequest(message, botId);
   const user = message.role === "user" && !peer;
   const speaker = user ? otherSpeaker(message, speakerViewer ?? null) : null;
@@ -792,7 +792,7 @@ const MessagesList = memo(function MessagesList({
             {newDay && <DaySeparator at={m.at} today={today} simple={simple} />}
             {divider}
             {m.automation && <AutomationCaption message={m} line={m.automation} botId={botId} />}{m.inbox && <InboxCaption message={m} />}
-            {isLiveReply(m) ? <StreamingReplyContext value>{row}</StreamingReplyContext> : row}<PublishedSiteCards message={m} />{m.inbox?.answers && <InboxAnswers message={m} />}{m.inbox && <InboxCardSlot threadId={threadId} messageId={m.id} />}{m.setupOffer && <SetupOffer botId={botId} threadId={threadId} message={m} transcript={transcript} />}{m.savedSteps && <SavedStepsChip botId={botId} message={m} />}
+            {isLiveReply(m) ? <StreamingReplyContext value>{row}</StreamingReplyContext> : row}{!isRemotePwaMode() && <PublishedSiteCards message={m} />}{m.inbox?.answers && <InboxAnswers message={m} />}{m.inbox && <InboxCardSlot threadId={threadId} messageId={m.id} />}{m.setupOffer && <SetupOffer botId={botId} threadId={threadId} message={m} transcript={transcript} />}{m.savedSteps && <SavedStepsChip botId={botId} message={m} />}
           </div>
         );
       })}
@@ -806,7 +806,7 @@ export const ChatView = memo(function ChatView({ bot: profile, inForkPanel = fal
   const bot = useMemo(() => currentTaskBot(profile), [profile]);
   const state = useStoreSelector((s) => ({ computerStart: s.computerStarts[profile.id], mascotMotion: s.mascotMotion?.botId === profile.id ? s.mascotMotion : null, instances: s.instances, config: s.config, focusMessage: s.focusMessage, forkPanelOpen: s.forkPanel !== null, settingsOpen: s.settingsOpen, computerOpen: s.computerOpen, error: s.error, notice: s.notice }), sameFields), dispatch = useStoreDispatch(), store = useStoreRef();
   const showThreads = useShowThreads();
-  const remoteClient = window.ogb?.remoteClient?.active === true;
+  const remoteClient = isRemoteClientSession();
   const { dragProps: headerDragProps, noDragStyle: headerNoDragStyle } = useCaptionChrome();
   const composerDockRef = useRef<HTMLDivElement>(null);
   const composerDock = useComposerDockPad(composerDockRef);
@@ -994,7 +994,7 @@ export const ChatView = memo(function ChatView({ bot: profile, inForkPanel = fal
     requestComputerPanelView(bot.id, "computer", state.computerOpen && event?.detail === 0);
     dispatch({ type: "toggleComputer", open: true });
   };
-  const computerButton = (!phoneMenu || rawComputerDirect) && <ChatComputerButton rawDirect={rawComputerDirect} open={state.computerOpen} live={busy && place === "browser"}
+  const computerButton = !isRemotePwaMode() && (!phoneMenu || rawComputerDirect) && <ChatComputerButton rawDirect={rawComputerDirect} open={state.computerOpen} live={busy && place === "browser"}
     onClick={(event) => { if (!state.computerOpen) rememberComputerPanelOpen({ botId: bot.id, opener: event.currentTarget, tabs: event.detail === 0 }); dispatch({ type: "toggleComputer" }); }} />;
 
   return (
@@ -1003,7 +1003,7 @@ export const ChatView = memo(function ChatView({ bot: profile, inForkPanel = fal
       <CallOverlay bot={bot} />
       <GlassScrollFrame className="flex-1 [--glass-tint:var(--color-app)]">
       {/* z-[25]: above the room set-up card (z-20), below the CallOverlay (z-30). */}
-      <GlassBar edge="top" fade={!remoteClient} className="z-[25]">
+      <GlassBar edge="top" fade={!remoteClient || phone} className="z-[25]">
       <div
         {...headerDragProps} data-look="chat-header"
         className={cn(
@@ -1043,7 +1043,7 @@ export const ChatView = memo(function ChatView({ bot: profile, inForkPanel = fal
               <RenameTitle
                 value={bot.name}
                 onCommit={(name) => {
-                  if (window.ogb?.remoteClient?.active) {
+                  if (remoteClient) {
                     void api(`/api/bots/${bot.id}/profile`, { method: "PATCH", body: JSON.stringify({ name }) })
                       .then(({ bot: updated }) => dispatch({ type: "botPatched", bot: updated }))
                       .catch((cause) => dispatch({ type: "error", message: cause instanceof Error ? cause.message : String(cause) }));
@@ -1097,8 +1097,8 @@ export const ChatView = memo(function ChatView({ bot: profile, inForkPanel = fal
           )}
           <ThreadContextWarning bot={bot} messages={messages} />
           {phone && <UsageAlert engine={bot.modelSelection?.instanceId} />}
-          {(!phone || remoteClient) && (!raw || remoteClient) && <ModelPicker key={bot.threadId} bot={bot} threadId={bot.threadId} />}
-          <LiveCallChip currentBotId={bot.id} onOpen={(botId, threadId) => openThread(dispatch, { botId, threadId }, store.state(), showThreads)} />{!phoneMenu && <WatchScreenButton botId={bot.id} messages={messages} liveTools={liveTools} place={place} />}
+          {!isRemotePwaMode() && (!phone || remoteClient) && (!raw || remoteClient) && <ModelPicker key={bot.threadId} bot={bot} threadId={bot.threadId} />}
+          <LiveCallChip currentBotId={bot.id} onOpen={(botId, threadId) => openThread(dispatch, { botId, threadId }, store.state(), showThreads)} />{!phoneMenu && !isRemotePwaMode() && <WatchScreenButton botId={bot.id} messages={messages} liveTools={liveTools} place={place} />}
           <PinnedMessagesMenu
             pins={pinnedPreview(messages, bot.pinnedMessageId, bot.name)}
             triggerClassName={cn(ELEVATED_FLOAT, ELEVATED_HOVER)}

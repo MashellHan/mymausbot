@@ -96,7 +96,10 @@ describe("asking the server", () => {
     vi.fn(async (path: string) => {
       const body = routes[path];
       if (body instanceof Error) throw body;
-      return new Response(JSON.stringify(body ?? {}), { status: body === undefined ? 404 : 200 });
+      return new Response(JSON.stringify(body ?? {}), {
+        status: body === undefined ? 404 : 200,
+        headers: { "content-type": "application/json" },
+      });
     }) as unknown as typeof fetch;
 
   it("reads the session, then whether pairing codes are on", async () => {
@@ -111,7 +114,7 @@ describe("asking the server", () => {
   });
 
   it("a config it cannot read means codes on, as an older server's does; asked once per page", async () => {
-    const fetchImpl = respond({ "/api/auth/session": {}, "/api/config": new Error("offline") });
+    const fetchImpl = respond({ "/api/auth/session": { kind: "loopback" }, "/api/config": new Error("offline") });
     expect(await loadPhonePairingAccess(fetchImpl)).toEqual({ session: { kind: "loopback" }, pairingCodes: true });
     await loadPhonePairingAccess(fetchImpl);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
@@ -185,6 +188,10 @@ describe("the ?desktop-settings=phone request", () => {
     expect(pairedDestination("?desktop-settings=phone&next=https://evil.example")).toBe("/?desktop-settings=phone");
     expect(pairedDestination("?desktop-settings=workspaces")).toBe("/");
     expect(pairedDestination("?next=//evil.example")).toBe("/");
+    expect(pairedDestination("?next=/foo%5Cbar")).toBe("/");
+    expect(pairedDestination("?next=/foo%09bar")).toBe("/");
+    expect(pairedDestination("?next=/foo%7fbar")).toBe("/");
+    expect(pairedDestination("?next=/./pair")).toBe("/");
     expect(pairedDestination("")).toBe("/");
   });
 

@@ -1,5 +1,5 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { AudioLines, Check, GraduationCap, ListChecks, Paperclip, Phone, Plus, Target, X } from "lucide-react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { AudioLines, Check, GraduationCap, Image as ImageIcon, ListChecks, Paperclip, Phone, Plus, Target, X } from "lucide-react";
 import { approvalModeFor } from "../../shared/approval-mode";
 import {
   approvalModeOptions,
@@ -163,13 +163,31 @@ export function ApprovalChip({ choice, quiet = false }: { choice: ApprovalChoice
   );
 }
 
+export function ComposerFileInputs({
+  fileInput,
+  photoInput,
+  onFiles,
+}: {
+  fileInput: RefObject<HTMLInputElement | null>;
+  photoInput: RefObject<HTMLInputElement | null>;
+  onFiles: (files: FileList | null) => void;
+}) {
+  return (
+    <>
+      <input ref={fileInput} type="file" multiple className="hidden" onChange={(e) => { onFiles(e.target.files); e.target.value = ""; }} />
+      <input ref={photoInput} type="file" accept="image/*" multiple data-image-input="" className="hidden" onChange={(e) => { onFiles(e.target.files); e.target.value = ""; }} />
+    </>
+  );
+}
+
 /**
  * The composer's round +: attach files, Work until done (Finish together in a group) and Teach a task. A phone's + also
  * holds what its narrow composer has no room for: the thread's approval level, the call mode and where the bot works,
  * each running the handler its Advanced button runs. With attaching the only choice, the + opens the file picker.
  */
-export function ComposerPlusMenu({ onAttach, goal, teach, approval, callBotId, extraItems = [], circle = false }: {
+export function ComposerPlusMenu({ onAttach, onAttachPhoto, goal, teach, approval, callBotId, extraItems = [], circle = false }: {
   onAttach: () => void;
+  onAttachPhoto?: () => void;
   /** Starts a /learn draft in the field, where the composer offers /learn. */
   teach?: () => void;
   /** Entries a phone composer moves here from its hidden buttons, such as where the bot works. */
@@ -194,6 +212,7 @@ export function ComposerPlusMenu({ onAttach, goal, teach, approval, callBotId, e
   const calling = callBotId !== undefined && (onCall === callBotId || isLiveCallRunning(media.phase) || lineHeldElsewhere);
   const simple = !useAdvancedMode();
   const items: SidebarMenuItem[] = [
+    ...(onAttachPhoto ? [{ key: "photo", label: t("composer.attachPhoto"), icon: <ImageIcon size={16} />, onSelect: onAttachPhoto } satisfies SidebarMenuItem] : []),
     { key: "attach", label: t("composer.attachFiles"), icon: <Paperclip size={16} />, onSelect: onAttach },
     ...(goal ? [{
       key: "goal",

@@ -10,6 +10,7 @@ import {
 import { trialRunning } from "@/lib/cloud-plan";
 import { hasActiveConnection, type ConnectorStatus } from "@/lib/connector-status";
 import { addedServers } from "@/lib/openai-compat-endpoints";
+import { isRemotePwaMode } from "@/lib/pwa-transport";
 import type { Routine } from "@/lib/routines";
 import type { AppState, Bot, ConfigStatus, Group, InstanceInfo } from "@/state/store";
 
@@ -226,17 +227,20 @@ export async function sendDailySnapshot(state: SnapshotState, sources: UsageSour
   gathering = true;
   try {
     const config = state.config;
+    const pwa = isRemotePwaMode();
     const { companion, cloudAccount, cloudPlan } = sources;
     const [apps, sessions, companionDevices, cloud, computers] = await Promise.all([
-      settle(() => sources.connectedApps()),
-      settle(() => sources.request<{ sessions?: unknown; current?: unknown }>("/api/auth/sessions")),
+      pwa ? null : settle(() => sources.connectedApps()),
+      pwa ? null : settle(() => sources.request<{ sessions?: unknown; current?: unknown }>("/api/auth/sessions")),
       companion ? settle(() => companion.state()) : null,
       cloudAccount ? settle(() => cloudAccount.state()).then(cloudPlanFromAccount)
         : cloudPlan ? settle(() => cloudPlan.state()).then(cloudPlanFromSnapshot)
         : null,
-      config.box?.configured
-        ? settle(() => sources.request<{ cloudComputers?: unknown; teamComputers?: unknown }>("/api/computers/usage"))
-        : { cloudComputers: 0, teamComputers: 0 },
+      pwa
+        ? null
+        : config.box?.configured
+          ? settle(() => sources.request<{ cloudComputers?: unknown; teamComputers?: unknown }>("/api/computers/usage"))
+          : { cloudComputers: 0, teamComputers: 0 },
     ]);
     track("app_snapshot", buildUsageSnapshot({
       config,

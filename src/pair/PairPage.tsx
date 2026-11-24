@@ -16,7 +16,8 @@ import {
   type SessionState,
 } from "../lib/session";
 import { pairedDestination } from "../lib/phone-pairing";
-import { remoteFetch } from "../lib/pwa-config";
+import { activatePwaPairing, parsePwaPairHash, remoteFetch, type PwaAuthRecord } from "../lib/pwa-config";
+import type { PwaPairingPayload } from "../../shared/pwa-bridge";
 import { t } from "../lib/i18n";
 import { formatPairingCode, PAIRING_INPUT_PROBLEM_KEY, readPairingInput } from "../../shared/pairing-code";
 import { isPrivateHost } from "../../shared/private-host";
@@ -36,13 +37,34 @@ export function pairIntro({ mode, sent, email, cloudHome }: { mode: "email" | "c
   return t("pair.intro.code");
 }
 
+export function parsePwaLinkInput(raw: string): ReturnType<typeof parsePwaPairHash> | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("#") || trimmed.startsWith("pair=")) {
+    const normalized = trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
+    return /[#&]pair=/.test(normalized) ? parsePwaPairHash(normalized) : null;
+  }
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      if (/[#&]pair=/.test(parsed.hash)) return parsePwaPairHash(parsed.hash);
+    } catch {
+    }
+  }
+  return null;
+}
+
 /** The sentence for a wrong kind of code (an email's sign-in code, an old six-digit code, a script key), else null. */
 export function codeProblem(code: string): string | null {
+  const pwa = parsePwaLinkInput(code);
+  if (pwa) return pwa.ok ? null : pwa.error;
   const read = readPairingInput(code);
   return read.kind === "wrong" && read.problem !== "notACode" ? t(PAIRING_INPUT_PROBLEM_KEY[read.problem]) : null;
 }
 
 export function codeReady(code: string): boolean {
+  const pwa = parsePwaLinkInput(code);
+  if (pwa) return pwa.ok;
   const kind = readPairingInput(code).kind;
   return kind === "code" || kind === "credential";
 }
@@ -83,7 +105,22 @@ export function TeamLeftPage({ team }: { team: string | null }) {
   </main>;
 }
 
-export function PairPage({ initialCode, initialEmail = null, reason }: { initialCode: string | null; initialEmail?: string | null; reason?: string }) {
+export interface PendingPwaReplace {
+  existing: PwaAuthRecord;
+  payload: PwaPairingPayload;
+}
+
+export function PairPage({
+  initialCode,
+  initialEmail = null,
+  reason,
+  pendingPwaReplace,
+}: {
+  initialCode: string | null;
+  initialEmail?: string | null;
+  reason?: string;
+  pendingPwaReplace?: PendingPwaReplace;
+}) {
   const [code, setCode] = useState(initialCode ?? "");
   const [label, setLabel] = useState(defaultDeviceLabel());
   const [environment, setEnvironment] = useState<EnvironmentDescriptor | null>(null);
@@ -95,7 +132,7 @@ export function PairPage({ initialCode, initialEmail = null, reason }: { initial
   const [email, setEmail] = useState(initialEmail ?? "");
   const [otp, setOtp] = useState("");
   const [sent, setSent] = useState(false);
-  const [opening, setOpening] = useState(() => pairsAutomatically(initialCode));
+  const [opening, setOpening] = useState(() => !pendingPwaReplace && pairsAutomatically(initialCode));
 
   useEffect(() => {
     if (!opening || !initialCode) return;
@@ -111,6 +148,7 @@ export function PairPage({ initialCode, initialEmail = null, reason }: { initial
   }, []);
 
   useEffect(() => {
+    if (pendingPwaReplace) return;
     void remoteFetch("/.well-known/openmausbot/environment")
       .then((r) => (r.ok ? r.json() : null))
       .then((d: EnvironmentDescriptor | null) => {
@@ -120,7 +158,7 @@ export function PairPage({ initialCode, initialEmail = null, reason }: { initial
         setEnvironment(null);
       });
     void readSessionState().then(setSession);
-  }, []);
+  }, [pendingPwaReplace]);
 
   const connected = isConnected(session);
   const emailOffered = environment?.capabilities.emailSignIn === true;
@@ -129,11 +167,28 @@ export function PairPage({ initialCode, initialEmail = null, reason }: { initial
   const problem = codeProblem(code);
   const where = typeof location !== "undefined" && typeof location.protocol === "string" ? location : null;
 
+  async function confirmPwaReplace(e: React.FormEvent) {
+    e.preventDefault();
+    if (!pendingPwaReplace) return;
+    setBusy(true);
+    setError(null);
+    const result = await activatePwaPairing(pendingPwaReplace.payload, { deviceName: label });
+    setBusy(false);
+    if (result.ok) {
+      location.replace(pairedDestination(location.search));
+      return;
+    }
+    setError(result.error);
+  }
+
   async function submitCode(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
-    const result = await pairWithCode({ code, label, attemptId });
+    const pwa = parsePwaLinkInput(code);
+    const result = pwa?.ok
+      ? await activatePwaPairing(pwa.payload, { deviceName: label })
+      : await pairWithCode({ code, label, attemptId });
     setBusy(false);
     if (result.ok) {
       location.replace(pairedDestination(location.search));
@@ -169,6 +224,25 @@ export function PairPage({ initialCode, initialEmail = null, reason }: { initial
       <div className="absolute left-3 top-12 max-w-[280px]"><DesktopWorkspaceSwitcher /></div>
       <div className="w-full max-w-[420px]">
         {where && unencryptedPublic(where) ? <p role="alert" className="mb-4 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-[13px] text-warning">{t("pair.notEncrypted")}</p> : null}
+        {pendingPwaReplace ? (
+          <form onSubmit={confirmPwaReplace}>
+            <h1 className="text-[20px] font-semibold">{t("pair.replacePwa.title")}</h1>
+            <p className="mt-1.5 text-[14px] leading-relaxed text-ink-secondary">
+              {t("pair.replacePwa.body", { name: pendingPwaReplace.existing.serverName || pendingPwaReplace.existing.relayUrl })}
+            </p>
+            <label className={fieldLabel} htmlFor="pair-replace-label">
+              {t("pair.deviceLabel")}
+            </label>
+            <input id="pair-replace-label" value={label} onChange={(e) => setLabel(e.target.value)} maxLength={80} className={input} />
+            {error ? <p className="mt-3 text-[13px] text-danger">{error}</p> : null}
+            <button type="submit" disabled={busy} className={button}>
+              {t(busy ? "pair.connecting" : "pair.replacePwa.confirm")}
+            </button>
+            <a href="/" className="mt-3 block w-full text-center text-[13px] text-ink-secondary underline">
+              {t("common.cancel")}
+            </a>
+          </form>
+        ) : <>
         {opening ? (
           <p role="status" className="text-[20px] font-semibold">{cloudHome ? t("pair.openingCloud") : t("pair.connectingTo", { name: environment?.label ?? t("pair.thisOpenMausBot") })}</p>
         ) : <>
@@ -293,6 +367,7 @@ export function PairPage({ initialCode, initialEmail = null, reason }: { initial
             ) : null}
           </form>
         )}
+        </>}
       </div>
     </main>
   );

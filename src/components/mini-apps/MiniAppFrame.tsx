@@ -12,6 +12,7 @@ import { appHostContext, appMaxHeight, appThemeContext } from "../app/app-host-c
 import { githubMediaUrlAllowed, isEligibleGithubActivityDocument, parseGithubSelection,
   type GithubActivitySelection } from "./github-activity-host";
 import { isManagedHongguoDocument, mountManagedHongguoFrame } from "./hongguo-frame-host";
+import { AgentRoleEditor, type AgentRoleEditorSelection } from "./AgentRoleEditor";
 import { MiniAppSiteOverlay } from "./MiniAppSiteOverlay";
 import { miniAppFrameDocument } from "./mini-app-document";
 import { createMiniAppSitePresentation, managedMiniAppSite, type MiniAppSite, type MiniAppSiteView } from "./mini-app-site";
@@ -97,12 +98,19 @@ function parseFrameMediaRead(value: unknown): FrameMediaRead | null {
   return value as FrameMediaRead;
 }
 
+function isAgentRoleEditorApp(app: MiniAppDocument["app"]): boolean {
+  return app.dashboardIdentity === "agent-team" && app.release?.packageId === "mashellhan.agent-team"
+    && app.dashboard?.kind === "agent-team" && app.dashboard.renderer === "html"
+    && (app.dashboard.resources as readonly string[]).includes("configuration");
+}
+
 export interface MiniAppFrameMount {
   readonly iframe: HTMLIFrameElement;
   update(state: MiniAppState, document?: MiniAppDocument): void;
   setGithubSelection(selection: GithubActivitySelection | null): void;
   contextChanged(width: number): void;
   refresh(refreshKey: number): void;
+  agentRoleChanged(): void;
   retire(): void;
 }
 
@@ -113,6 +121,7 @@ export function mountMiniAppFrame(options: {
   onRevoked(): void;
   onChanged?(): void;
   onRuntimeReady?(info: { appId: string; revision: number; templateVersion: number }): void;
+  onAgentRoleEdit?(selection: AgentRoleEditorSelection): void;
   site?: MiniAppSite;
   onSiteView?(view: MiniAppSiteView): void;
   hongguo?: boolean;
@@ -133,7 +142,8 @@ export function mountMiniAppFrame(options: {
   const localWindow = () => miniAppNativeFrameGuard() && window.ogb?.app?.ownPage === true && window.ogb?.remoteClient?.active !== true;
   const site = localWindow() && options.site === managedMiniAppSite(document) ? options.site : undefined;
   const hongguo = localWindow() && options.hongguo === true && isManagedHongguoDocument(document);
-  const frameDocument = miniAppFrameDocument(document, typeof window.ogb?.openExternal === "function", { site, hongguo });
+  const roleEditor = localWindow() && window.ogb?.platform === "darwin" && !!options.onAgentRoleEdit && isAgentRoleEditorApp(installed);
+  const frameDocument = miniAppFrameDocument(document, typeof window.ogb?.openExternal === "function", { site, hongguo, roleEditor });
   let hongguoMount: ReturnType<typeof mountManagedHongguoFrame> | undefined;
   let refreshKey = options.refreshKey ?? 0;
   const scopeCurrent = () => active && localWindow() && !!host && host.iframe.parentNode === container && host.iframe.srcdoc === frameDocument.srcdoc
@@ -209,6 +219,18 @@ export function mountMiniAppFrame(options: {
       frameInitialized = true;
       postHostSelection(currentGithubSelection);
       return;
+    }
+    if (record(event.data) && event.data.mausMiniApp === 1 && event.data.type === "agent-md-edit") {
+      const { id, selection } = event.data;
+      if (typeof id !== "string" || !id || id.length > 100) return;
+      if (!roleEditor || !scopeCurrent() || !frameInitialized || !usageFrameVisible() || event.origin !== "null"
+          || Object.keys(event.data).length !== 4 || !record(selection) || Object.keys(selection).length !== 2
+          || typeof selection.agentId !== "string" || selection.agentId.length > 64 || !/^w\d+:p[0-9A-Za-z]+$/.test(selection.agentId)
+          || typeof selection.occupantId !== "string" || !/^o[0-9a-f]{16}$/.test(selection.occupantId)) {
+        return replyDashboard(id, undefined, "Agent MD editing is unavailable.");
+      }
+      options.onAgentRoleEdit?.({ agentId: selection.agentId, occupantId: selection.occupantId, appId: installed.id, revision: installed.revision });
+      return replyDashboard(id);
     }
     if (record(event.data) && event.data.mausMiniApp === 1 && event.data.type === "runtime-ready") {
       if (event.origin !== "null" || Object.keys(event.data).length !== 2) return;
@@ -420,6 +442,9 @@ export function mountMiniAppFrame(options: {
       refreshKey = next;
       hongguoMount?.update({ visible: true, refreshKey });
     },
+    agentRoleChanged() {
+      if (roleEditor && scopeCurrent()) host?.iframe.contentWindow?.postMessage({ mausMiniApp: 1, type: "data-changed" }, "*");
+    },
     retire() {
       if (!active) return;
       retireScoped();
@@ -449,6 +474,7 @@ export function MiniAppFrame({ document, state, onRevoked, onChanged, onRuntimeR
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [siteView, setSiteView] = useState<MiniAppSiteView>();
+  const [roleEditor, setRoleEditor] = useState<AgentRoleEditorSelection | null>(null);
   const mount = useRef<MiniAppFrameMount | null>(null);
   const revoked = useRef(onRevoked);
   const dashboardChanged = useRef(onChanged);
@@ -462,9 +488,10 @@ export function MiniAppFrame({ document, state, onRevoked, onChanged, onRuntimeR
   selectionChangeRef.current = onGithubSelectionChange;
   const bindings = JSON.stringify(document.bindings);
   const nativeGuard = miniAppNativeFrameGuard();
-  const scopeRevision = site || hongguo ? document.app.revision : 0;
+  const scopeRevision = site || hongguo || isAgentRoleEditorApp(document.app) ? document.app.revision : null;
 
   useLayoutEffect(() => {
+    setRoleEditor(null);
     if (!nativeGuard || !box.current) return;
     const current = mountMiniAppFrame({
       container: box.current,
@@ -473,6 +500,7 @@ export function MiniAppFrame({ document, state, onRevoked, onChanged, onRuntimeR
       onRevoked: () => revoked.current(),
       onChanged: () => dashboardChanged.current?.(),
       onRuntimeReady: (info) => runtimeReadyRef.current?.(info),
+      onAgentRoleEdit: (selection) => setRoleEditor((current) => current ?? selection),
       site, onSiteView: setSiteView, hongguo, refreshKey,
       githubSelection: selectionRef.current,
       onGithubSelectionChange: (selection) => selectionChangeRef.current?.(selection),
@@ -495,5 +523,7 @@ export function MiniAppFrame({ document, state, onRevoked, onChanged, onRuntimeR
   return site ? <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
     {contents}
     <MiniAppSiteOverlay frameBox={box} view={siteView} />
-  </div> : contents;
+  </div> : <>{contents}{roleEditor && roleEditor.appId === document.app.id && roleEditor.revision === document.app.revision
+    && state.status === "active" && state.revision === roleEditor.revision
+    && <AgentRoleEditor selection={roleEditor} onClose={() => setRoleEditor(null)} onSaved={() => mount.current?.agentRoleChanged()} />}</>;
 }

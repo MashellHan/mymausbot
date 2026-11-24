@@ -115,6 +115,23 @@ describe("the Inbox row", () => {
     expect(document.querySelector("[data-inbox-count]")?.textContent).toBe("9+");
   });
 
+  it("renders as a compact icon button for the phone top bar with badge, running dot, and onOpened callback", async () => {
+    const onOpened = vi.fn();
+    setInboxView(placeView(Array.from({ length: 11 }, (_, index) => ({ ...approval, id: `p${index}` }))));
+    await mount(row({ compactIcon: true, running: true, onOpened }));
+    const button = inboxButton()!;
+    expect(button.className).toContain("rounded-full");
+    expect(button.className).toContain("size-10");
+    expect(button.textContent).not.toContain("Inbox");
+    expect(document.querySelector("[data-inbox-count]")?.textContent).toBe("9+");
+    expect(document.querySelector("[data-inbox-running]")?.className).toContain("border-app");
+    await click("[data-sidebar-inbox]");
+    expect(currentInboxPanel().open).toBe(true);
+    expect(onOpened).toHaveBeenCalledOnce();
+    await click("[data-sidebar-inbox]");
+    expect(currentInboxPanel().open).toBe(false);
+  });
+
   it("counts what a team's person has to fix, except what the inbox lists already", async () => {
     setInboxView(placeView([question]));
     setTeamPeople({ people: [], me: null, admin: true, needsYou: [

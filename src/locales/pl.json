@@ -4546,6 +4546,7 @@
   "pwaBridge.secret.rotate": "Zmień sekret",
   "pwaBridge.secret.title": "Sekret przekaźnika",
   "pwaBridge.secret.valueLabel": "Sekret mostka",
+  "pwaBridge.sectionTitle": "Mobilna aplikacja webowa przez relay",
   "pwaBridge.settings.notSet": "Nie ustawiono",
   "pwaBridge.settings.saved": "Zapisano",
   "pwaBridge.settings.saving": "Zapisywanie…",

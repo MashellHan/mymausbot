@@ -16,7 +16,7 @@ import {
   type PhoneSetupController,
   usePhoneSetupController,
 } from "./PhoneSetupFlow";
-import { companionPairingMode } from "../lib/phone-setup";
+import { companionPairingMode, deriveTailscalePairingStatus, type TailscalePairingStatus } from "../lib/phone-setup";
 import { revealPhonePairing, takePairOnOpen } from "../lib/phone-pairing";
 import { showTunnelRetiredNotice } from "../lib/phone-link";
 import { PhonesList } from "./PhonesList";
@@ -38,39 +38,16 @@ export {
   showTunnelRetiredNotice,
 };
 
+export { deriveTailscalePairingStatus, type TailscalePairingStatus };
+
 export interface CompanionPanelStatus {
   label: string;
   good: boolean;
 }
 
-export interface TailscalePairingStatus {
-  kind: "off" | "not-installed" | "signed-out" | "magicdns" | "waiting" | "ready" | "error";
-  title: string;
-  detail: string;
-}
-
 /** Any way in the person turned on; an older build's single switch reads as "on" while its sidecar runs. */
 export const companionRoutesOn = (state: Pick<CompanionState, "enabled" | "routes">): boolean =>
   state.routes ? Object.values(state.routes).some((route) => route.on) : state.enabled;
-
-export function deriveTailscalePairingStatus(
-  state: Pick<CompanionState, "enabled" | "routes" | "tailscaleProblem" | "error">,
-): TailscalePairingStatus {
-  if (state.tailscaleProblem === "not-installed") return { kind: "not-installed", title: t("remote.tailscale.notInstalled"), detail: "" };
-  if (state.tailscaleProblem === "no-cli") return { kind: "signed-out", title: t("remote.tailscale.noCli"), detail: "" };
-  if (state.tailscaleProblem === "not-running") return { kind: "signed-out", title: t("remote.tailscale.notRunning"), detail: "" };
-  if (state.tailscaleProblem === "needs-permission") return { kind: "signed-out", title: t("remote.tailscale.needsPermission", { app: productName() }), detail: "" };
-  if (state.tailscaleProblem === "needs-approval") return { kind: "signed-out", title: t("remote.tailscale.needsApproval"), detail: "" };
-  if (state.tailscaleProblem === "signed-out") return { kind: "signed-out", title: t("remote.tailscale.signIn"), detail: "" };
-  if (state.error) return { kind: "error", title: t("remote.status.attention"), detail: state.error };
-  const route = state.routes?.tailscale;
-  if (!route?.on) return { kind: "off", title: t("remote.status.off"), detail: "" };
-  if (!route.name) return { kind: "magicdns", title: t("remote.tailscale.magicDns"), detail: t("remote.tailscale.magicDnsDetail") };
-  const title = t("remote.tailscale.ready", { name: route.name });
-  return state.enabled
-    ? { kind: "ready", title, detail: t("remote.tailscale.readyDetail") }
-    : { kind: "waiting", title, detail: t("remote.tailscale.linkOff") };
-}
 
 /** The control plane gives a build with the encrypted connection no free web address (`relay_capable`): there the row
  * shows only while the route is on or the account still holds an address. `renewPairing` is what such a build's bridge adds. */
@@ -385,10 +362,26 @@ export function reachLine(state: Pick<CompanionState, "routes">): string {
   return t("devices.reach.line", { ways: new Intl.ListFormat(undefined, { type: "conjunction" }).format(ways) });
 }
 
-export function PhoneDevicesSection({ profileEmail = "", focusRequest = 0, simple = false, placeName = t("rail.thisComputer"), top = null }: {
-  profileEmail?: string; focusRequest?: number; simple?: boolean; placeName?: string;
+export function PhoneDevicesSection({
+  profileEmail = "",
+  focusRequest = 0,
+  simple = false,
+  placeName = t("rail.thisComputer"),
+  top = null,
+  extraPairedRows = null,
+  extraPairedCount = 0,
+  unifiedLayout = false,
+}: {
+  profileEmail?: string;
+  focusRequest?: number;
+  simple?: boolean;
+  placeName?: string;
   /** what leads the page: the door to pairing with My Cloud, when there is one */
   top?: React.ReactNode;
+  extraPairedRows?: React.ReactNode;
+  extraPairedCount?: number;
+  /** True on PhonePage: renders Paired (top) + Pair a phone card, leaving Computer & Advanced to PhoneComputerAndAdvanced. */
+  unifiedLayout?: boolean;
 }) {
   const c = usePhoneSetupController(profileEmail);
   const state = c.state;
@@ -432,6 +425,7 @@ export function PhoneDevicesSection({ profileEmail = "", focusRequest = 0, simpl
   }
 
   const pairedCount = state.devices.length;
+  const totalPairedCount = pairedCount + extraPairedCount;
   const accountActionError = companionAccountActionError(c.account, c.accountError);
   const tailscaleStatus = deriveTailscalePairingStatus(state);
   const tailscaleOn = state.routes?.tailscale?.on === true;
@@ -456,73 +450,95 @@ export function PhoneDevicesSection({ profileEmail = "", focusRequest = 0, simpl
       <RouteNotices c={c} notices={state.notices ?? []} />
       {pairing && <PairDeviceDialog c={c} state={state} placeName={placeName} onClose={() => setPairing(false)} secureAddress={pairing === "https"} />}
 
-      {pairedCount === 0 && !state.pairing ? (
-        <SettingsGroup block="pair">
-          <SettingsRows>
-            <PairRow reason={remoteBlocked}>{pairButton}</PairRow>
-          </SettingsRows>
-        </SettingsGroup>
-      ) : (
-        <SettingsGroup label={t("devices.paired")} block="paired" actions={pairButton}>
-          {showTunnelRetiredNotice(c.account, state) && (
-            <p role="status" data-devices-notice="tunnel-retired" className="px-4 text-[12px] leading-4 text-warning">{t("remote.devices.retiredShort")}</p>
+      {unifiedLayout ? (
+        <>
+          {(totalPairedCount > 0 || state.pairing) && (
+            <SettingsGroup label={t("devices.paired")} block="paired">
+              {showTunnelRetiredNotice(c.account, state) && (
+                <p role="status" data-devices-notice="tunnel-retired" className="px-4 text-[12px] leading-4 text-warning">{t("remote.devices.retiredShort")}</p>
+              )}
+              {remoteBlocked && <p role="status" className="px-4 text-[12px] leading-4 text-ink-secondary">{remoteBlocked}</p>}
+              {state.pairing && <SettingsRows><OpenCodeRow c={c} state={state} /></SettingsRows>}
+              <PairedPhones c={c} state={state} onPairAgain={pairAgain} extraRows={extraPairedRows} hasExtraRows={extraPairedCount > 0} />
+            </SettingsGroup>
           )}
-          {remoteBlocked && <p role="status" className="px-4 text-[12px] leading-4 text-ink-secondary">{remoteBlocked}</p>}
-          {state.pairing && <SettingsRows><OpenCodeRow c={c} state={state} /></SettingsRows>}
-          <PairedPhones c={c} state={state} onPairAgain={pairAgain} />
-        </SettingsGroup>
-      )}
-
-      {!reachOpen ? (
-        <SettingsGroup block="reach" footnote={t("phone.reach.foot")}>
-          <SettingsRows>
-            <SettingsLinkRow title={t("phone.reach.title")} value={t("devices.route.off")} onClick={() => setShowRoutes(true)} data={{ "data-reach-fold": "" }} />
-          </SettingsRows>
-        </SettingsGroup>
+          <SettingsGroup label={t("phone.pair.section")} block="pair">
+            <SettingsRows>
+              <PairRow reason={remoteBlocked}>{pairButton}</PairRow>
+            </SettingsRows>
+          </SettingsGroup>
+        </>
       ) : (
-        <SettingsGroup label={t("phone.reach.title")} block="reach">
-          <SettingsRows>
-            <RouteRow c={c} state={state} route="wifi" blocked={managedBy} />
-            <RouteRow c={c} state={state} route="relay" blocked={managedBy} onSignIn={() => setPairing("device")} />
-            <SettingRow title={t("remote.keepAwake")} subtitle={t("phone.reach.awakeLine")} inert={!anyRoute ? t("remote.keepAwakeNeedsRoute") : undefined}>
-              <Switch checked={state.keepAwake} aria-label={t("remote.keepAwakeAria")} disabled={c.busy || !anyRoute}
-                onClick={() => void c.act((companion) => companion.keepAwake(!state.keepAwake))} />
-            </SettingRow>
-            <RemoteAccessCheckRow account={c.account} state={state} />
-            {moreWays && (
-              <SettingsFoldRow id="more-ways" title={t("devices.moreWays")} open={moreOpen} onToggle={() => setMoreOpen(!moreOpen)}>
-                <SettingRow title="Tailscale" subtitle={<>{t("remote.tailscaleSwitch.short", { app: productName() })}{" "}<LearnMore href={TAILSCALE_HELP} /></>}
-                  message={tailscaleStatus.kind !== "off" ? <span data-tailscale-status={tailscaleStatus.kind} aria-live="polite">{tailscaleStatus.title}{tailscaleStatus.detail ? ` ${tailscaleStatus.detail}` : ""}</span> : undefined}>
-                  <span data-route-row="tailscale" className="contents">
-                    {tailscaleStatus.kind === "not-installed" && <a href="https://tailscale.com/download" target="_blank" rel="noreferrer" className="ui-button">{t("remote.tailscale.getIt")}</a>}
-                    {tailscaleOn && tailscaleStatus.kind !== "error" && tailscaleStatus.kind !== "not-installed" && (
-                      <button type="button" className="settings-quiet cursor-pointer" disabled={c.busy || c.accountBusy} onClick={c.refreshTailscale}>{c.busy ? t("common.checking") : t("remote.checkAgain")}</button>
-                    )}
-                    <Switch checked={tailscaleOn} aria-label="Tailscale" disabled={c.busy || c.accountBusy || (Boolean(managedBy) && !tailscaleOn)}
-                      onClick={() => void c.act((companion) => setCompanionTailscale(companion, !tailscaleOn))} />
-                  </span>
+        <>
+          {totalPairedCount === 0 && !state.pairing ? (
+            <SettingsGroup block="pair">
+              <SettingsRows>
+                <PairRow reason={remoteBlocked}>{pairButton}</PairRow>
+              </SettingsRows>
+            </SettingsGroup>
+          ) : (
+            <SettingsGroup label={t("devices.paired")} block="paired" actions={pairButton}>
+              {showTunnelRetiredNotice(c.account, state) && (
+                <p role="status" data-devices-notice="tunnel-retired" className="px-4 text-[12px] leading-4 text-warning">{t("remote.devices.retiredShort")}</p>
+              )}
+              {remoteBlocked && <p role="status" className="px-4 text-[12px] leading-4 text-ink-secondary">{remoteBlocked}</p>}
+              {state.pairing && <SettingsRows><OpenCodeRow c={c} state={state} /></SettingsRows>}
+              <PairedPhones c={c} state={state} onPairAgain={pairAgain} extraRows={extraPairedRows} hasExtraRows={extraPairedCount > 0} />
+            </SettingsGroup>
+          )}
+
+          {!reachOpen ? (
+            <SettingsGroup block="reach" footnote={t("phone.reach.foot")}>
+              <SettingsRows>
+                <SettingsLinkRow title={t("phone.reach.title")} value={t("devices.route.off")} onClick={() => setShowRoutes(true)} data={{ "data-reach-fold": "" }} />
+              </SettingsRows>
+            </SettingsGroup>
+          ) : (
+            <SettingsGroup label={t("phone.reach.title")} block="reach">
+              <SettingsRows>
+                <RouteRow c={c} state={state} route="wifi" blocked={managedBy} />
+                <RouteRow c={c} state={state} route="relay" blocked={managedBy} onSignIn={() => setPairing("device")} />
+                <SettingRow title={t("remote.keepAwake")} subtitle={t("phone.reach.awakeLine")} inert={!anyRoute ? t("remote.keepAwakeNeedsRoute") : undefined}>
+                  <Switch checked={state.keepAwake} aria-label={t("remote.keepAwakeAria")} disabled={c.busy || !anyRoute}
+                    onClick={() => void c.act((companion) => companion.keepAwake(!state.keepAwake))} />
                 </SettingRow>
-                {showHttpsAddressRow(state, c.account, companionBridge()) && <SettingRow title={t("devices.route.https")} subtitle={t("devices.route.httpsDetail", { app: productName() })}
-                  message={(httpsOn && hosted) || c.account?.status === "ready" || accountActionError ? <>
-                    {httpsOn && hosted ? t("devices.route.httpsOn", { address: endpointHost(hosted.url) }) : null}
-                    {c.account?.status === "ready" && <span className="block">{t("devices.route.httpsAccount", { app: productName() })}</span>}
-                    {accountActionError && <span className="block text-danger">{accountActionError}</span>}
-                  </> : undefined}>
-                  <span data-route-row="https" className="contents">
-                    {httpsOn ? (
-                      <button type="button" className="ui-button" disabled={c.busy} onClick={() => void c.act((companion) => setRoute(companion, "https", false))}>{t("devices.route.turnOff")}</button>
-                    ) : (
-                      <button type="button" className="ui-button" disabled={c.busy || c.accountBusy || Boolean(managedBy)} onClick={() => setPairing("https")}>{t("devices.route.setUp")}</button>
-                    )}
-                  </span>
-                </SettingRow>}
-              </SettingsFoldRow>
-            )}
-          </SettingsRows>
-        </SettingsGroup>
+                <RemoteAccessCheckRow account={c.account} state={state} />
+                {moreWays && (
+                  <SettingsFoldRow id="more-ways" title={t("devices.moreWays")} open={moreOpen} onToggle={() => setMoreOpen(!moreOpen)}>
+                    <SettingRow title="Tailscale" subtitle={<>{t("remote.tailscaleSwitch.short", { app: productName() })}{" "}<LearnMore href={TAILSCALE_HELP} /></>}
+                      message={tailscaleStatus.kind !== "off" ? <span data-tailscale-status={tailscaleStatus.kind} aria-live="polite">{tailscaleStatus.title}{tailscaleStatus.detail ? ` ${tailscaleStatus.detail}` : ""}</span> : undefined}>
+                      <span data-route-row="tailscale" className="contents">
+                        {tailscaleStatus.kind === "not-installed" && <a href="https://tailscale.com/download" target="_blank" rel="noreferrer" className="ui-button">{t("remote.tailscale.getIt")}</a>}
+                        {tailscaleOn && tailscaleStatus.kind !== "error" && tailscaleStatus.kind !== "not-installed" && (
+                          <button type="button" className="settings-quiet cursor-pointer" disabled={c.busy || c.accountBusy} onClick={c.refreshTailscale}>{c.busy ? t("common.checking") : t("remote.checkAgain")}</button>
+                        )}
+                        <Switch checked={tailscaleOn} aria-label="Tailscale" disabled={c.busy || c.accountBusy || (Boolean(managedBy) && !tailscaleOn)}
+                          onClick={() => void c.act((companion) => setCompanionTailscale(companion, !tailscaleOn))} />
+                      </span>
+                    </SettingRow>
+                    {showHttpsAddressRow(state, c.account, companionBridge()) && <SettingRow title={t("devices.route.https")} subtitle={t("devices.route.httpsDetail", { app: productName() })}
+                      message={(httpsOn && hosted) || c.account?.status === "ready" || accountActionError ? <>
+                        {httpsOn && hosted ? t("devices.route.httpsOn", { address: endpointHost(hosted.url) }) : null}
+                        {c.account?.status === "ready" && <span className="block">{t("devices.route.httpsAccount", { app: productName() })}</span>}
+                        {accountActionError && <span className="block text-danger">{accountActionError}</span>}
+                      </> : undefined}>
+                      <span data-route-row="https" className="contents">
+                        {httpsOn ? (
+                          <button type="button" className="ui-button" disabled={c.busy} onClick={() => void c.act((companion) => setRoute(companion, "https", false))}>{t("devices.route.turnOff")}</button>
+                        ) : (
+                          <button type="button" className="ui-button" disabled={c.busy || c.accountBusy || Boolean(managedBy)} onClick={() => setPairing("https")}>{t("devices.route.setUp")}</button>
+                        )}
+                      </span>
+                    </SettingRow>}
+                  </SettingsFoldRow>
+                )}
+              </SettingsRows>
+            </SettingsGroup>
+          )}
+          <TailnetComputers c={c} state={state} blocked={managedBy} simple={simple} status={tailscaleStatus} />
+          <PhonesList />
+        </>
       )}
-      <TailnetComputers c={c} state={state} blocked={managedBy} simple={simple} status={tailscaleStatus} />
-      <PhonesList />
       {(c.error || state.error) && <div className="px-4 text-[12px] leading-4 text-danger">{c.error ?? state.error}</div>}
     </div>
   );

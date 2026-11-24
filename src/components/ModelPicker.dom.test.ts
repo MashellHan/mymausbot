@@ -765,16 +765,34 @@ describe("inline overview model settings", () => {
     await settle();
     expect(select("Reasoning effort").selectedOptions[0]).toMatchObject({ value: "none", disabled: true, textContent: "None (unavailable)" });
     fixture.instances = [{ ...instance, models: { default: model, options: [{ ...option, effortLevels: [] }] } }];
+    fixture.dispatch.mockClear();
     render(bot, options);
     await settle();
-    expect([...select("Reasoning effort").options].map(({ value }) => value)).toEqual(["", "high"]);
-    expect(select("Reasoning effort").selectedOptions[0]).toMatchObject({ value: "high", disabled: true, textContent: "High (unavailable)" });
-    choose(select("Reasoning effort"), "");
-    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ type: "setModel",
-      selection: { instanceId: "codex", model, effort: undefined } }));
-    render({ ...bot, modelSelection: { instanceId: "codex", model } }, options);
-    await settle();
     expect(select("Reasoning effort")).toBeNull();
+    expect(document.querySelector('[data-effort-readonly]')?.textContent).toBe("High");
+    expect(fixture.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("skips refreshing instances in remote PWA mode", async () => {
+    const { setActivePwaAuth } = await import("@/lib/pwa-transport");
+    setActivePwaAuth({
+      ownerKey: "https://relay.mxhan.com::env::s1",
+      relayUrl: "https://relay.mxhan.com",
+      token: "omb_sess_1",
+      deviceId: "d1",
+      environmentId: "env",
+      sessionId: "s1",
+      serverName: "Mac",
+      scopes: ["client"],
+      pairedAt: 1,
+    });
+    try {
+      fixture.refreshInstances.mockClear();
+      await openWith("click");
+      expect(fixture.refreshInstances).not.toHaveBeenCalled();
+    } finally {
+      setActivePwaAuth(null);
+    }
   });
 
   it("keeps the saved OpenCode provider and model selected when reasoning uses a native variant", async () => {

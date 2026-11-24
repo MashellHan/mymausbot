@@ -74,7 +74,7 @@ export function OverviewPage() {
   const phoneValue = phone.kind === "paired" || phone.kind === "attention" ? t("settings.glance.phonePaired", { count: phone.count })
     : phone.kind === "none" ? t("settings.glance.notSetUp") : undefined;
   const engines = state.instances.filter((instance) => instance.snapshot.state === "available").length;
-  const apps = useConnectedAppCount();
+  const apps = useConnectedAppCount(!ctx.client && ctx.advanced);
   return <>
     {note && (
       <SettingsRows>
@@ -92,7 +92,7 @@ export function OverviewPage() {
           value={ctx.admin ? engines > 0 ? t("settings.glance.aiReady", { count: engines }) : t("settings.glance.aiStart") : t("settings.glance.aiAdmin")} />}
         {/* Simple's sidebar footer has Connect apps right beside the avatar, so Simple's Overview leaves the jump out and
             stays one window tall at 900 px even while the grouped note shows. */}
-        {ctx.advanced && <SettingsLinkRow title={t("settings.glance.apps")} external value={apps === null ? undefined : apps > 0 ? t("settings.glance.appsConnected", { count: apps }) : t("settings.glance.appsNone")}
+        {!ctx.client && ctx.advanced && <SettingsLinkRow title={t("settings.glance.apps")} external value={apps === null ? undefined : apps > 0 ? t("settings.glance.appsConnected", { count: apps }) : t("settings.glance.appsNone")}
           onClick={() => { dispatch({ type: "toggleAppSettings", open: false }); dispatch({ type: "togglePlugins", open: true }); }} data={{ "data-glance": "apps" }} />}
       </SettingsRows>
     </SettingsGroup>
@@ -107,14 +107,15 @@ export function OverviewPage() {
 }
 
 /** How many apps this place has connected, for At a glance; null until it is known. */
-function useConnectedAppCount(): number | null {
+function useConnectedAppCount(enabled = true): number | null {
   const [count, setCount] = useState<number | null>(null);
   useEffect(() => {
+    if (!enabled) return;
     let alive = true;
     void preloadConnectedApps().then((inventory) => { if (alive) setCount(Object.values(inventory.services).filter((status) => status.connected).length); }).catch(() => {});
     return () => { alive = false; };
-  }, []);
-  return count;
+  }, [enabled]);
+  return enabled ? count : null;
 }
 
 export function AiPage() {

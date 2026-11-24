@@ -1,8 +1,10 @@
 const CACHE_PREFIX = "omb-pwa-shell-";
-const CACHE_NAME = `${CACHE_PREFIX}v1`;
+const CACHE_NAME = `${CACHE_PREFIX}v4`;
+const NAV_NETWORK_TIMEOUT_MS = 400;
+const STALE_ASSET_HEAL_COOLDOWN_MS = 10_000;
+let lastStaleAssetHealAt = 0;
 const APP_SHELL_URLS = [
   "/",
-  "/index.html",
   "/manifest.webmanifest",
   "/app-icon.svg",
   "/app-icon-192.png",
@@ -10,7 +12,13 @@ const APP_SHELL_URLS = [
   "/apple-touch-icon.png",
 ];
 
-function isApiOrDynamicPath(pathname) {
+function isHtmlResponse(response) {
+  const contentType = response && response.headers ? response.headers.get("content-type") || "" : "";
+  return /^\s*(?:text\/html|application\/xhtml\+xml)\b/i.test(contentType);
+}
+
+function isApiOrDynamicPath(rawPathname) {
+  const pathname = String(rawPathname || "").toLowerCase();
   return (
     pathname === "/sw.js" ||
     pathname === "/api" ||
@@ -23,13 +31,34 @@ function isApiOrDynamicPath(pathname) {
   );
 }
 
-self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches
-      .open(CACHE_NAME)
-      .then((cache) => cache.addAll(APP_SHELL_URLS))
-      .then(() => self.skipWaiting()),
+// Safari/WebKit rejects navigation responses with `.redirected === true`
+// ("Response served by service worker has redirections"); Cloudflare Pages
+// redirects `/index.html` -> `/` with 308.
+async function cleanResponse(response) {
+  if (!response || !response.redirected) return response;
+  const body = await response.arrayBuffer();
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: new Headers(response.headers),
+  });
+}
+
+async function precacheShell() {
+  const cache = await caches.open(CACHE_NAME);
+  await Promise.all(
+    APP_SHELL_URLS.map(async (path) => {
+      const response = await fetch(path, { cache: "no-cache" });
+      if (!response || !response.ok || response.type !== "basic") {
+        throw new Error(`Failed to precache ${path}: ${response ? response.status : "network error"}`);
+      }
+      await cache.put(path, await cleanResponse(response));
+    }),
   );
+}
+
+self.addEventListener("install", (event) => {
+  event.waitUntil(precacheShell().then(() => self.skipWaiting()));
 });
 
 // Only prune old shell caches; never touch IndexedDB (omb-pwa-v1).
@@ -58,18 +87,28 @@ self.addEventListener("fetch", (event) => {
   if (request.mode === "navigate") {
     event.respondWith(
       caches.open(CACHE_NAME).then(async (cache) => {
-        const cached = (await cache.match("/index.html")) || (await cache.match("/"));
-        const networkUpdate = fetch(request)
-          .then((response) => {
+        const cached = await cache.match("/");
+        const networkTarget = url.pathname === "/index.html" ? "/" : request;
+        const networkUpdate = fetch(networkTarget, { cache: "no-cache" })
+          .then(async (response) => {
             if (response && response.ok && response.type === "basic") {
-              void cache.put("/index.html", response.clone());
+              const clean = await cleanResponse(response);
+              if (isHtmlResponse(clean)) {
+                void cache.put("/", clean.clone());
+              }
+              return clean;
             }
-            return response;
+            return cleanResponse(response);
           })
           .catch(() => null);
         if (cached) {
           event.waitUntil(networkUpdate);
-          return cached;
+          const fresh = await Promise.race([
+            networkUpdate,
+            new Promise((resolve) => setTimeout(() => resolve(null), NAV_NETWORK_TIMEOUT_MS)),
+          ]);
+          if (fresh && fresh.ok) return fresh;
+          return cached.redirected ? cleanResponse(cached) : cached;
         }
         return (await networkUpdate) || Response.error();
       }),
@@ -81,9 +120,35 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       caches.open(CACHE_NAME).then(async (cache) => {
         const cached = await cache.match(request);
-        if (cached) return cached;
+        if (cached && !isHtmlResponse(cached)) return cached;
         const response = await fetch(request);
-        if (response && response.ok && response.type === "basic") {
+        // Cloudflare Pages returns 200 text/html (SPA fallback) for pruned /assets/* hashes;
+        // never cache it under an asset URL, drop stale cached "/", and trigger one reload so the fresh shell takes over.
+        if (isHtmlResponse(response)) {
+          if (typeof cache.delete === "function") await cache.delete("/");
+          const now = Date.now();
+          if (
+            now - lastStaleAssetHealAt > STALE_ASSET_HEAL_COOLDOWN_MS &&
+            self.clients &&
+            typeof self.clients.matchAll === "function"
+          ) {
+            lastStaleAssetHealAt = now;
+            event.waitUntil(
+              self.clients
+                .matchAll({ type: "window" })
+                .then((clients) =>
+                  Promise.all(
+                    clients.map((client) =>
+                      typeof client.navigate === "function" ? client.navigate(client.url).catch(() => null) : null,
+                    ),
+                  ),
+                )
+                .catch(() => {}),
+            );
+          }
+          return new Response("", { status: 404, statusText: "Not Found" });
+        }
+        if (response && response.ok && response.type === "basic" && !response.redirected) {
           void cache.put(request, response.clone());
         }
         return response;
@@ -97,7 +162,7 @@ self.addEventListener("fetch", (event) => {
       const cached = await cache.match(request);
       const networkUpdate = fetch(request)
         .then((response) => {
-          if (response && response.ok && response.type === "basic") {
+          if (response && response.ok && response.type === "basic" && !response.redirected && !isHtmlResponse(response)) {
             void cache.put(request, response.clone());
           }
           return response;

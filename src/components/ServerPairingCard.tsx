@@ -6,12 +6,12 @@ import { copyText, type CopyFeedback } from "@/lib/copy-text";
 import { api } from "@/state/store";
 import { isOwnerOrAdmin, readSessionState, type SessionState } from "../lib/session";
 import { readMembership } from "../lib/membership";
-import { codeUntil, lastSeen } from "../lib/pairing-time";
+import { codeUntil, isComputerSession, lastSeen, serverDeviceTag } from "../lib/pairing-time";
 import { revealPhonePairing, takePairOnOpen } from "../lib/phone-pairing";
-import { SettingRow, SettingsGroup, SettingsRows } from "./SettingsPrimitives";
+import { SettingRow, SettingsGroup, SettingsRows, SettingsTag } from "./SettingsPrimitives";
 import { Layer } from "./Layer";
 import { DialogTitle, PairRow } from "./PhoneDevicesSection";
-import { Smartphone } from "lucide-react";
+import { Monitor, Smartphone } from "lucide-react";
 import { productName } from "@/lib/brand";
 import { Select } from "./Select";
 import { cn } from "@/lib/cn";
@@ -42,6 +42,8 @@ export interface PairedDevice {
   lastSeenAt: number;
   expiresAt: number;
   email?: string;
+  pwa?: boolean;
+  browser?: boolean;
   /** The device's person, when the server knows it; the label then names the device. Absent on older servers. */
   person?: string;
 }
@@ -95,7 +97,7 @@ export function shownDevices(devices: PairedDevice[], cloudHome: boolean): Paire
 }
 
 
-export function ServerPairingCard({ initialSession = null, initialPairingCodes = true, cloudHome = false, focusRequest = 0, team, teamPhoneBlocked = null, simple = false, funnel = null, reveal = true, placeName = "", forComputer = false, address = null }: { placeName?: string; funnel?: TailscaleFunnelConnection | null; /** True under "Your other computers": the code is for another computer, not a phone. */ forComputer?: boolean; /** Where another computer reaches this one, shown beside its code. */ address?: string | null; initialSession?: SessionState | null; initialPairingCodes?: boolean; cloudHome?: boolean; focusRequest?: number; team?: string; teamPhoneBlocked?: string | null; simple?: boolean; /** False where another pairing flow owns the page's focus. */ reveal?: boolean }) {
+export function ServerPairingCard({ initialSession = null, initialPairingCodes = true, cloudHome = false, focusRequest = 0, team, teamPhoneBlocked = null, simple = false, funnel = null, reveal = true, placeName = "", forComputer = false, address = null, hidePairedList = false, onSessionsChange }: { placeName?: string; funnel?: TailscaleFunnelConnection | null; /** True under "Your other computers": the code is for another computer, not a phone. */ forComputer?: boolean; /** Where another computer reaches this one, shown beside its code. */ address?: string | null; initialSession?: SessionState | null; initialPairingCodes?: boolean; cloudHome?: boolean; focusRequest?: number; team?: string; teamPhoneBlocked?: string | null; simple?: boolean; /** False where another pairing flow owns the page's focus. */ reveal?: boolean; /** True when PhonePage renders a single unified Paired section above. */ hidePairedList?: boolean; onSessionsChange?: () => void }) {
   const [session, setSession] = useState<SessionState | null>(initialSession);
   const [pairingCodes, setPairingCodes] = useState(initialPairingCodes);
   const [computerName, setComputerName] = useState<string | null>(null);
@@ -118,6 +120,7 @@ export function ServerPairingCard({ initialSession = null, initialPairingCodes =
       const body = await api("/api/auth/sessions");
       setDevices(Array.isArray(body?.sessions) ? body.sessions : []);
       setCurrent(typeof body?.current === "string" ? body.current : null);
+      onSessionsChange?.();
     } catch (e) {
       setError(t("remote.serverPairing.error", { error: e instanceof Error ? e.message : String(e) }));
     }
@@ -322,7 +325,15 @@ export function ServerPairingCard({ initialSession = null, initialPairingCodes =
     <div ref={root} tabIndex={-1} data-phone-pairing="server" className="flex scroll-mt-4 flex-col gap-6 focus:outline-none">
       {offerPanel}
       {funnelRow}
-      {listed.length === 0 ? (
+      {hidePairedList ? (
+        forComputer ? (
+          <SettingsGroup label={t("devices.computers.title")} block="computers-pair">
+            <SettingsRows>{pairRow}</SettingsRows>
+            {nameRow}
+            {!pairingCodes && <p data-server-pairing-portal className="px-4 text-[12px] leading-4 text-ink-secondary">{t("remote.serverPairing.portal")}</p>}
+          </SettingsGroup>
+        ) : null
+      ) : listed.length === 0 ? (
         <SettingsGroup block="pair">
           <SettingsRows>{pairRow}</SettingsRows>
           {nameRow}
@@ -333,9 +344,14 @@ export function ServerPairingCard({ initialSession = null, initialPairingCodes =
             <SettingsRows icons>
               {listed.map((device) => (
                 <div key={device.id} className="flex min-h-16 items-center gap-3 px-4 py-3" data-paired-device={device.id}>
-                  <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-ink/[0.05] text-ink-secondary"><Smartphone size={18} strokeWidth={1.75} aria-hidden="true" /></span>
+                  <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-ink/[0.05] text-ink-secondary">
+                    {isComputerSession(device) ? <Monitor size={18} strokeWidth={1.75} aria-hidden="true" /> : <Smartphone size={18} strokeWidth={1.75} aria-hidden="true" />}
+                  </span>
                   <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <span className="truncate text-[14px] leading-5 text-ink">{device.person ?? device.label}</span>
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span className="truncate text-[14px] leading-5 text-ink">{device.person ?? device.label}</span>
+                      <SettingsTag>{serverDeviceTag(device)}</SettingsTag>
+                    </span>
                     <span className="truncate text-[13px] leading-[18px] text-ink-secondary">
                       {[device.person ? device.label : null, device.email === device.person ? null : device.email, cloudHome ? null : scopeName(device), t("remote.serverPairing.seen", { when: lastSeen(device.lastSeenAt, now) }), device.id === current ? t("remote.serverPairing.thisBrowser") : null].filter(Boolean).join(" · ")}
                     </span>

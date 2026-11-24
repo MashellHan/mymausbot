@@ -2,11 +2,12 @@ import { createElement, type EffectCallback } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-const f = vi.hoisted(() => ({ effects: [] as EffectCallback[], pair: vi.fn() }));
+const f = vi.hoisted(() => ({ effects: [] as EffectCallback[], pair: vi.fn(), activatePwa: vi.fn() }));
 vi.mock("react", async original => ({ ...await original<typeof import("react")>(), useEffect: (effect: EffectCallback) => { f.effects.push(effect); } }));
 vi.mock("../lib/session", async original => ({ ...await original<typeof import("../lib/session")>(), pairWithCode: f.pair, readSessionState: vi.fn().mockResolvedValue({ kind: "unauthenticated", error: "" }) }));
+vi.mock("../lib/pwa-config", async original => ({ ...await original<typeof import("../lib/pwa-config")>(), activatePwaPairing: f.activatePwa }));
 vi.mock("../components/DesktopWorkspaceSwitcher", () => ({ DesktopWorkspaceSwitcher: () => null }));
-import { codeProblem, codeReady, openInAppLink, PairPage, pairIntro, pairsAutomatically, pairTitle, TeamLeftPage, teamPage, unencryptedPublic } from "./PairPage";
+import { codeProblem, codeReady, openInAppLink, PairPage, pairIntro, pairsAutomatically, pairTitle, parsePwaLinkInput, TeamLeftPage, teamPage, unencryptedPublic } from "./PairPage";
 import en from "../locales/en.json";
 import type { EnvironmentDescriptor } from "../lib/session";
 
@@ -115,4 +116,50 @@ it("a team's page whose person is no longer in the team says so in one sentence,
   const html = renderToStaticMarkup(createElement(TeamLeftPage, { team: "Acme" }));
   expect(html).toContain("You&#x27;re no longer in Acme.");
   expect(html).not.toMatch(/<(input|button|a) /);
+});
+
+it("accepts a pasted PWA #pair= invite URL in PairPage for standalone Home Screen PWAs", () => {
+  const payload = Buffer.from(
+    JSON.stringify({ relayUrl: "https://relay.mxhan.com", credential: `omb_pair_${"g".repeat(43)}` }),
+    "utf8",
+  ).toString("base64url");
+  const fullUrl = `https://mausbot.mxhan.com/#pair=${payload}`;
+  expect(parsePwaLinkInput(fullUrl)?.ok).toBe(true);
+  expect(parsePwaLinkInput(`#pair=${payload}`)?.ok).toBe(true);
+  expect(codeReady(fullUrl)).toBe(true);
+  expect(codeProblem(fullUrl)).toBeNull();
+  expect(codeReady("https://mausbot.mxhan.com/#pair=invalid")).toBe(false);
+  expect(codeProblem("https://mausbot.mxhan.com/#pair=invalid")).toBeTruthy();
+});
+
+it("renders a confirmation prompt before replacing an existing PWA session", () => {
+  f.effects = [];
+  f.activatePwa.mockReset();
+  const html = renderToStaticMarkup(
+    createElement(PairPage, {
+      initialCode: null,
+      pendingPwaReplace: {
+        existing: {
+          ownerKey: "https://relay.mxhan.com::env-1::ses-1",
+          relayUrl: "https://relay.mxhan.com",
+          token: "tok-1",
+          deviceId: "dev-1",
+          environmentId: "env-1",
+          sessionId: "ses-1",
+          serverName: "Home Mac mini",
+          scopes: ["client"],
+          pairedAt: 1700000000000,
+        },
+        payload: {
+          relayUrl: "https://relay.mxhan.com",
+          credential: `omb_pair_${"h".repeat(43)}`,
+        },
+      },
+    }),
+  );
+  expect(html).toContain(en["pair.replacePwa.title"]);
+  expect(html).toContain("Home Mac mini");
+  expect(html).toContain(en["pair.replacePwa.confirm"]);
+  expect(html).toContain(en["common.cancel"]);
+  expect(f.activatePwa).not.toHaveBeenCalled();
 });

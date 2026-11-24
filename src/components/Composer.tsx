@@ -71,7 +71,7 @@ import { composerPlaceholder, sendLabels, SIMPLE_COMPOSER, SIMPLE_CONTROL, slotC
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
 import { CallButton } from "./CallView";
 import { GroupCallButton } from "./GroupCallView";
-import { ApprovalChip, ComposerPlusMenu, GoalToggle, TeachTaskButton } from "./ComposerPlusMenu";
+import { ApprovalChip, ComposerFileInputs, ComposerPlusMenu, GoalToggle, TeachTaskButton } from "./ComposerPlusMenu";
 import { PhonePlus } from "./PhonePlus";
 import { useThreadApproval } from "./thread-approval";
 import { useStackedField, useTallPill } from "./composer-wrap";
@@ -98,7 +98,7 @@ import {
   type ComposerSlashCommand,
 } from "@/lib/composer-commands";
 import { useSlashSkills } from "@/lib/use-slash-skills";
-import { randomUuid } from "@/lib/random-uuid"; import { botSupportsImagesInComposer, isComposerLocked, isPwaOfflineDraftBlocked, prepareComposerSendPayload } from "@/lib/pwa-composer";
+import { randomUuid } from "@/lib/random-uuid"; import { botSupportsImagesInComposer, isComposerLocked, isPwaOfflineDraftBlocked, prepareComposerSendPayload } from "@/lib/pwa-composer"; import { isRemotePwaMode } from "@/lib/pwa-transport";
 
 type ComposerDraftSnapshot = ComposerSendSnapshot & { reply: Message | null };
 
@@ -481,6 +481,7 @@ export function Composer({
     return () => window.clearTimeout(timeout);
   }, [busy, pendingCount, steering]);
   const fileInput = useRef<HTMLInputElement>(null);
+  const photoInput = useRef<HTMLInputElement>(null);
   const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
   const modeBot = group ? undefined : bot;
   const { choice: approvalChoice, dialogs: approvalDialogs } = useThreadApproval(modeBot);
@@ -623,7 +624,7 @@ export function Composer({
         dispatch({ type: "error", message: t("composer.error.clipboardImage") });
         return;
       }
-      const kept = imagesThatFit(imageFiles, imageSlotsLeft(attachments), setAttachmentNotice, imageBytesLeft(attachments));
+      const kept = imagesThatFit(imageFiles, imageSlotsLeft(attachments), setAttachmentNotice, isRemotePwaMode() ? Infinity : imageBytesLeft(attachments));
       changeDraftAttachmentPending(draftId, true);
       void (async () => {
         try {
@@ -782,6 +783,7 @@ export function Composer({
           <div className="flex shrink-0 items-center">
             <PhonePlus
               onAttach={() => fileInput.current?.click()}
+              onAttachPhoto={engineSupportsImages ? () => photoInput.current?.click() : undefined}
               goal={goal}
               teach={canLearn ? teachTask : undefined}
               approval={approvalChoice && modeBot && { name: modeBot.name, choice: approvalChoice }}
@@ -798,20 +800,10 @@ export function Composer({
         <div className={singleRow ? cn("min-w-0 flex-1 rounded-[26px] px-3 py-1.5", ELEVATED_FLOAT) : "contents"}>
         {replyToId && <ComposerReplyStrip message={availableReply} fallbackName={bot?.name} onClear={onClearReply} />}
         <div data-composer-row className={cn("flex items-end", simpleDock ? "gap-1.5" : "gap-1", !singleRow && !simpleDock && "@max-[30rem]/composer:flex-wrap", stacked && "flex-wrap")}>
-          <input
-            ref={fileInput}
-            type="file"
-            multiple
-            className="hidden"
-            onChange={(e) => {
-              void pickFiles(e.target.files);
-              // Reset so picking the same file again still fires onChange.
-              e.target.value = "";
-            }}
-          />
+          <ComposerFileInputs fileInput={fileInput} photoInput={photoInput} onFiles={(files) => { void pickFiles(files); }} />
           {!locked && !singleRow && (
             <div className={cn("flex items-center gap-1", simpleDock ? "shrink-0" : "flex-wrap")}>
-              {simpleDock && <ComposerPlusMenu onAttach={() => fileInput.current?.click()} goal={goal} teach={canLearn ? teachTask : undefined} />}
+              {simpleDock && <ComposerPlusMenu onAttach={() => fileInput.current?.click()} onAttachPhoto={engineSupportsImages ? () => photoInput.current?.click() : undefined} goal={goal} teach={canLearn ? teachTask : undefined} />}
               {advanced && <button
                 type="button"
                 onClick={() => fileInput.current?.click()}

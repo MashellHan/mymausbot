@@ -93,14 +93,17 @@ import { PairPage } from "./pair/PairPage";
 import { WebPanelPage } from "@/components/WebPanelPage";
 import { AppPreviewPanel } from "@/components/published-apps/AppPreviewPanel";
 import { refreshPublishedApps } from "@/lib/own-published-apps";
+import { isRemoteClientSession, isRemotePwaMode } from "@/lib/pwa-transport";
 
 function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
+  const remoteClient = isRemoteClientSession();
+  const remotePwa = isRemotePwaMode();
   const { state, dispatch } = useStore();
   useTeamChats(state.config);
   const needsYou = needsYouVersion(state.bots, state.groups, state.notifications);
   useTeamPeopleLoader(state.config, needsYou);
   useInboxLoader(`${inboxVersion(state.bots) ?? ""}|${needsYou}`);
-  useEffect(() => { refreshPublishedApps(); }, []);
+  useEffect(() => { if (!remoteClient) refreshPublishedApps(); }, [remoteClient]);
   const inboxReady = useInboxReady();
   const inboxShown = useInboxPanel().open && inboxReady;
   // A Switch AI pick lands once its stopped turn's chat is idle, wherever the person is by then.
@@ -111,7 +114,6 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   const unreadCount =
     state.bots.filter((bot) => !bot.hidden).reduce((sum, bot) => sum + botUnreadCount(bot), 0) +
     state.groups.filter((group) => group.unread).length;
-  const remoteClient = window.ogb?.remoteClient?.active === true;
   const twoSidePanelsFit = useMediaQuery(TWO_SIDE_PANELS_FIT, true);
   const sidebarAndPanelFit = useMediaQuery(SIDEBAR_AND_PANEL_FIT, true);
   const sidebarInline = useMediaQuery(SIDEBAR_INLINE, false);
@@ -162,7 +164,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   const [computerPanelWidth, setComputerPanelWidth] = useState(COMPUTER_PANEL_DEFAULT_WIDTH);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const previousViewRef = useRef(state.activeView);
-  const calendarOriginRef = useRef<"chat" | "team-map" | "web-panel">("chat");
+  const calendarOriginRef = useRef<"chat" | "web-panel">("chat");
   const loading = loadingLine({ connected: state.connected, hydrated: state.hydrated === true, developer: import.meta.env.DEV });
   const group = state.groups.find((g) => g.id === state.selectedId);
   const chiefStep = useChiefStepOpen();
@@ -175,7 +177,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   const interfaceMode = useInterfaceMode();
   const advanced = interfaceMode === "advanced";
   const roomPanelOpen = useRoomPanelShown({ group, state, simple: !advanced && !remoteClient });
-  const sidePanelOpen = (Boolean(bot) && (state.settingsOpen || state.computerOpen || state.inspectorOpen || state.activityOpen)) || (Boolean(group) && !remoteClient && state.computerOpen) || Boolean(state.forkPanel) || roomPanelOpen || (notificationFeed && state.notificationsOpen) || inboxShown;
+  const sidePanelOpen = (Boolean(bot) && (state.settingsOpen || (!remotePwa && state.computerOpen) || (!remoteClient && (state.inspectorOpen || state.activityOpen)))) || (Boolean(group) && !remoteClient && state.computerOpen) || Boolean(state.forkPanel) || roomPanelOpen || (notificationFeed && state.notificationsOpen) || inboxShown;
   const collapseSidebar = sidePanelOpen && !sidebarAndPanelFit;
   const calendarFocus = state.activeView === "routines" && state.routinesFocus.view === "calendar";
   const notificationTray = notificationFeed && !calendarFocus;
@@ -246,16 +248,16 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   }, [unreadCount]);
 
   useEffect(() => {
-    if (!state.connected) return;
+    if (!state.connected || remotePwa) return;
     void preloadConnectedApps(false, true).catch(() => {}); // a background read: a reconnect is nobody using a Cloud home
-  }, [state.connected]);
+  }, [state.connected, remotePwa]);
   useUsageSnapshot();
 
   useEffect(() => preloadScreens(), []);
 
   useEffect(() => {
     if (state.activeView === "routines" && previousViewRef.current !== "routines") {
-      calendarOriginRef.current = previousViewRef.current === "team-map" || previousViewRef.current === "web-panel" ? previousViewRef.current : "chat";
+      calendarOriginRef.current = previousViewRef.current === "web-panel" ? "web-panel" : "chat";
     }
     previousViewRef.current = state.activeView;
   }, [state.activeView]);
@@ -282,10 +284,6 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   };
 
   const closeCalendar = useCallback(() => {
-    if (calendarOriginRef.current === "team-map") {
-      dispatch({ type: "showTeamMap" });
-      return;
-    }
     if (calendarOriginRef.current === "web-panel" && state.webPanelId) {
       dispatch({ type: "showWebPanel", id: state.webPanelId });
       return;
@@ -367,11 +365,14 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
         <Menu size={18} className="max-md:hidden" />
         <ChevronLeft size={20} aria-hidden="true" className="hidden max-md:block" />
       </button>}
-      {drawerOpen && !calendarFocus && (
+      {!calendarFocus && (
         <div
           aria-hidden
           onMouseDown={(e) => e.target === e.currentTarget && hideDrawer()}
-          className="absolute inset-0 z-30 bg-black/50 md:hidden"
+          className={cn(
+            "absolute inset-0 z-30 bg-black/50 transition-opacity duration-[220ms] ease-out motion-reduce:transition-none md:hidden",
+            drawerOpen ? "opacity-100" : "pointer-events-none opacity-0",
+          )}
         />
       )}
       {!calendarFocus && interfaceMode !== "raw" && <PlacesRail />}
@@ -388,13 +389,17 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
         open={drawerOpen}
         onClose={closeDrawer}
       />}
+      <div
+        key={state.activeView !== "chat" ? state.activeView : !remoteClient && localVmWorkspaceBotId ? `vm:${localVmWorkspaceBotId}` : teamWelcomeOn && team ? "team-welcome" : firstRun ? `first-run:${firstRun}` : chiefStep ? "chief-step" : group ? `group:${group.id}` : bot ? `bot:${bot.id}` : noEngines ? "no-engines" : "loading"}
+        className="flex h-full min-h-0 min-w-0 flex-1 animate-view-enter"
+      >
       {state.activeView === "team-map" ? (
         <TeamMapPage />
       ) : state.activeView === "files" ? (
         <FilesView />
       ) : state.activeView === "web-panel" ? (
         <WebPanelPage />
-      ) : state.activeView === "published-apps" ? (
+      ) : !remoteClient && state.activeView === "published-apps" ? (
         <PublishedAppsPage />
       ) : state.activeView === "announcements" ? (
         <AnnouncementsPage />
@@ -440,13 +445,14 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
           )}
         </main>
       )}
+      </div>
       {/* Sibling panels need distinct keys: two keyed `bot.id` collide in React's keyed reconciliation. */}
       {state.settingsOpen && bot && (
         remoteClient
           ? <RemoteAgentSettingsPanel bot={bot} overlay={state.computerOpen && !twoSidePanelsFit} />
           : <BotSettingsDialog key={`settings:${bot.id}`} bot={bot} overlay={(state.inspectorOpen || state.computerOpen || (notificationFeed && state.notificationsOpen)) && !twoSidePanelsFit} />
       )}
-      {state.computerOpen && bot && (
+      {state.computerOpen && bot && !remotePwa && (
         remoteClient ? (
           <RemoteDesktopPanel key={`computer:${bot.id}`} bot={bot} />
         ) : (
@@ -467,7 +473,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
           onPanelWidthChange={setComputerPanelWidth}
         />
       )}
-      <AppPreviewPanel />
+      {!remoteClient && <AppPreviewPanel />}
       {state.forkPanel && sidebarInline && <ForkPanel />}
       {!state.forkPanel && roomPanelOpen && group && (
         <RoomPanel key={`room:${group.id}`} group={group} overlay={notificationFeed && state.notificationsOpen && !twoSidePanelsFit} />

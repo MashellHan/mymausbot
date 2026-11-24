@@ -1,8 +1,9 @@
+import { useEffect, useRef } from "react";
 import { t } from "@/lib/i18n";
 import { productName } from "../lib/brand";
 import type { TailnetShareState } from "../lib/companion-types";
 import { usePhoneSetupController, type CompanionState, type PhoneSetupController } from "./PhoneSetupFlow";
-import { deriveTailscalePairingStatus, type TailscalePairingStatus } from "./PhoneDevicesSection";
+import { deriveTailscalePairingStatus, type TailscalePairingStatus } from "../lib/phone-setup";
 import { useStore } from "@/state/store";
 import { ServerPairingCard } from "./ServerPairingCard";
 import { SettingRow, SettingsGroup, SettingsRows, Switch } from "./SettingsPrimitives";
@@ -21,25 +22,96 @@ function tailscaleTrouble(status: TailscalePairingStatus): string | null {
 }
 
 /** Your other computers: lets them open this one over Tailscale, and makes them a pairing link. */
-export function TailnetComputers({ c, state, blocked, simple, status }: { c: PhoneSetupController; state: CompanionState; blocked: string | null; simple: boolean; status: TailscalePairingStatus }) {
+export function TailnetComputers({
+  c,
+  state,
+  blocked,
+  simple,
+  status,
+  mode = "full",
+  onSessionsChange,
+}: {
+  c: PhoneSetupController;
+  state: CompanionState;
+  blocked: string | null;
+  simple: boolean;
+  status: TailscalePairingStatus;
+  mode?: "full" | "panel" | "advanced-row";
+  onSessionsChange?: () => void;
+}) {
   const on = state.routes?.tailscale?.on === true && state.routes.tailscale.computers === true;
   const trouble = tailscaleTrouble(status);
   // On with nothing answering: Tailscale's own reason says what to fix; "isn't connected yet" is only for when it gives none.
   const line = on && !(trouble && !state.tailnetShare?.origin) ? tailnetShareLine(state.tailnetShare) : null;
   const address = on ? state.tailnetShare?.origin ?? null : null;
-  return (
-    <>
-      <SettingsGroup block="computers">
+
+  const autoEnabledRef = useRef(false);
+  useEffect(() => {
+    if (
+      mode !== "panel" ||
+      autoEnabledRef.current ||
+      on ||
+      state.routes?.tailscale?.on !== true ||
+      Boolean(blocked) ||
+      c.busy ||
+      c.accountBusy
+    ) {
+      return;
+    }
+    autoEnabledRef.current = true;
+    void c.act((companion) => companion.setTailscaleComputers?.(true) ?? companion.state());
+  }, [mode, on, state.routes?.tailscale?.on, blocked, c]);
+
+  const toggleRow = (
+    <SettingRow title={t("devices.computers.title")} subtitle={t("devices.computers.detail")}
+      message={line || trouble || blocked ? <span data-tailnet-share={line ? "" : undefined} data-tailnet-trouble={!line && trouble ? status.kind : undefined} className="break-words" aria-live="polite">{line ?? trouble ?? blocked}</span> : undefined}>
+      <span data-route-row="tailscale-computers" className="contents">
+        {!on && status.kind === "not-installed" && <a href="https://tailscale.com/download" target="_blank" rel="noreferrer" className="ui-button">{t("remote.tailscale.getIt")}</a>}
+        <Switch checked={on} aria-label={t("devices.computers.title")} disabled={c.busy || c.accountBusy || (Boolean(blocked) && !on)} title={blocked ?? undefined}
+          onClick={() => void c.act((companion) => companion.setTailscaleComputers?.(!on) ?? companion.state())} />
+      </span>
+    </SettingRow>
+  );
+
+  if (mode === "advanced-row") {
+    return toggleRow;
+  }
+
+  if (mode === "panel") {
+    if (address) {
+      return <ServerPairingCard simple={simple} reveal={false} forComputer address={address} hidePairedList onSessionsChange={onSessionsChange} />;
+    }
+    return (
+      <SettingsGroup label={t("devices.computers.title")} block="computers">
         <SettingsRows>
-          <SettingRow title={t("devices.computers.title")} subtitle={t("devices.computers.detail")}
-            message={line || trouble || blocked ? <span data-tailnet-share={line ? "" : undefined} data-tailnet-trouble={!line && trouble ? status.kind : undefined} className="break-words" aria-live="polite">{line ?? trouble ?? blocked}</span> : undefined}>
+          <SettingRow
+            title={t("devices.computers.pairTitle")}
+            subtitle={trouble ?? (blocked ?? t("devices.computers.pairLine"))}
+          >
             <span data-route-row="tailscale-computers" className="contents">
-              {!on && status.kind === "not-installed" && <a href="https://tailscale.com/download" target="_blank" rel="noreferrer" className="ui-button">{t("remote.tailscale.getIt")}</a>}
-              <Switch checked={on} aria-label={t("devices.computers.title")} disabled={c.busy || c.accountBusy || (Boolean(blocked) && !on)} title={blocked ?? undefined}
-                onClick={() => void c.act((companion) => companion.setTailscaleComputers?.(!on) ?? companion.state())} />
+              {!on && status.kind === "not-installed" ? (
+                <a href="https://tailscale.com/download" target="_blank" rel="noreferrer" className="ui-button">{t("remote.tailscale.getIt")}</a>
+              ) : (
+                <button
+                  type="button"
+                  disabled={c.busy || c.accountBusy || Boolean(blocked) || on}
+                  onClick={() => void c.act((companion) => companion.setTailscaleComputers?.(true) ?? companion.state())}
+                  className="ui-button ui-button-primary disabled:opacity-40"
+                >
+                  {t("devices.computers.pairButton")}
+                </button>
+              )}
             </span>
           </SettingRow>
         </SettingsRows>
+      </SettingsGroup>
+    );
+  }
+
+  return (
+    <>
+      <SettingsGroup block="computers">
+        <SettingsRows>{toggleRow}</SettingsRows>
       </SettingsGroup>
       {address && <ServerPairingCard simple={simple} reveal={false} forComputer address={address} />}
     </>
