@@ -10,7 +10,7 @@ import { herdrRows, runHerdr, type HerdrRunner } from "./local-agent-teams.ts";
 import { localAgentOccupantId } from "./local-agent-occupant.ts";
 import { discoverCodexSkills, type CodexSkillDiscovery } from "./local-agent-skill-discovery.ts";
 import { inside, memberRole, readDocument, teamSource, verifiedLocalAgentMembers, type TeamSource } from "./local-agent-association.ts";
-import { getLocalAgentRoleDocument, saveLocalAgentRoleDocument, type LocalAgentRoleSource } from "./local-agent-role-document.ts";
+import { getLocalAgentRoleDocument, roleFrontMatter, saveLocalAgentRoleDocument, type LocalAgentRoleSource } from "./local-agent-role-document.ts";
 
 const PANE_ID = /^w\d+:p[0-9A-Za-z]+$/;
 const TEAM_ID = /^w\d+$/;
@@ -125,16 +125,35 @@ export function createLocalAgentConfigurationProvider({ run = runHerdr, home = h
     const { source, playbook, member } = found;
     const readme = dirname(source.playbook) === source.root ? await readDocument(source.root, join(source.root, "README.md")) : empty("unverified");
     if (readme.status === "error") return null;
-    const role = memberRole(source, member, playbook, readme);
-    const { doc, file } = await agentDocument(source, role);
-    if (!role || doc.status !== "ready" || !file) return null;
-    const memberNames = found.team.flatMap((agent) => {
-      const peer = memberRole(source, agent, playbook, readme);
-      if (!peer || typeof agent.name !== "string") return [];
-      const sameRole = peer.file ? join(dirname(source.playbook), peer.file) === file
-        : !role.file && peer.label.toLowerCase() === role.label.toLowerCase();
-      return sameRole ? [agent.name] : [];
-    }).sort();
+    const resolved = new Map<string, ReturnType<typeof resolveRole>>();
+    async function resolveRole(role: NonNullable<ReturnType<typeof memberRole>>) {
+      const { doc, file } = await agentDocument(source, role);
+      if (doc.status !== "ready" || !file) return null;
+      if (!role.file) {
+        const frontMatter = roleFrontMatter(doc.markdown ?? "");
+        const name = /^name:[ \t]*(.+?)\s*$/m.exec(frontMatter ?? "")?.[1]?.toLowerCase();
+        const label = role.label.toLowerCase();
+        if (!name || !` ${name} `.includes(` ${label} `)) return null;
+      }
+      return file;
+    }
+    const binding = (agent: Record<string, unknown>) => {
+      const role = memberRole(source, agent, playbook, readme);
+      if (!role) return Promise.resolve(null);
+      const key = role.file ?? role.label.toLowerCase();
+      let file = resolved.get(key);
+      if (!file) { file = resolveRole(role); resolved.set(key, file); }
+      return file;
+    };
+    const file = await binding(member);
+    if (!file) return null;
+    const names = await Promise.all(found.team.map(async (agent) => await binding(agent) === file && typeof agent.name === "string" ? agent.name : null));
+    const memberNames = names.filter((name): name is string => name !== null).sort();
+    const current = await liveRows(run);
+    const stillBound = current && current.workspaces.filter(({ workspace_id }) => workspace_id === member.workspace_id).length === 1
+      && verifiedLocalAgentMembers(current.agents).some((agent) => agent.pane_id === agentId && agent.cwd === member.cwd
+        && agent.name === member.name && localAgentOccupantId(agent, agentId) === occupantId);
+    if (!stillBound) return null;
     return { root: source.root, roles: source.roles, file, agentName: String(member.name),
       memberNames, runtime: String(member.agent) };
   }

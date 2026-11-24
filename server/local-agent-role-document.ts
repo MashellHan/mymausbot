@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdtempSync, openSync, readSync,
-  realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, fstatSync, linkSync, lstatSync, mkdtempSync, openSync, readSync,
+  realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 
 import { LOCAL_AGENT_ROLE_DOCUMENT_MAX_BYTES, type LocalAgentRoleDocument,
@@ -16,14 +16,19 @@ export interface LocalAgentRoleSource {
   runtime: string;
 }
 
-function read(source: LocalAgentRoleSource) {
+export function roleFrontMatter(text: string): string | null {
+  if (!/^---(?:\r?\n|$)/.test(text)) return "";
+  return /^---\r?\n[\s\S]*?^---(?:\r?\n|$)/m.exec(text)?.[0] ?? null;
+}
+
+function read(source: LocalAgentRoleSource, fileToRead = source.file) {
   const { root, roles, file, agentName, memberNames, runtime } = source;
   if (!inside(root, roles) || dirname(file) !== roles || !/^[a-z][a-z0-9-]*\.md$/.test(basename(file))) return null;
   const canonicalRoot = realpathSync(root);
   if (realpathSync(roles) !== join(canonicalRoot, relative(root, roles))) return null;
-  const entry = lstatSync(file);
+  const entry = lstatSync(fileToRead);
   if (!entry.isFile() || entry.nlink !== 1 || entry.size > LOCAL_AGENT_ROLE_DOCUMENT_MAX_BYTES) return null;
-  const fd = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  const fd = openSync(fileToRead, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   try {
     const stat = fstatSync(fd);
     if (stat.dev !== entry.dev || stat.ino !== entry.ino || stat.size !== entry.size) return null;
@@ -37,12 +42,10 @@ function read(source: LocalAgentRoleSource) {
     if (checked.size !== stat.size || checked.mtimeMs !== stat.mtimeMs || checked.ctimeMs !== stat.ctimeMs) return null;
     const full = content.toString("utf8");
     if (!Buffer.from(full).equals(content) || full.includes("\0")) return null;
-    const prefix = /^---\r?\n[\s\S]*?^---(?:\r?\n|$)/m.exec(full)?.[0] ?? "";
-    const startsWithMetadata = /^---(?:\r?\n|$)/.test(full);
-    if (startsWithMetadata && (!prefix || !full.startsWith(prefix))) return null;
-    const metadata = startsWithMetadata ? prefix : "";
-    const sourcePath = realpathSync(file);
-    if (sourcePath !== join(canonicalRoot, relative(root, file))) return null;
+    const metadata = roleFrontMatter(full);
+    if (metadata === null) return null;
+    const sourcePath = join(canonicalRoot, relative(root, file));
+    if (realpathSync(fileToRead) !== (fileToRead === file ? sourcePath : fileToRead)) return null;
     const doc: LocalAgentRoleDocument = { file: relative(root, file).split("\\").join("/"), sourcePath, agentName, memberNames, runtime,
       documentId: createHash("sha256").update(sourcePath).digest("hex"),
       text: full.slice(metadata.length), hash: createHash("sha256")
@@ -56,11 +59,23 @@ export function getLocalAgentRoleDocument(source: LocalAgentRoleSource): LocalAg
   catch { return null; }
 }
 
-export function saveLocalAgentRoleDocument(source: LocalAgentRoleSource, input: LocalAgentRoleDocumentWrite): LocalAgentRoleSaveResult {
+export function saveLocalAgentRoleDocument(source: LocalAgentRoleSource, input: LocalAgentRoleDocumentWrite,
+  move: typeof renameSync = renameSync): LocalAgentRoleSaveResult {
   let temporary: string | undefined;
+  let displaced: string | undefined;
+  let destination: string | undefined;
+  const restore = () => {
+    if (!displaced || !destination) return;
+    if (realpathSync(source.roles) !== dirname(dirname(displaced)) || !lstatSync(displaced).isFile()) return;
+    try { linkSync(displaced, destination); }
+    catch { return; }
+    unlinkSync(displaced);
+    displaced = undefined;
+  };
   try {
     const current = read(source);
     if (!current || current.doc.documentId !== input.documentId) return { status: "unavailable" };
+    destination = current.doc.sourcePath;
     if (current.doc.hash !== input.expectedHash) return { status: "conflict", doc: current.doc };
     if (current.doc.text === input.text) return { status: "saved", doc: current.doc };
     if (!current.metadata && /^---(?:\r?\n|$)/.test(input.text)) return { status: "unavailable" };
@@ -75,9 +90,31 @@ export function saveLocalAgentRoleDocument(source: LocalAgentRoleSource, input: 
     const latest = read(source);
     if (!latest) return { status: "unavailable" };
     if (latest.doc.hash !== input.expectedHash) return { status: "conflict", doc: latest.doc };
-    renameSync(replacement, source.file);
+    const previous = join(temporary, "previous.md");
+    move(destination, previous);
+    displaced = previous;
+    const moved = read(source, previous);
+    if (moved?.doc.hash !== input.expectedHash) {
+      restore();
+      const competing = getLocalAgentRoleDocument(source);
+      return competing ? { status: "conflict", doc: competing } : { status: "unavailable" };
+    }
+    // Install with an exclusive link so a concurrent writer that recreated the path wins.
+    try { linkSync(replacement, destination); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const competing = getLocalAgentRoleDocument(source);
+      return competing ? { status: "conflict", doc: competing } : { status: "unavailable" };
+    }
+    unlinkSync(replacement);
+    displaced = undefined;
     const saved = read(source);
     return saved ? { status: "saved", doc: saved.doc } : { status: "unavailable" };
   } catch { return { status: "unavailable" }; }
-  finally { if (temporary) rmSync(temporary, { recursive: true, force: true }); }
+  finally {
+    try {
+      restore();
+      if (temporary && !displaced) rmSync(temporary, { recursive: true, force: true });
+    } catch { /* Leave a displaced file available for recovery if restoration failed. */ }
+  }
 }

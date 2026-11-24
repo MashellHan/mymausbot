@@ -1,3 +1,4 @@
+import { renameSync, writeFileSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -5,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { removeTempDir } from "./testing/cleanup.ts";
 import { createLocalAgentConfigurationProvider } from "./local-agent-configuration.ts";
+import { getLocalAgentRoleDocument, saveLocalAgentRoleDocument } from "./local-agent-role-document.ts";
 
 const folders: string[] = [];
 afterEach(async () => { for (const folder of folders.splice(0)) await removeTempDir(folder); });
@@ -83,6 +85,59 @@ describe("verified local Agent Team configuration", () => {
     await symlink(outside, source);
     expect(await provider.saveRoleDocument(input, guard)).toEqual({ status: "unavailable" });
     expect(await readFile(outside, "utf8")).toBe("# Outside");
+  });
+
+  it("rejects Markdown example bindings and rechecks the occupant after resolving the role file", async () => {
+    const data = await fixture();
+    const source = join(data.repo, ".agents/team/roles/designer.md");
+    const original = await readFile(source, "utf8");
+    let remaining = Infinity;
+    const run = async (args: readonly string[]) => {
+      const result = await data.run(args);
+      if (args.at(-2) !== "agent" || --remaining > 0) return result;
+      const parsed = JSON.parse(result);
+      parsed.result.agents[0] = data.agent(data.members[0]!, "new-occupant");
+      return JSON.stringify(parsed);
+    };
+    const provider = createLocalAgentConfigurationProvider({ home: data.home, run, discoverSkills: noDiscovery });
+    const selected = await provider.getAgent("w6:p2");
+    const target = { agentId: selected.agentId, occupantId: selected.occupantId! };
+    const doc = (await provider.getRoleDocument(target))!;
+    remaining = 2;
+    const input = { ...target, documentId: doc.documentId, expectedHash: doc.hash, text: "# Must not be written" };
+    expect(await provider.saveRoleDocument(input, () => {})).toEqual({ status: "unavailable" });
+    expect(await readFile(source, "utf8")).toBe(original);
+    remaining = Infinity;
+    await unlink(source);
+    await data.put(join(dirname(source), "example.md"), "# Example metadata\nname: This is a Designer example");
+    expect((await provider.getAgent(target.agentId)).agent.status).toBe("ready");
+    expect(await provider.getRoleDocument(target)).toBeNull();
+  });
+
+  it("reports seats sharing one role through both explicit and inferred paths", async () => {
+    const data = await fixture();
+    await data.put(join(data.mini, "README.md"), "| Designer | miniapp-design | sol | high | [designer](roles/designer.md) |");
+    await data.put(join(data.mini, "playbook.md"), "| miniapp-lead | Designer |");
+    await data.put(join(data.mini, "roles/designer.md"), "---\nname: Shared Designer\n---\n# Role body");
+    const provider = createLocalAgentConfigurationProvider({ home: data.home, run: data.run, discoverSkills: noDiscovery });
+    const selected = await provider.getAgent("w8:p4");
+    expect(await provider.getRoleDocument({ agentId: selected.agentId, occupantId: selected.occupantId! }))
+      .toMatchObject({ file: "roles/designer.md", memberNames: ["miniapp-design", "miniapp-lead"] });
+  });
+
+  it("restores an external edit that lands at the file replacement boundary", async () => {
+    const data = await fixture();
+    const roles = join(data.repo, ".agents/team/roles");
+    const file = join(roles, "designer.md");
+    const source = { root: data.repo, roles, file, agentName: "mausbot-design", memberNames: ["mausbot-design"], runtime: "codex" };
+    const doc = getLocalAgentRoleDocument(source)!;
+    const input = { agentId: "w6:p2", occupantId: "o1234567890abcdef", documentId: doc.documentId, expectedHash: doc.hash, text: "# Draft" };
+    const result = saveLocalAgentRoleDocument(source, input, (from, to) => {
+      writeFileSync(from, "---\nname: MausBot Designer\n---\n# External edit at commit");
+      renameSync(from, to);
+    });
+    expect(result).toMatchObject({ status: "conflict", doc: { text: "# External edit at commit" } });
+    expect(await readFile(file, "utf8")).toContain("# External edit at commit");
   });
 
   it("binds the real role and multiple declared skills without claiming session loading", async () => {
