@@ -328,4 +328,106 @@ describe("pwa-cache", () => {
     expect(OMB_PWA_DB_NAME).toBe("omb-pwa-v1");
     expect(OMB_PWA_DB_VERSION).toBe(3);
   });
+
+  it("never caches or serves redirected responses for navigation requests", async () => {
+    const sw = readFileSync(new URL("../../public/sw.js", import.meta.url), "utf8");
+    const listeners = new Map<string, (event: any) => void>();
+    const cacheEntries = new Map<string, Map<string, Response>>();
+    const ensureCache = (name: string) => {
+      let store = cacheEntries.get(name);
+      if (!store) {
+        store = new Map();
+        cacheEntries.set(name, store);
+      }
+      return {
+        put: async (req: string | Request, res: Response) => {
+          const key = typeof req === "string" ? req : new URL(req.url).pathname;
+          store!.set(key, res);
+        },
+        match: async (req: string | Request) => {
+          const key = typeof req === "string" ? req : new URL(req.url).pathname;
+          return store!.get(key);
+        },
+      };
+    };
+    cacheEntries.set("omb-pwa-shell-v1", new Map([["/index.html", new Response("stale")]]));
+
+    const mockFetch = vi.fn(async (input: string | Request) => {
+      const path = typeof input === "string" ? input : new URL(input.url).pathname;
+      const res = new Response(`<html>${path}</html>`, { status: 200, headers: { "content-type": "text/html" } });
+      Object.defineProperty(res, "type", { value: "basic" });
+      Object.defineProperty(res, "redirected", { value: path !== "/manifest.webmanifest" && path !== "/app-icon.svg" && path !== "/app-icon-192.png" && path !== "/app-icon-512.png" && path !== "/apple-touch-icon.png" && path !== "/" });
+      return res;
+    });
+
+    const swGlobal = {
+      location: { origin: "https://mausbot.mxhan.com" },
+      skipWaiting: vi.fn(async () => {}),
+      clients: { claim: vi.fn(async () => {}) },
+      caches: {
+        open: async (name: string) => ensureCache(name),
+        keys: async () => Array.from(cacheEntries.keys()),
+        delete: async (name: string) => cacheEntries.delete(name),
+      },
+      fetch: mockFetch,
+      Response,
+      Headers,
+      URL,
+      addEventListener: (type: string, handler: (event: any) => void) => {
+        listeners.set(type, handler);
+      },
+    };
+
+    new Function("self", "caches", "fetch", "Response", "Headers", "URL", sw)(
+      swGlobal,
+      swGlobal.caches,
+      swGlobal.fetch,
+      Response,
+      Headers,
+      URL,
+    );
+
+    const installPromises: Promise<unknown>[] = [];
+    listeners.get("install")!({ waitUntil: (p: Promise<unknown>) => installPromises.push(p) });
+    await Promise.all(installPromises);
+
+    const precachedPaths = mockFetch.mock.calls.map((call) => String(call[0]));
+    expect(precachedPaths).toContain("/");
+    expect(precachedPaths).not.toContain("/index.html");
+    expect(cacheEntries.has("omb-pwa-shell-v2")).toBe(true);
+
+    const activatePromises: Promise<unknown>[] = [];
+    listeners.get("activate")!({ waitUntil: (p: Promise<unknown>) => activatePromises.push(p) });
+    await Promise.all(activatePromises);
+    expect(cacheEntries.has("omb-pwa-shell-v1")).toBe(false);
+
+    // Poison cache entry with a redirected Response to verify navigation strips `.redirected`.
+    const poisoned = new Response("<html>poisoned</html>", { status: 200 });
+    Object.defineProperty(poisoned, "redirected", { value: true });
+    cacheEntries.get("omb-pwa-shell-v2")!.set("/", poisoned);
+
+    let navResponsePromise!: Promise<Response>;
+    const bgPromises: Promise<unknown>[] = [];
+    listeners.get("fetch")!({
+      request: { method: "GET", mode: "navigate", url: "https://mausbot.mxhan.com/" },
+      respondWith: (p: Promise<Response>) => { navResponsePromise = p; },
+      waitUntil: (p: Promise<unknown>) => { bgPromises.push(p); },
+    });
+    const navResponse = await navResponsePromise;
+    expect(navResponse.redirected).toBe(false);
+    expect(await navResponse.text()).toBe("<html>poisoned</html>");
+    await Promise.all(bgPromises);
+
+    // Cold cache redirected navigation (e.g. /legacy/) must also resolve with redirected === false.
+    cacheEntries.get("omb-pwa-shell-v2")!.delete("/");
+    let coldNavPromise!: Promise<Response>;
+    listeners.get("fetch")!({
+      request: { method: "GET", mode: "navigate", url: "https://mausbot.mxhan.com/legacy/" },
+      respondWith: (p: Promise<Response>) => { coldNavPromise = p; },
+      waitUntil: () => {},
+    });
+    const coldNav = await coldNavPromise;
+    expect(coldNav.redirected).toBe(false);
+    expect(await coldNav.text()).toBe("<html>/legacy/</html>");
+  });
 });

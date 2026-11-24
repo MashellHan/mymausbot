@@ -513,8 +513,8 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
               });
             }}
           >
-            <div className="flex flex-col gap-4">
-              <form data-pwa-bridge-form="" onSubmit={(event) => void saveSettings(event)} className="flex flex-col gap-3">
+            <form data-pwa-bridge-form="" onSubmit={(event) => void saveSettings(event)} className="flex flex-col">
+              <div className="flex flex-col gap-3 px-4 pt-3 pb-1">
                 <SettingsField label={t("pwaBridge.field.relayUrl")}>
                   <input
                     id="pwa-bridge-relay-url"
@@ -597,54 +597,54 @@ export function PwaBridgeCard({ remoteBlocked = null }: { remoteBlocked?: string
                     ))}
                   </Select>
                 </SettingsField>
-
-                <SettingsFormFoot status={savedNotice ? <span role="status">{savedNotice}</span> : undefined}>
-                  <button type="submit" data-pwa-bridge-save="" disabled={busy || !dirty} className="ui-button ui-button-primary">
-                    {busyAction === "save" ? t("pwaBridge.settings.saving") : t("common.save")}
-                  </button>
-                </SettingsFormFoot>
-              </form>
-
-              <div className="flex flex-col gap-3 border-t-[0.5px] border-(--settings-edge) pt-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex min-w-0 flex-col gap-0.5">
-                    <span className="text-[14px] leading-5 text-ink">{t("pwaBridge.secret.title")}</span>
-                    <span data-pwa-secret-status="" className="text-[13px] leading-[18px] text-ink-secondary">
-                      {t(data.config.hasBridgeSecret ? "pwaBridge.secret.configured" : "pwaBridge.secret.missing")}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    data-pwa-rotate-secret=""
-                    disabled={busy}
-                    onClick={() => void rotateSecret()}
-                    className="ui-button shrink-0"
-                  >
-                    {t(data.config.hasBridgeSecret ? "pwaBridge.secret.rotate" : "pwaBridge.secret.generate")}
-                  </button>
-                </div>
-
-                {revealedSecret && (
-                  <div data-pwa-secret-revealed="" className="flex flex-col gap-3 rounded-[12px] border-[0.5px] border-(--settings-edge) bg-ink/[0.04] p-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="text-[12px] leading-4 text-ink-secondary">{t("pwaBridge.secret.onceNote")}</p>
-                      <button type="button" onClick={() => setRevealedSecret(null)} className="settings-quiet shrink-0 cursor-pointer">
-                        {t("pwaBridge.secret.hide")}
-                      </button>
-                    </div>
-                    <SecretCopyRow
-                      label={t("pwaBridge.secret.hashLabel")}
-                      value={revealedSecret.bridgeSecretSha256}
-                      dataAttr="data-pwa-secret-hash"
-                    />
-                    <SecretCopyRow
-                      label={t("pwaBridge.secret.valueLabel")}
-                      value={revealedSecret.bridgeSecret}
-                      dataAttr="data-pwa-secret-value"
-                    />
-                  </div>
-                )}
               </div>
+
+              <SettingsFormFoot status={savedNotice ? <span role="status">{savedNotice}</span> : undefined}>
+                <button type="submit" data-pwa-bridge-save="" disabled={busy || !dirty} className="ui-button ui-button-primary">
+                  {busyAction === "save" ? t("pwaBridge.settings.saving") : t("common.save")}
+                </button>
+              </SettingsFormFoot>
+            </form>
+
+            <div data-pwa-secret-row="" className="flex flex-col gap-3 px-4 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex min-w-0 flex-col gap-0.5">
+                  <span className="text-[14px] leading-5 text-ink">{t("pwaBridge.secret.title")}</span>
+                  <span data-pwa-secret-status="" className="text-[13px] leading-[18px] text-ink-secondary">
+                    {t(data.config.hasBridgeSecret ? "pwaBridge.secret.configured" : "pwaBridge.secret.missing")}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  data-pwa-rotate-secret=""
+                  disabled={busy}
+                  onClick={() => void rotateSecret()}
+                  className="ui-button shrink-0"
+                >
+                  {t(data.config.hasBridgeSecret ? "pwaBridge.secret.rotate" : "pwaBridge.secret.generate")}
+                </button>
+              </div>
+
+              {revealedSecret && (
+                <div data-pwa-secret-revealed="" className="flex flex-col gap-3 rounded-[12px] border-[0.5px] border-(--settings-edge) bg-ink/[0.04] p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-[12px] leading-4 text-ink-secondary">{t("pwaBridge.secret.onceNote")}</p>
+                    <button type="button" onClick={() => setRevealedSecret(null)} className="settings-quiet shrink-0 cursor-pointer">
+                      {t("pwaBridge.secret.hide")}
+                    </button>
+                  </div>
+                  <SecretCopyRow
+                    label={t("pwaBridge.secret.hashLabel")}
+                    value={revealedSecret.bridgeSecretSha256}
+                    dataAttr="data-pwa-secret-hash"
+                  />
+                  <SecretCopyRow
+                    label={t("pwaBridge.secret.valueLabel")}
+                    value={revealedSecret.bridgeSecret}
+                    dataAttr="data-pwa-secret-value"
+                  />
+                </div>
+              )}
             </div>
           </SettingsFoldRow>
         </SettingsRows>
