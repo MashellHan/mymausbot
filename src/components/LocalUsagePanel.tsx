@@ -207,7 +207,7 @@ function TrendChart({ days, metric, weekly, range, tokenDays }: { days: UsageTre
     setActiveDay(day);
     setHoveredSegment((segment) => segment?.day === day ? segment : null);
   };
-  useLayoutEffect(() => { setHoveredSegment(null); }, [range]);
+  useLayoutEffect(() => { setHoveredSegment(null); }, [range, stack]);
   const rovingDay = days.some((day) => day.day === focusDay) ? focusDay : days[0]?.day;
   const showUnclassified = metric !== "totalTokens" && days.some((day) => (categoryValue(day, metric, "unclassified") ?? 0) > 0);
   useLayoutEffect(() => {
@@ -276,7 +276,7 @@ function TrendChart({ days, metric, weekly, range, tokenDays }: { days: UsageTre
                 style={{ height: value === 0 ? 0 : `${Math.max(5, value / max * 100)}%` }}>
                 {stack ? stack.series.map((series, seriesIndex) => {
                   const part = stack.points[index]?.[seriesIndex];
-                  return !!part && <span key={seriesIndex} data-usage-token-segment={series.key}
+                  return !!part && <span key={`${series.kind}:${series.key}`} data-usage-token-segment={series.key}
                     onMouseEnter={mode !== "types" ? () => setHoveredSegment({ day: day.day, series }) : undefined}
                     onMouseLeave={mode !== "types" ? () => setHoveredSegment(null) : undefined}
                     className={tokenSeriesTone(series, seriesIndex)} style={{ height: `${part / value * 100}%` }} />;

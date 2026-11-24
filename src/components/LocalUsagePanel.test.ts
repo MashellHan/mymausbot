@@ -352,6 +352,13 @@ describe("local Usage panel", () => {
     expect(highlighted()).toEqual(["Daily leader"]);
     await hover("C");
     expect(highlighted()).toEqual(["other"]);
+    const refreshed = structuredClone(snapshot);
+    for (const point of refreshed.trend) {
+      const row = point.tokenDetails?.models?.rows.find(({ model }) => model === "C");
+      if (row) row.model = "New stack model";
+    }
+    await renderRaw(refreshed);
+    expect(highlighted()).toEqual([]);
   });
 
   it("breaks out verified members, team totals and unattributed tokens on the same calendar", async () => {
