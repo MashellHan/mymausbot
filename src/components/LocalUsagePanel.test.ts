@@ -523,7 +523,7 @@ describe("local Usage panel", () => {
     expect(updated.classList.contains("ml-auto")).toBe(true);
     expect(updated.classList.contains("text-right")).toBe(true);
     expect(updated.classList.contains("min-w-0")).toBe(true);
-    expect([...host.querySelectorAll("[data-usage-provisional]")].some((value) => value.textContent === "9 observed")).toBe(true);
+    expect([...host.querySelectorAll("[data-usage-provisional]")].some((value) => value.textContent === "9")).toBe(true);
     expect(host.querySelector<HTMLDetailsElement>("[data-usage-daily]")?.open).toBe(false);
     expect(text()).toContain("4,000");
     const firstCard = host.querySelector<HTMLElement>("section")!;
@@ -616,14 +616,15 @@ describe("local Usage panel", () => {
       ...trend.slice(3),
     ] });
     const bars = [...host.querySelectorAll<HTMLButtonElement>('[data-usage-trend="prs"] [data-usage-day]')];
-    expect(bars[0]!.getAttribute("aria-label")).toContain("0 observed");
+    expect(bars[0]!.getAttribute("aria-label")).toContain("PRs 0");
+    expect(bars[0]!.getAttribute("aria-label")).not.toContain("observed");
     expect(bars[1]!.querySelector('[data-usage-category="work"]')?.className).toContain("bg-accent/35");
     expect(bars[2]!.getAttribute("aria-label")).toContain("PRs 0");
     expect(bars[2]!.getAttribute("aria-label")).not.toContain("observed");
     await act(async () => bars[1]!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
     const tooltip = host.querySelector('[data-usage-trend="prs"] [role="tooltip"]')!;
-    expect(tooltip.textContent).toMatch(/2026-10-06.*PRs: 2 observed.*Enterprise: 2 observed.*Personal:/s);
-    expect(tooltip.textContent).not.toMatch(/Verified subtotal|incomplete/);
+    expect(tooltip.textContent).toMatch(/2026-10-06.*PRs: 2.*Enterprise: 2.*Personal:/s);
+    expect(tooltip.textContent).not.toMatch(/observed|Verified subtotal|incomplete/);
     expect(tooltip.querySelector("p, [title], [aria-description]")).toBeNull();
     await act(async () => bars[2]!.focus());
     expect(host.querySelector('[data-usage-trend="prs"] [role="tooltip"]')?.textContent).toContain("2026-10-07");
@@ -650,8 +651,11 @@ describe("local Usage panel", () => {
     snapshot.trend.at(-1)!.categories.work.knownCommits = 1;
     await renderRaw(snapshot);
     const card = host.querySelectorAll("section")[0]!;
-    expect(card.querySelectorAll("dd")[1]!.querySelector("[data-usage-provisional]")?.textContent).toBe("1 observed");
-    expect(card.querySelector('[data-usage-category-row="work"] [data-usage-provisional]')?.textContent).toBe("1 observed");
+    const count = card.querySelectorAll("dd")[1]!.querySelector("[data-usage-provisional]")!;
+    expect(count.textContent).toBe("1");
+    expect(count.getAttribute("title")).toContain("Missing sources or dates");
+    expect(count.getAttribute("aria-description")).toBe(count.getAttribute("title"));
+    expect(card.querySelector('[data-usage-category-row="work"] [data-usage-provisional]')?.textContent).toBe("1");
 
     current.commits = 1;
     current.knownCommits = 1;
@@ -683,7 +687,7 @@ describe("local Usage panel", () => {
     const snapshot = structuredClone(sample);
     await renderRaw({ ...snapshot, contributions: primaryUsageFixture("2026-11-03", true) });
     expect([...host.querySelectorAll("section")].slice(0, 3).map(card => card.querySelector("dd > span")?.textContent))
-      .toEqual(["1", "4 observed", "9 observed"]);
+      .toEqual(["1", "4", "9"]);
     for (const [index, period] of ["DoD", "WoW", "30d"].entries()) {
       const card = host.querySelectorAll("section")[index]!;
       expect(card.querySelector('[data-usage-category-row="work"] [data-usage-change]')?.getAttribute("title")).toContain(period);
@@ -692,7 +696,7 @@ describe("local Usage panel", () => {
     expect(host.querySelector('[data-usage-repositories] tbody [data-usage-change]')?.textContent).toContain("—");
     expect(host.querySelector('[data-usage-repositories] tbody tr')?.textContent).toContain("sample/team-repo");
     expect(snapshot.windows!["7"].prs).toBeNull();
-    expect(host.querySelectorAll("section")[1]?.querySelector("dd [data-usage-provisional]")?.textContent).toBe("4 observed");
+    expect(host.querySelectorAll("section")[1]?.querySelector("dd [data-usage-provisional]")?.textContent).toBe("4");
     setLocale("zh");
     await renderRaw(snapshot);
     for (const [index, period] of ["日环比", "周环比", "30 日环比"].entries()) {

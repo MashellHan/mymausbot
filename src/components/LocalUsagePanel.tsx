@@ -4,7 +4,7 @@ import { cn } from "@/lib/cn";
 import { localUsageView, retainUsageSnapshot, type UsageTrendDay, type UsageWindow } from "@/lib/local-usage-view";
 import { tokenTrendStacks, weeklyUsageTrend, type TokenTrendMode, type TokenTrendRow, type TokenTrendSeries, type UsageTrendBucket } from "@/lib/local-usage-trends";
 import { usageTrendRanges, type UsageTrendRange } from "../../shared/local-usage-range";
-import { compactMetricText, metricText, observedCountText, UsageCount, UsageChange, useUsageMetricHint, UsageSourceContext, usageMetrics as metrics, type UsageMetric as Metric } from "./LocalUsageValues";
+import { compactMetricText, metricText, UsageCount, UsageChange, useUsageMetricHint, UsageSourceContext, usageMetrics as metrics, type UsageMetric as Metric } from "./LocalUsageValues";
 import { UsageDailyTable, UsageRepositoryTable, shortUsagePeriods } from "./LocalUsageTables";
 import { CostAmount, UsageModelPanel } from "./LocalUsageModels";
 import { InfoHint } from "./InfoHint";
@@ -112,10 +112,6 @@ function WindowCard({ window }: { window: UsageWindow }) {
 
 function trendValue(day: UsageTrendDay, metric: Metric): number | null {
   return metric === "prs" ? day.prs ?? day.knownPrs : metric === "commits" ? day.commits ?? day.knownCommits : day.totalTokens;
-}
-
-function trendCountText(day: UsageTrendDay, metric: "prs" | "commits") {
-  return observedCountText(day[metric], metric === "prs" ? day.knownPrs : day.knownCommits);
 }
 
 const categoryOrder = ["work", "personal", "unclassified"] as const;
@@ -260,7 +256,7 @@ function TrendChart({ days, metric, weekly, range, tokenDays }: { days: UsageTre
         {days.map((day, index) => {
           const date = new Date(`${day.day}T00:00:00Z`);
           const value = values[index];
-          const label = (metric === "totalTokens" ? metricText(value) : trendCountText(day, metric))
+          const label = metricText(value)
             + `${(metric === "totalTokens" ? day.tokenStatus : day.coverage) === "partial" ? ` · ${t("computer.usage.coverage.partial")}` : ""}`;
           const segments = metric === "totalTokens" ? [] : categoryOrder.map((category) => ({
             category, value: categoryValue(day, metric, category) ?? 0,
@@ -362,11 +358,11 @@ function TrendChart({ days, metric, weekly, range, tokenDays }: { days: UsageTre
         </> : <>
           <div className="flex flex-wrap items-baseline justify-between gap-x-2 tabular-nums">
             <time dateTime={active.day} className="font-medium">{active.day}{weekly ? ` – ${active.endDay}` : ` · ${weekdayFormat.format(new Date(`${active.day}T00:00:00Z`))}`}</time>
-            <span>{t(`computer.usage.metric.${metric}`)}: {metric === "totalTokens" ? metricText(active.totalTokens) : trendCountText(active, metric)}</span>
+            <span>{t(`computer.usage.metric.${metric}`)}: {metricText(trendValue(active, metric))}</span>
           </div>
           {metric !== "totalTokens" && <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[12px] text-ink-secondary">
             {categoryOrder.filter((category) => category !== "unclassified" || showUnclassified).map((category) => <span key={category}>
-              {t(`computer.usage.category.${category}`)}: {observedCountText(active.categories[category][metric], metric === "prs" ? active.categories[category].knownPrs : active.categories[category].knownCommits)}
+              {t(`computer.usage.category.${category}`)}: {metricText(categoryValue(active, metric, category))}
             </span>)}
           </div>}
         </>}

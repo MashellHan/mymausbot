@@ -8,8 +8,6 @@ export const metricText = (value: number | null) => value === null ? t("computer
 export const compactMetricText = (value: number | null) => value !== null && value >= 1_000_000
   ? new Intl.NumberFormat(activeLocale(), { notation: "compact", maximumFractionDigits: 1 }).format(value) : metricText(value);
 export const countText = (value: number | null, known: number | null) => metricText(value ?? known);
-export const observedCountText = (value: number | null, known: number | null) => value === null && known !== null
-  ? t("computer.usage.observedCount", { count: metricText(known) }) : countText(value, known);
 export const UsageSourceContext = createContext<"primary" | "repositories" | "profile" | "merged">("primary");
 export function useUsageMetricHint() {
   const source = useContext(UsageSourceContext);
@@ -44,5 +42,5 @@ export function UsageCount({ value, known }: { value: number | null; known: numb
   const source = useContext(UsageSourceContext);
   const partial = value === null && known !== null;
   const description = partial ? t(source === "primary" ? "computer.usage.primaryKnownCountHint" : source === "profile" ? "computer.usage.syncedCountHint" : "computer.usage.observedCountHint") : undefined;
-  return <span data-usage-provisional={partial || undefined} title={description} aria-description={description}>{source === "repositories" ? observedCountText(value, known) : countText(value, known)}</span>;
+  return <span data-usage-provisional={partial || undefined} title={description} aria-description={description}>{countText(value, known)}</span>;
 }
