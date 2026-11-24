@@ -5,7 +5,7 @@ import {
 } from "./lib/session";
 import { pairedDestination } from "./lib/phone-pairing";
 import { bootstrapBrand, productName } from "./lib/brand";
-import { bootstrapPwaConfig, remoteFetch, type PwaPairingBootResult } from "./lib/pwa-config";
+import { bootstrapPwaConfig, isRemotePwaMode, remoteFetch, type PwaPairingBootResult } from "./lib/pwa-config";
 import { t } from "./lib/i18n";
 import { loadPageLanguage } from "./lib/language-preference";
 import { applySkinChoice, readSkinChoice } from "./lib/skins";
@@ -88,6 +88,10 @@ async function chooseRoot(
     if (session.error === TEAM_LEFT_REFUSAL) return <TeamLeftPage team={await teamName()} />;
     const pair = <PairPage initialCode={null} reason={endedBeforeReload() ? t("pair.sessionEnded") : session.error} />;
     return home ? <SignedOutAtHome bridge={home} fallback={pair} /> : pair;
+  }
+  if (session.kind === "unreachable" && !home && !isRemotePwaMode() && session.error === "Invalid session response") {
+    await pageLanguage;
+    return <PairPage initialCode={null} reason={endedBeforeReload() ? t("pair.sessionEnded") : undefined} />;
   }
   forgetEndedSession();
   if (session.kind === "session") rememberTeamSignIn(session.teamSignIn);

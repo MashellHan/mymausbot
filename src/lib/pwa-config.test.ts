@@ -385,4 +385,69 @@ describe("pwa pairing lifecycle, IndexedDB persistence, and authenticated fetch"
     expect(getPwaAuth()?.token).toBe("tok-mem-1");
     expect(isRemotePwaMode()).toBe(true);
   });
+
+  it("persists and restores PWA auth via localStorage backup when IndexedDB is unavailable across restart", async () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => { store.set(k, v); },
+      removeItem: (k: string) => { store.delete(k); },
+    });
+    vi.stubGlobal("indexedDB", {
+      open() {
+        throw new DOMException("Storage disabled", "SecurityError");
+      },
+    });
+    const credential = `omb_pair_${"f".repeat(43)}`;
+    const encoded = encodeBase64Url({
+      relayUrl: "https://relay.mxhan.com",
+      credential,
+    });
+    vi.stubGlobal("location", {
+      origin: "https://mausbot.mxhan.com",
+      pathname: "/",
+      search: "",
+      hash: `#pair=${encoded}`,
+    });
+    vi.stubGlobal("history", { replaceState: vi.fn() });
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/pair")) {
+        return new Response(JSON.stringify({ token: "tok-ls-1", device: { id: "dev-ls1" }, serverName: "Mac" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/auth/session")) {
+        return new Response(
+          JSON.stringify({ kind: "session", id: "sess-ls1", environmentId: "env-ls1", scopes: ["client"] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({ environmentId: "env-ls1", label: "Mac" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+
+    const boot1 = await bootstrapPwaConfig({ fetchImpl: fetchMock });
+    expect(boot1.status).toBe("paired");
+    expect(store.has("omb.pwa.auth.v1")).toBe(true);
+
+    // Simulate full browser restart: reset in-memory state and clear #pair= from location.
+    resetPwaConfigForTests();
+    vi.stubGlobal("location", {
+      origin: "https://mausbot.mxhan.com",
+      pathname: "/",
+      search: "",
+      hash: "",
+    });
+    const boot2 = await bootstrapPwaConfig({ fetchImpl: fetchMock });
+    expect(boot2.status).toBe("existing");
+    expect(getPwaAuth()?.token).toBe("tok-ls-1");
+    expect(isRemotePwaMode()).toBe(true);
+
+    await clearPwaAuth();
+    expect(store.has("omb.pwa.auth.v1")).toBe(false);
+  });
 });
