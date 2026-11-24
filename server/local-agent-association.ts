@@ -71,15 +71,21 @@ async function registeredWorktrees(root: string, candidates: string[]): Promise<
   const matched = new Set<string>();
   if (!candidates.length || candidates.length > 20 || root !== resolve(root)) return matched;
   try { if (await realpath(root) !== root) return matched; } catch { return matched; }
-  const identity = await gitIdentity(root);
-  const listed = await gitOutput(root, ["worktree", "list", "--porcelain", "-z"]);
+  const [identity, listed] = await Promise.all([
+    gitIdentity(root),
+    gitOutput(root, ["worktree", "list", "--porcelain", "-z"]),
+  ]);
   if (!identity || !listed) return matched;
   const registered = new Set(listed.split("\0").filter((line) => line.startsWith("worktree ")).map((line) => line.slice(9)));
   if (!registered.has(root)) return matched;
-  for (const candidate of candidates) {
-    if (candidate === root || candidate !== resolve(candidate) || !registered.has(candidate)) continue;
-    try { if (await realpath(candidate) !== candidate) continue; } catch { continue; }
-    if ((await gitIdentity(candidate))?.common === identity.common) matched.add(candidate);
+  const canonical = await Promise.all(candidates.filter((candidate) => candidate !== root &&
+    candidate === resolve(candidate) && registered.has(candidate)).map(async (candidate) =>
+    await realpath(candidate).catch(() => null) === candidate ? candidate : null));
+  const candidateIdentities = await Promise.all(canonical.filter((candidate) => candidate !== null).map(async (candidate) => ({
+    candidate, identity: await gitIdentity(candidate),
+  })));
+  for (const entry of candidateIdentities) {
+    if (entry.identity?.common === identity.common) matched.add(entry.candidate);
   }
   return matched;
 }
