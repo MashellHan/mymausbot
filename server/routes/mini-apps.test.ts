@@ -87,6 +87,58 @@ it("keeps app-scoped dashboard reads behind the existing local owner gate", asyn
     "11111111-1111-4111-8111-111111111111", { resource: "teams", expectedRevision: 1 });
 });
 
+it("keeps Agent MD writes bound to the local owner and current granted app revision", async () => {
+  const id = "11111111-1111-4111-8111-111111111111";
+  const path = `/api/mini-apps/${id}/agent-md`;
+  const selection = { agentId: "w6:p1", occupantId: "o1234567890abcdef", expectedRevision: 3 };
+  const draft = { ...selection, documentId: "a".repeat(64), expectedHash: "b".repeat(64), text: "# Next rules" };
+  const doc = { text: "# Original", hash: draft.expectedHash, documentId: draft.documentId };
+  let revision = 3;
+  let resources = ["configuration"];
+  const document = () => ({ app: { revision, status: "active", dashboardIdentity: "agent-team",
+    release: { packageId: "mashellhan.agent-team" },
+    dashboard: { kind: "agent-team", renderer: "html", resources } } });
+  const getRoleDocument = vi.fn(async () => doc);
+  const saveRoleDocument = vi.fn(async (_input, guard: () => void) => {
+    guard();
+    return { status: "conflict", doc };
+  });
+  const route = createMiniAppRoutes({ localEnabled: () => true, apps: { document },
+    roleConfiguration: { getRoleDocument, saveRoleDocument } } as unknown as Parameters<typeof createMiniAppRoutes>[0]);
+  const json = vi.fn();
+  const owner: RequestAuth = { kind: "loopback", scopes: ["admin"] };
+  const call = (method: string, body: unknown, auth = owner) => {
+    const req = new IncomingMessage(new Socket());
+    Object.defineProperty(req.socket, "remoteAddress", { value: "127.0.0.1" });
+    return route({ path, method, url: new URL(`http://127.0.0.1${path}`), req, res: new ServerResponse(req),
+      auth, json, readBody: async () => body });
+  };
+  await call("PUT", draft, { ...owner, trust: "service" });
+  expect(json.mock.lastCall?.[1]).toBe(403);
+  await call("PUT", { ...draft, path: "/tmp/private.md" });
+  expect(json.mock.lastCall?.[1]).toBe(400);
+  resources = ["teams", "activity"];
+  await call("PUT", draft);
+  expect(json.mock.lastCall?.[1]).toBe(403);
+  resources = ["configuration"];
+  revision = 4;
+  await call("PUT", draft);
+  expect(json.mock.lastCall?.[1]).toBe(409);
+  expect(saveRoleDocument).not.toHaveBeenCalled();
+  revision = 3;
+  await call("POST", selection);
+  expect(json.mock.lastCall?.slice(1)).toEqual([200, doc]);
+  await call("PUT", draft);
+  expect(json.mock.lastCall?.slice(1)).toEqual([409, expect.objectContaining({ code: "conflict", current: doc.text, currentHash: doc.hash })]);
+  saveRoleDocument.mockImplementationOnce(async (_input, guard) => {
+    revision++;
+    guard();
+    throw new Error("A stale app reached a write");
+  });
+  await call("PUT", draft);
+  expect(json.mock.lastCall?.slice(1)).toEqual([409, { error: "This Mini App changed. Reopen Agent MD." }]);
+});
+
 it("routes only the canonical completed Hongguo media query to the scoped token", async () => {
   const id = "11111111-1111-4111-8111-111111111111";
   const path = `/api/mini-apps/${id}/hongguo/media/token`;

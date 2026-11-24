@@ -4,11 +4,14 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import type { LocalAgentConfigurationDocument, LocalAgentConfigurationResponse, LocalAgentConfigurationSkill,
+  LocalAgentRoleDocumentTarget, LocalAgentRoleDocumentWrite, LocalAgentRoleSaveResult,
   LocalAgentSkillDocumentResponse, LocalAgentTeamRulesResponse } from "../shared/local-dashboard.ts";
 import { herdrRows, runHerdr, type HerdrRunner } from "./local-agent-teams.ts";
 import { localAgentOccupantId } from "./local-agent-occupant.ts";
 import { discoverCodexSkills, type CodexSkillDiscovery } from "./local-agent-skill-discovery.ts";
-import { inside, memberRole, readDocument, teamSource, verifiedLocalAgentMembers, type TeamSource } from "./local-agent-association.ts";
+import { inside, memberRole, readDocument, teamRoleRoster, teamSource, verifiedLocalAgentMembers, type TeamSource } from "./local-agent-association.ts";
+import { getLocalAgentRoleDocument, roleFrontMatter, saveLocalAgentRoleDocument,
+  type LocalAgentRoleSource, type RoleFileExchange } from "./local-agent-role-document.ts";
 
 const PANE_ID = /^w\d+:p[0-9A-Za-z]+$/;
 const TEAM_ID = /^w\d+$/;
@@ -29,24 +32,28 @@ async function liveRows(run: HerdrRunner): Promise<LiveRows | null> {
   } catch { return null; }
 }
 
-async function agentDocument(source: TeamSource, role: { label: string; file: string | null } | null): Promise<LocalAgentConfigurationDocument> {
-  if (!role) return empty("unverified");
-  if (role.file) return readDocument(source.root, join(dirname(source.playbook), role.file));
+async function agentDocument(source: TeamSource, role: { label: string; file: string | null } | null): Promise<{ doc: LocalAgentConfigurationDocument; file?: string }> {
+  if (!role) return { doc: empty("unverified") };
+  if (role.file) {
+    const file = join(dirname(source.playbook), role.file);
+    return { doc: await readDocument(source.root, file), file };
+  }
   let names: string[];
   try {
-    if (!inside(await realpath(source.root), await realpath(source.roles))) return empty("error");
+    if (!inside(await realpath(source.root), await realpath(source.roles))) return { doc: empty("error") };
     names = (await readdir(source.roles)).filter((name) => /^[a-z][a-z0-9-]*\.md$/.test(name));
-    if (names.length > 40) return empty("error");
+    if (names.length > 40) return { doc: empty("error") };
   }
-  catch { return empty("error"); }
-  const matches: LocalAgentConfigurationDocument[] = [];
+  catch { return { doc: empty("error") }; }
+  const matches: Array<{ doc: LocalAgentConfigurationDocument; file: string }> = [];
   for (const name of names) {
-    const doc = await readDocument(source.root, join(source.roles, name));
-    if (doc.status === "error") return doc;
+    const file = join(source.roles, name);
+    const doc = await readDocument(source.root, file);
+    if (doc.status === "error") return { doc };
     const declaredName = /^name:\s*(.+)$/m.exec(doc.markdown ?? "")?.[1]?.toLowerCase();
-    if (declaredName && declaredName.includes(role.label.toLowerCase())) matches.push(doc);
+    if (declaredName && declaredName.includes(role.label.toLowerCase())) matches.push({ doc, file });
   }
-  return matches.length === 1 ? matches[0]! : empty("unverified");
+  return matches.length === 1 ? matches[0]! : { doc: empty("unverified") };
 }
 
 function skillPaths(markdown: string): string[] {
@@ -94,8 +101,9 @@ async function readSkill(home: string, cwd: string, path: string): Promise<Local
   return readDocument(allowed.root, path);
 }
 
-export function createLocalAgentConfigurationProvider({ run = runHerdr, home = homedir(), discoverSkills = discoverCodexSkills }: {
+export function createLocalAgentConfigurationProvider({ run = runHerdr, home = homedir(), discoverSkills = discoverCodexSkills, roleFileExchange }: {
   run?: HerdrRunner; home?: string; discoverSkills?: (cwd: string) => Promise<CodexSkillDiscovery>;
+  roleFileExchange?: RoleFileExchange;
 } = {}) {
   async function context(teamId: string, agentId?: string) {
     const live = await liveRows(run);
@@ -106,7 +114,57 @@ export function createLocalAgentConfigurationProvider({ run = runHerdr, home = h
     const selected = await teamSource(agents, teamId, home);
     const playbook = selected.source ? await readDocument(selected.source.root, selected.source.playbook)
       : empty(selected.error ? "error" : "unverified");
-    return { source: selected.source, playbook, member: member[0] ?? null };
+    return { source: selected.source, sourceError: selected.error, playbook, member: member[0] ?? null,
+      team: agents.filter((agent) => agent.workspace_id === teamId) };
+  }
+
+  async function roleSource(target: LocalAgentRoleDocumentTarget): Promise<LocalAgentRoleSource | null> {
+    const { agentId, occupantId } = target;
+    if (!PANE_ID.test(agentId) || !/^o[0-9a-f]{16}$/.test(occupantId)) return null;
+    const found = await context(agentId.split(":")[0]!, agentId);
+    if (!found?.source || found.sourceError || !found.member || found.playbook.status !== "ready"
+        || localAgentOccupantId(found.member, agentId) !== occupantId) return null;
+    const { source, playbook, member } = found;
+    const readme = dirname(source.playbook) === source.root ? await readDocument(source.root, join(source.root, "README.md")) : empty("unverified");
+    if (readme.status === "error") return null;
+    const roster = teamRoleRoster(playbook, readme, true);
+    const resolved = new Map<string, ReturnType<typeof resolveRole>>();
+    async function resolveRole(role: NonNullable<ReturnType<typeof memberRole>>) {
+      const { doc, file } = await agentDocument(source, role);
+      if (doc.status !== "ready" || !file) return null;
+      if (!role.file) {
+        const frontMatter = roleFrontMatter(doc.markdown ?? "");
+        const name = /^name:[ \t]*(.+?)\s*$/m.exec(frontMatter ?? "")?.[1]?.toLowerCase();
+        if (name !== role.label.toLowerCase()) return null;
+      }
+      return file;
+    }
+    const binding = (agent: Record<string, unknown>) => {
+      const role = memberRole(source, agent, roster);
+      if (!role) return Promise.resolve(null);
+      const key = role.file ?? role.label.toLowerCase();
+      let file = resolved.get(key);
+      if (!file) { file = resolveRole(role); resolved.set(key, file); }
+      return file;
+    };
+    const file = await binding(member);
+    if (!file) return null;
+    const names = await Promise.all(found.team.map(async (agent) => await binding(agent) === file && typeof agent.name === "string" ? agent.name : null));
+    const memberNames = names.filter((name): name is string => name !== null).sort();
+    const current = await liveRows(run);
+    const stillBound = current && current.workspaces.filter(({ workspace_id }) => workspace_id === member.workspace_id).length === 1
+      && verifiedLocalAgentMembers(current.agents).some((agent) => agent.pane_id === agentId && agent.cwd === member.cwd
+        && agent.name === member.name && localAgentOccupantId(agent, agentId) === occupantId);
+    if (!stillBound) return null;
+    const sources = [[source.playbook, playbook] as const];
+    if (dirname(source.playbook) === source.root) sources.push([join(source.root, "README.md"), readme]);
+    if (source.sessionDocument) sources.push([join(source.root, "session.json"), source.sessionDocument]);
+    for (const [path, before] of sources) {
+      const after = await readDocument(source.root, path);
+      if (before.status !== after.status || before.markdown !== after.markdown) return null;
+    }
+    return { root: source.root, roles: source.roles, file, agentName: String(member.name),
+      memberNames, runtime: String(member.agent) };
   }
 
   async function memberConfiguration(agentId: string) {
@@ -126,8 +184,8 @@ export function createLocalAgentConfigurationProvider({ run = runHerdr, home = h
     const readme = found.source && dirname(found.source.playbook) === found.source.root
       ? await readDocument(found.source.root, join(found.source.root, "README.md")) : empty("unverified");
     const roleFile = found.source?.roleFiles?.get(agentId);
-    const role = found.source ? memberRole(found.source, found.member, found.playbook, readme) : null;
-    const agent = found.source ? await agentDocument(found.source, role) : empty(found.playbook.status);
+    const role = found.source ? memberRole(found.source, found.member, teamRoleRoster(found.playbook, readme)) : null;
+    const agent = found.source ? (await agentDocument(found.source, role)).doc : empty(found.playbook.status);
     const references = found.source && (!found.source.roleFiles || roleFile)
       ? skillReferences(role, agent, found.playbook, home) : [];
     const combined = new Map(references.map((reference) => [reference.path, reference]));
@@ -152,6 +210,16 @@ export function createLocalAgentConfigurationProvider({ run = runHerdr, home = h
   }
 
   return {
+    async getRoleDocument(target: LocalAgentRoleDocumentTarget) {
+      const source = await roleSource(target);
+      return source && getLocalAgentRoleDocument(source);
+    },
+    async saveRoleDocument(input: LocalAgentRoleDocumentWrite, assertCurrent: () => void): Promise<LocalAgentRoleSaveResult> {
+      const source = await roleSource(input);
+      if (!source) return { status: "unavailable" };
+      assertCurrent();
+      return saveLocalAgentRoleDocument(source, input, roleFileExchange);
+    },
     async getAgent(agentId: string): Promise<LocalAgentConfigurationResponse> {
       return (await memberConfiguration(agentId)).response;
     },

@@ -15,6 +15,7 @@ import { MINI_APP_TOOL_ROUTES } from "../drivers/agents-mini-app-tools.ts";
 import { MiniApps, MINI_APPS_OWNER, miniAppDocRefs, type MiniAppActor } from "../mini-apps/registry.ts";
 import type { MiniAppReleaseSource } from "../mini-apps/release-source.ts";
 import { appFailure, parsePublish } from "../mini-apps/validation.ts";
+import { agentRoleEdit } from "../mini-apps/agent-role-edit.ts";
 import { MINI_APP_AUTHOR_GUIDE } from "../mini-apps/author-guide.ts";
 import { ReportStore } from "../mini-apps/report-store.ts";
 import { DefaultMiniApps } from "../mini-apps/defaults.ts";
@@ -34,7 +35,7 @@ import { PASS, type RouteHandler } from "./table.ts";
 
 const ROOT = "/api/mini-apps";
 const REPORT_SOURCE = `${ROOT}/report-source`;
-const APP_PATH = /^\/api\/mini-apps\/([0-9a-f-]{36})(?:\/(state|query|dashboard|publish|rollback|archive|update))?$/;
+const APP_PATH = /^\/api\/mini-apps\/([0-9a-f-]{36})(?:\/(state|query|dashboard|publish|rollback|archive|update|agent-md))?$/;
 const HONGGUO_ACTION = /^\/api\/mini-apps\/([0-9a-f-]{36})\/hongguo\/(catalog|series|playback|history|preferences)$/;
 const HONGGUO_MEDIA = /^\/api\/mini-apps\/([0-9a-f-]{36})\/hongguo\/media\/([A-Za-z0-9_-]{1,256})$/;
 const HONGGUO_COVER = /^\/api\/mini-apps\/([0-9a-f-]{36})\/hongguo\/cover$/;
@@ -55,6 +56,7 @@ interface MiniAppRouteDeps {
   bots(): Array<{ id: string; name: string; toolScope?: unknown }>;
   suggestions?: MiniAppSuggestions;
   hongguoProvider?: HongguoProvider;
+  roleConfiguration?: LocalDashboardProviders["configuration"];
 }
 
 export function createMiniAppRouteHandlers(input: Omit<MiniAppRouteDeps, "apps" | "reports"> & {
@@ -72,7 +74,7 @@ export function createMiniAppRouteHandlers(input: Omit<MiniAppRouteDeps, "apps" 
   const apps = new MiniApps({ docs: chatApps.docs, data: shared.data, validPublisher,
     dashboardProviders: dashboardProviders ?? localDashboardProviders, releaseSource });
   apps.initialize();
-  const deps = { ...shared, apps, suggestions: new MiniAppSuggestions({ apps, store,
+  const deps = { ...shared, apps, roleConfiguration: (dashboardProviders ?? localDashboardProviders).configuration, suggestions: new MiniAppSuggestions({ apps, store,
     writer: suggestionWriter ?? (() => null) }), reports: new ReportStore(shared.data, createReportTemplate) };
   return { chatApps, owner: createMiniAppRoutes(deps), internal: createMiniAppsInternalRoutes(deps),
     reportAppsForBot: (botId: string) => reportAppsForBot(deps, botId) };
@@ -320,6 +322,7 @@ export function createMiniAppRoutes(deps: MiniAppRouteDeps): RouteHandler {
       if (!match) throw appFailure(404, "Mini App route not found.");
       const id = match[1]!;
       const action = match[2];
+      if (action === "agent-md") return await agentRoleEdit(ctx, id, owner, deps.apps, deps.roleConfiguration);
       if (method === "GET" && !action) return json(res, 200, deps.apps.document(owner, id));
       if (method === "GET" && action === "state") return json(res, 200, await deps.apps.state(owner, id));
       if (method === "GET" && action === "update") {

@@ -57,7 +57,7 @@ describe("declared roles across registered project worktrees", () => {
     ]);
     expect(data.upstream.cwd).toBe(data.worktree);
     expect(run.mock.calls.map(([args]) => args.join(" ")).sort()).toEqual([
-      "--session default agent list", "--session default workspace list",
+      "--session default agent list", "--session default agent list", "--session default workspace list",
     ]);
   });
 

@@ -1,6 +1,7 @@
 import { join } from "node:path";
 
 import type { LocalAgentActivityHistoryRequest, LocalAgentActivityResponse, LocalAgentConfigurationResponse,
+  LocalAgentRoleDocument, LocalAgentRoleDocumentTarget, LocalAgentRoleDocumentWrite, LocalAgentRoleSaveResult,
   LocalAgentSkillDocumentResponse, LocalAgentTeamRulesResponse, LocalAgentTeamsResponse, LocalUsageResponse } from "../../shared/local-dashboard.ts";
 import { DATA_DIR } from "../config.ts";
 import { createLocalAgentActivityProvider } from "../local-agent-activity.ts";
@@ -14,6 +15,8 @@ export interface LocalDashboardProviders {
   activity: { get(agentId: string, history?: LocalAgentActivityHistoryRequest): Promise<LocalAgentActivityResponse> };
   configuration: {
     getAgent(agentId: string): Promise<LocalAgentConfigurationResponse>;
+    getRoleDocument?(target: LocalAgentRoleDocumentTarget): Promise<LocalAgentRoleDocument | null>;
+    saveRoleDocument?(input: LocalAgentRoleDocumentWrite, assertCurrent: () => void): Promise<LocalAgentRoleSaveResult>;
     getSkill(agentId: string, skillId: string): Promise<LocalAgentSkillDocumentResponse>;
     getTeamRules(teamId: string): Promise<LocalAgentTeamRulesResponse>;
   };
