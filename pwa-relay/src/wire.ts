@@ -24,6 +24,7 @@ export type BridgeFrame =
 
 const STREAM_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const B64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
+const FORBIDDEN_HEADER_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 export function sha256Hex(value: string): Buffer {
   return createHash("sha256").update(value, "utf8").digest();
@@ -42,10 +43,10 @@ export function decodeBase64Chunk(text: unknown, maxDecodedBytes: number): Buffe
 
 function sanitizeHeaders(raw: unknown, strictRequestCheck: boolean): HeaderMap | undefined {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
-  const out: HeaderMap = {};
+  const out = Object.create(null) as HeaderMap;
   for (const [k, v] of Object.entries(raw)) {
     const key = k.toLowerCase();
-    if (!key) return undefined;
+    if (!key || FORBIDDEN_HEADER_KEYS.has(key)) return undefined;
     if (strictRequestCheck && /[\r\n:]/.test(key)) return undefined;
     if (typeof v === "string") {
       if (strictRequestCheck && /[\r\n]/.test(v)) return undefined;

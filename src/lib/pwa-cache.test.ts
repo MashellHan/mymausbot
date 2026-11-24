@@ -467,5 +467,29 @@ describe("pwa-cache", () => {
     const coldNav = await coldNavPromise;
     expect(coldNav.redirected).toBe(false);
     expect(await coldNav.text()).toBe("<html>/legacy/</html>");
+
+    // Non-HTML navigation response must not overwrite cached "/", and uppercase /API/ paths are bypassed by isApiOrDynamicPath.
+    cacheEntries.get("omb-pwa-shell-v4")!.delete("/");
+    const nonHtmlRes = new Response("{\"not\":\"html\"}", { status: 200, headers: { "content-type": "application/json" } });
+    Object.defineProperty(nonHtmlRes, "type", { value: "basic" });
+    Object.defineProperty(nonHtmlRes, "redirected", { value: false });
+    mockFetch.mockResolvedValueOnce(nonHtmlRes);
+    let nonHtmlNavPromise!: Promise<Response>;
+    listeners.get("fetch")!({
+      request: { method: "GET", mode: "navigate", url: "https://mausbot.mxhan.com/non-html" },
+      respondWith: (p: Promise<Response>) => { nonHtmlNavPromise = p; },
+      waitUntil: () => {},
+    });
+    const nonHtmlNav = await nonHtmlNavPromise;
+    expect(await nonHtmlNav.text()).toBe("{\"not\":\"html\"}");
+    expect(cacheEntries.get("omb-pwa-shell-v4")!.has("/")).toBe(false);
+
+    let apiHandled = false;
+    listeners.get("fetch")!({
+      request: { method: "GET", mode: "cors", url: "https://mausbot.mxhan.com/API/bots" },
+      respondWith: () => { apiHandled = true; },
+      waitUntil: () => {},
+    });
+    expect(apiHandled).toBe(false);
   });
 });

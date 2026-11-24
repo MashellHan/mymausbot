@@ -51,6 +51,7 @@ export type PwaPairingBootResult =
   | { status: "none" }
   | { status: "existing"; auth: PwaAuthRecord }
   | { status: "paired"; auth: PwaAuthRecord }
+  | { status: "confirm"; existing: PwaAuthRecord; payload: PwaPairingPayload }
   | { status: "failed"; error: string };
 
 export interface RelayValidationOptions {
@@ -350,6 +351,7 @@ function isValidStoredAuth(value: unknown): value is PwaAuthRecord {
     r.ownerKey.length > 0 &&
     typeof r.relayUrl === "string" &&
     r.relayUrl.length > 0 &&
+    validateRelayUrl(r.relayUrl).ok &&
     typeof r.token === "string" &&
     r.token.length > 0 &&
     typeof r.deviceId === "string" &&
@@ -662,6 +664,9 @@ export async function bootstrapPwaConfig(options: ActivatePairingOptions = {}): 
     if (!parsedPair.ok) {
       return { status: "failed", error: parsedPair.error };
     }
+    if (existing) {
+      return { status: "confirm", existing, payload: parsedPair.payload };
+    }
     const activated = await activatePwaPairing(parsedPair.payload, options);
     if (!activated.ok) {
       return { status: "failed", error: activated.error };
@@ -698,6 +703,12 @@ function setCachedMediaBlob(cacheKey: string, blobUrl: string): void {
   }
 }
 
+function isAllowedMediaMime(raw: string | null | undefined): boolean {
+  const mime = (raw ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
+  if (!mime || mime === "image/svg+xml") return false;
+  return mime.startsWith("image/") || mime.startsWith("audio/") || mime.startsWith("video/");
+}
+
 export function resolveRemoteMediaUrl(src: string, fetchImpl: typeof fetch = fetch): Promise<string> {
   const auth = getPwaAuth();
   if (!auth || !isRelayMediaPath(src)) return Promise.resolve(src);
@@ -717,7 +728,14 @@ export function resolveRemoteMediaUrl(src: string, fetchImpl: typeof fetch = fet
       if (!res.ok) {
         throw new Error(`Media load failed (${res.status})`);
       }
+      const headerMime = res.headers.get("content-type");
+      if (headerMime !== null && !isAllowedMediaMime(headerMime)) {
+        throw new Error(`Unsupported media type (${headerMime || "unknown"})`);
+      }
       const blob = await res.blob();
+      if (!isAllowedMediaMime(headerMime ?? blob.type)) {
+        throw new Error(`Unsupported media type (${blob.type || "unknown"})`);
+      }
       const blobUrl = URL.createObjectURL(blob);
       if (getPwaAuth()?.ownerKey !== auth.ownerKey) {
         try {
@@ -756,7 +774,7 @@ export function clearCachedMediaBlob(src: string): void {
 export async function downloadRemoteUrl(url: string, filename: string, fetchImpl: typeof fetch = fetch): Promise<void> {
   const res = await remoteFetch(url, undefined, fetchImpl);
   if (!res.ok) throw new Error(`Download failed (${res.status})`);
-  const blob = await res.blob();
+  const blob = new Blob([await res.arrayBuffer()], { type: "application/octet-stream" });
   const objectUrl = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = objectUrl;

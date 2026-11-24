@@ -542,6 +542,7 @@ import {
   isLoopbackHost,
   isProxied,
   labelFromUserAgent,
+  rejectNonLoopbackPreGate,
   requestOrigin,
   requestSource,
   resolveLoopbackTrust,
@@ -12580,6 +12581,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // Two public routes come first; everything else needs the loopback owner or a paired session with the right scope.
     if (method === "GET" && !path.startsWith("/api/") && !path.startsWith("/.well-known/") && (moveFreeze.screen(path) ? (res.writeHead(302, { location: moveFreeze.screen(path)!, "cache-control": "no-store" }).end(), true) : serveStatic(res, path, STATIC_DIR))) return;
     if (method === "GET" && path === "/.well-known/openmausbot/environment") {
+      if (rejectNonLoopbackPreGate(req, res)) return;
       return json(res, 200, environmentDescriptor({ environmentId: ENVIRONMENT_ID, ...TEAM_LABEL, desktopManaged: DESKTOP_MANAGED, emailSignIn: !HOSTED_WORKSPACE && !CLOUD_HOME && emailSignIn.enabled(), sharedComputers: lendingEnabled(), cloudHome: Boolean(CLOUD_HOME), cloudTeam: CLOUD_TEAM !== null, ownHome: ownHome.takesMove() }));
     }
     const domainCheck = /^\/\.well-known\/openmausbot\/domain-check\/([a-f0-9]{64})$/.exec(path);
@@ -12592,11 +12594,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       environment: () => environmentDescriptor({ environmentId: ENVIRONMENT_ID, ...TEAM_LABEL, desktopManaged: DESKTOP_MANAGED, emailSignIn: true, sharedComputers: lendingEnabled() }) }, req, res, path, method)) return;
     if ((cloudSigned && await cloudSigned({ req, res, url, path, method })) || chatApps.serveFile(req, res, path, method)) return;
     if (method === "POST" && path === "/api/auth/pair") {
+      if (rejectNonLoopbackPreGate(req, res, true)) return;
       // JSON only: a cross-site HTML form cannot send this content type without a preflight, so no unused code is planted as a session.
       if (!/^application\/json\b/i.test(String(req.headers["content-type"] ?? ""))) {
         return json(res, 415, { error: "send the pairing code as JSON (content-type: application/json)", code: "pairing_bad_request" satisfies PairingErrorCode });
       }
-      const body = await readBody(req);
+      const body = await readBody(req, 8_192);
       const code = typeof body?.code === "string" ? body.code : "";
       const wantsCookie = body?.cookie === true;
       const label = typeof body?.label === "string" ? body.label : "";
@@ -12627,10 +12630,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     // The companion apps' pairing route: same window, lockout and single-use exchange as /api/auth/pair; redeeming the credential IS the sign-in.
     if (method === "POST" && path === "/api/pair") {
+      if (rejectNonLoopbackPreGate(req, res, true)) return;
       if (!/^application\/json\b/i.test(String(req.headers["content-type"] ?? ""))) {
         return json(res, 415, { error: "send the pairing credential as JSON (content-type: application/json)", code: "pairing_bad_request" satisfies PairingErrorCode });
       }
-      const body = await readBody(req);
+      const body = await readBody(req, 8_192);
       const credential = typeof body?.credential === "string" ? body.credential : typeof body?.code === "string" ? body.code : "";
       const label = typeof body?.deviceName === "string" ? body.deviceName : "";
       const attemptId = typeof body?.pairRequestId === "string" ? body.pairRequestId : undefined;
