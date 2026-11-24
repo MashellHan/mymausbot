@@ -88,7 +88,8 @@ export function AgentRoleEditor({ selection, onClose, onSaved }: {
       </p>}
       <MarkdownTextEditor key={doc.hash} file={doc.file} doc={doc} document showConflictCurrent maxBytes={LOCAL_AGENT_ROLE_DOCUMENT_MAX_BYTES}
         renderPreview={preview ? (draft) => <section aria-label={t("agentRoleEditor.preview")} tabIndex={0}
-          className="min-h-[280px] max-h-[50dvh] overflow-auto rounded-lg border border-hairline bg-inset p-3 focus-visible:outline-2 focus-visible:outline-accent">
+          className="min-h-[280px] max-h-[50dvh] overflow-auto rounded-lg border border-hairline bg-inset p-3 focus-visible:outline-2 focus-visible:outline-accent
+            [&_th]:text-start [&_:is(th,td)]:px-2 [&_:is(th,td)]:py-1 [&_tr]:border-b [&_tr]:border-hairline">
           <AgentDocumentMarkdown markdown={draft} />
         </section> : undefined}
         save={save} onDone={(result) => {
