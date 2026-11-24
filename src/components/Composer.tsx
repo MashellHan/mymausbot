@@ -2,7 +2,7 @@ import { directMessageSent, roomMessageSent } from "@/lib/product-events";
 import { TeamAudienceLabel } from "./TeamSideSwitch";
 import { useComposerDictation } from "@/lib/use-composer-dictation";
 import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
-import { Mic, Square, X } from "lucide-react";
+import { Mic, Paperclip, Square, X } from "lucide-react";
 import { sameFields, useStoreDispatch, useStoreSelector } from "@/state/store-select"; import { useStoreRef } from "@/state/store-ref"; import { sameDrawnBots } from "@/lib/drawn-bots";
 import { visibleMessages, currentTaskBot, type Bot, type Group, type Message } from "@/state/store";
 import { cn } from "@/lib/cn";
@@ -42,6 +42,8 @@ import { PointedChips } from "./app/PointedChips"; import { SetupRequestChip, se
 import { pointedElements, takePointedChips, tryPrependPointedChips } from "@/lib/pointed-chips";
 import { openPageFor } from "@/lib/open-page";
 import { splitTranscriptCitations, type CitationAttachment } from "@/lib/citations";
+import { PlaceChip } from "./PlaceChip";
+import { ApprovalModeSelector } from "./ApprovalModeSelector";
 import { approvalModeFor } from "../../shared/approval-mode";
 import { useOnCall } from "@/lib/call";
 import { isLiveCallRunning, useLiveMedia } from "@/lib/live-call-media";
@@ -69,7 +71,7 @@ import { composerPlaceholder, sendLabels, SIMPLE_COMPOSER, SIMPLE_CONTROL, slotC
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
 import { CallButton } from "./CallView";
 import { GroupCallButton } from "./GroupCallView";
-import { ComposerToolbar } from "./ComposerToolbar";
+import { ApprovalChip, ComposerFileInputs, ComposerPlusMenu, GoalToggle, TeachTaskButton } from "./ComposerPlusMenu";
 import { PhonePlus } from "./PhonePlus";
 import { useThreadApproval } from "./thread-approval";
 import { useStackedField, useTallPill } from "./composer-wrap";
@@ -96,8 +98,7 @@ import {
   type ComposerSlashCommand,
 } from "@/lib/composer-commands";
 import { useSlashSkills } from "@/lib/use-slash-skills";
-import { randomUuid } from "@/lib/random-uuid"; import { botSupportsImagesInComposer, isComposerLocked, isPwaOfflineDraftBlocked, prepareComposerSendPayload } from "@/lib/pwa-composer";
-import { isRemotePwaMode } from "@/lib/pwa-transport";
+import { randomUuid } from "@/lib/random-uuid"; import { botSupportsImagesInComposer, isComposerLocked, isPwaOfflineDraftBlocked, prepareComposerSendPayload } from "@/lib/pwa-composer"; import { isRemotePwaMode } from "@/lib/pwa-transport";
 
 type ComposerDraftSnapshot = ComposerSendSnapshot & { reply: Message | null };
 
@@ -479,6 +480,8 @@ export function Composer({
     const timeout = window.setTimeout(() => setSteering(false), 20_000);
     return () => window.clearTimeout(timeout);
   }, [busy, pendingCount, steering]);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const photoInput = useRef<HTMLInputElement>(null);
   const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
   const modeBot = group ? undefined : bot;
   const { choice: approvalChoice, dialogs: approvalDialogs } = useThreadApproval(modeBot);
@@ -621,12 +624,7 @@ export function Composer({
         dispatch({ type: "error", message: t("composer.error.clipboardImage") });
         return;
       }
-      const kept = imagesThatFit(
-        imageFiles,
-        imageSlotsLeft(attachments),
-        setAttachmentNotice,
-        isRemotePwaMode() ? Infinity : imageBytesLeft(attachments),
-      );
+      const kept = imagesThatFit(imageFiles, imageSlotsLeft(attachments), setAttachmentNotice, isRemotePwaMode() ? Infinity : imageBytesLeft(attachments));
       changeDraftAttachmentPending(draftId, true);
       void (async () => {
         try {
@@ -782,44 +780,57 @@ export function Composer({
           />
         <div ref={shellRef} data-tour="composer" data-look="composer" data-multiline={multiline ? "" : undefined} className={cn("@container/composer relative z-[1]", singleRow ? "flex items-end gap-2" : simpleDock ? cn(SIMPLE_COMPOSER, multiline ? "rounded-[18px]" : "rounded-[22px]") : cn("rounded-2xl px-2 py-1.5", ELEVATED_FLOAT))}>
         {singleRow && !locked && (
-          <PhonePlus
-            approval={approvalChoice && modeBot && { name: modeBot.name, choice: approvalChoice }}
-            callBotId={bot && !group ? bot.id : undefined}
-            place={modeBot && !remoteClient && advanced ? {
-              bot: modeBot,
-              task: composerTask,
-              disabled: Boolean(modeBot.busy),
-              onPin: (surface) => dispatch({ type: "updateTask", botId: modeBot.id, threadId: modeBot.threadId, patch: { surface } }),
-            } : undefined}
-          />
-        )}
-        <div className={singleRow ? cn("min-w-0 flex-1 rounded-[26px] px-3 py-1.5", ELEVATED_FLOAT) : "contents"}>
-        {replyToId && <ComposerReplyStrip message={availableReply} fallbackName={bot?.name} onClear={onClearReply} />}
-        <div data-composer-row className={cn("flex items-end", simpleDock ? "gap-1.5" : "gap-1", singleRow && "flex-wrap", !singleRow && !simpleDock && "@max-[30rem]/composer:flex-wrap", stacked && "flex-wrap")}>
-          {!locked && (
-            <ComposerToolbar
-              compact={simpleDock}
-              singleRow={singleRow}
-              advanced={advanced}
-              disabled={blocking}
-              attachmentPending={attachmentPending}
-              supportsImages={engineSupportsImages}
-              onPickFiles={(files) => { void pickFiles(files); }}
-              onTeach={canLearn ? teachTask : undefined}
+          <div className="flex shrink-0 items-center">
+            <PhonePlus
+              onAttach={() => fileInput.current?.click()}
+              onAttachPhoto={engineSupportsImages ? () => photoInput.current?.click() : undefined}
               goal={goal}
-              approvalChoice={approvalChoice}
-              showApprovalChip={Boolean(simpleDock && approvalChoice && profile && bot && approvalModeFor(bot) !== approvalModeFor(profile))}
+              teach={canLearn ? teachTask : undefined}
+              approval={approvalChoice && modeBot && { name: modeBot.name, choice: approvalChoice }}
+              callBotId={bot && !group ? bot.id : undefined}
               place={modeBot && !remoteClient && advanced ? {
                 bot: modeBot,
                 task: composerTask,
-                live: Boolean(modeBot.busy),
                 disabled: Boolean(modeBot.busy),
                 onPin: (surface) => dispatch({ type: "updateTask", botId: modeBot.id, threadId: modeBot.threadId, patch: { surface } }),
               } : undefined}
             />
+          </div>
+        )}
+        <div className={singleRow ? cn("min-w-0 flex-1 rounded-[26px] px-3 py-1.5", ELEVATED_FLOAT) : "contents"}>
+        {replyToId && <ComposerReplyStrip message={availableReply} fallbackName={bot?.name} onClear={onClearReply} />}
+        <div data-composer-row className={cn("flex items-end", simpleDock ? "gap-1.5" : "gap-1", !singleRow && !simpleDock && "@max-[30rem]/composer:flex-wrap", stacked && "flex-wrap")}>
+          <ComposerFileInputs fileInput={fileInput} photoInput={photoInput} onFiles={(files) => { void pickFiles(files); }} />
+          {!locked && !singleRow && (
+            <div className={cn("flex items-center gap-1", simpleDock ? "shrink-0" : "flex-wrap")}>
+              {simpleDock && <ComposerPlusMenu onAttach={() => fileInput.current?.click()} onAttachPhoto={engineSupportsImages ? () => photoInput.current?.click() : undefined} goal={goal} teach={canLearn ? teachTask : undefined} />}
+              {advanced && <button
+                type="button"
+                onClick={() => fileInput.current?.click()}
+                aria-label={t("composer.attach")}
+                title={t("composer.attach")}
+                className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-control hover:text-ink"
+              >
+                <Paperclip size={16} strokeWidth={1.75} absoluteStrokeWidth />
+              </button>}
+              {advanced && canLearn && <TeachTaskButton onClick={teachTask} />}
+              {/* Simple mode shows a mode's chip only while it is on, so a choice made in the + menu or the bot panel stays in view. */}
+              {goal && (advanced || goal.on) && <GoalToggle {...goal} compact={simpleDock} />}
+              {advanced && approvalChoice && <ApprovalModeSelector {...approvalChoice} />}
+              {simpleDock && approvalChoice && profile && bot && approvalModeFor(bot) !== approvalModeFor(profile) && <ApprovalChip choice={approvalChoice} />}
+              {modeBot && !remoteClient && advanced && (
+                <PlaceChip
+                  bot={modeBot}
+                  task={composerTask}
+                  live={Boolean(modeBot.busy)}
+                  disabled={Boolean(modeBot.busy)}
+                  onPin={(surface) => dispatch({ type: "updateTask", botId: modeBot.id, threadId: modeBot.threadId, patch: { surface } })}
+                />
+              )}
+            </div>
           )}
           <MentionTextarea
-          wrapperClassName={simpleDock ? undefined : cn(singleRow ? "order-first basis-full" : "@max-[30rem]/composer:order-first @max-[30rem]/composer:basis-full", stacked && "order-first basis-full")}
+          wrapperClassName={singleRow || simpleDock ? undefined : cn("@max-[30rem]/composer:order-first @max-[30rem]/composer:basis-full", stacked && "order-first basis-full")}
           inputRef={inputRef}
           peers={[...(group ? members ?? [] : bots.filter((member) => member.id !== bot?.id)), ...teammates.peers]}
           everyone={Boolean(group && !group.dm)}
@@ -918,7 +929,7 @@ export function Composer({
               simpleDock ? "min-h-7 px-0.5 py-1 text-[14px] leading-5" : "min-h-6 py-1 leading-6",
             )}
           />
-          <div data-composer-actions className={cn("flex items-center", simpleDock ? "gap-2" : "gap-1", singleRow ? "ml-auto" : !simpleDock && "@max-[30rem]/composer:ml-auto", stacked && "ml-auto")}>
+          <div data-composer-actions className={cn("flex items-center", simpleDock ? "gap-2" : "gap-1", !singleRow && !simpleDock && "@max-[30rem]/composer:ml-auto", stacked && "ml-auto")}>
           {(simpleDock ? stoppable : (busy || needsInputStop) && mayStop) && !locked && (
           <button
             onClick={interruptTurn}

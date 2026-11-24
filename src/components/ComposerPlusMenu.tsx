@@ -1,5 +1,5 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { AudioLines, Check, GraduationCap, ListChecks, Phone, Plus, Target } from "lucide-react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { AudioLines, Check, GraduationCap, Image as ImageIcon, ListChecks, Paperclip, Phone, Plus, Target, X } from "lucide-react";
 import { approvalModeFor } from "../../shared/approval-mode";
 import {
   approvalModeOptions,
@@ -25,46 +25,35 @@ import { nextMenuIndex, SidebarPopoverMenu, type SidebarMenuItem } from "./Sideb
 import type { ApprovalChoice } from "./thread-approval";
 import { SIMPLE_CONTROL } from "./composer-simple";
 
-/** Finish together: the room (or, `solo`, the one bot) keeps working until the goal is done. The control highlights when active. */
-export function GoalToggle({ on, onToggle, solo = false, compact = false, disabled = false }: {
-  on: boolean;
-  onToggle: () => void;
-  solo?: boolean;
-  compact?: boolean;
-  disabled?: boolean;
-}) {
+/** Finish together: the room (or, `solo`, the one bot) keeps working until the goal is done. The chip turns accent while it is on.
+ * `compact` is Simple mode's chip, shown only while the mode is on: its name and a × that turns it off. */
+export function GoalToggle({ on, onToggle, solo = false, compact = false }: { on: boolean; onToggle: () => void; solo?: boolean; compact?: boolean }) {
   if (compact) {
+    const off = t(solo ? "composer.goal.offSolo" : "composer.goal.off");
     return (
       <button
         type="button"
-        data-composer-goal
-        aria-pressed={on}
-        aria-label={t(solo ? "composer.goal.soloAria" : "composer.goal.aria")}
-        title={t(solo ? "composer.goal.soloTitle" : "composer.goal.title")}
-        disabled={disabled}
+        data-goal-chip
+        aria-label={off}
+        title={off}
         onClick={onToggle}
-        className={cn(
-          "flex shrink-0 items-center justify-center rounded-full transition-colors disabled:pointer-events-none disabled:opacity-40",
-          on
-            ? "size-7 bg-accent/15 text-accent ring-1 ring-inset ring-accent/35 hover:bg-accent/20"
-            : SIMPLE_CONTROL,
-        )}
+        className="flex h-7 items-center gap-1 whitespace-nowrap rounded-full border border-accent/35 bg-accent/10 px-2.5 text-[13px] text-accent transition-colors hover:bg-accent/15"
       >
-        <Target size={15} strokeWidth={1.75} absoluteStrokeWidth aria-hidden="true" />
+        {t(solo ? "composer.goal.soloAria" : "composer.goal.aria")}
+        <X size={12} aria-hidden="true" />
       </button>
     );
   }
   return (
     <button
       type="button"
-      data-composer-goal
       aria-pressed={on}
       aria-label={t(solo ? "composer.goal.soloAria" : "composer.goal.aria")}
       title={t(solo ? "composer.goal.soloTitle" : "composer.goal.title")}
-      disabled={disabled}
       onClick={onToggle}
       className={cn(
-        "flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border px-3 text-[13px] transition-colors disabled:pointer-events-none disabled:opacity-40",
+        "flex items-center gap-1.5 whitespace-nowrap rounded-full border text-[13px] transition-colors",
+        compact ? "h-7 px-2.5" : "h-8 px-3",
         on
           ? "border-accent/35 bg-accent/10 text-accent"
           : "border-hairline/20 bg-transparent text-ink-secondary hover:bg-raised hover:text-ink",
@@ -118,12 +107,12 @@ function approvalMenu(choice: ApprovalChoice, simple: boolean) {
   };
 }
 
-function approvalItem(name: string, choice: ApprovalChoice, simple: boolean, separatorBefore = false): SidebarMenuItem {
+function approvalItem(name: string, choice: ApprovalChoice, simple: boolean): SidebarMenuItem {
   const { current, note, items } = approvalMenu(choice, simple);
   const CurrentIcon = current.Icon;
   return {
     key: "approval",
-    separatorBefore,
+    separatorBefore: true,
     label: t("botSettings.simple.beforeActs", { name }),
     subtitle: current.label,
     note,
@@ -133,25 +122,18 @@ function approvalItem(name: string, choice: ApprovalChoice, simple: boolean, sep
   };
 }
 
-/** Starts a /learn draft in the field, where the composer offers /learn. */
-export function TeachTaskButton({ onClick, compact = false, disabled = false }: {
-  onClick: () => void;
-  compact?: boolean;
-  disabled?: boolean;
-}) {
+/** The thread's approval level as a small pill that opens its choices: in the Simple composer while it is not the
+ * default, and on the bot panel's Details. */
+export function TeachTaskButton({ onClick }: { onClick: () => void }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      disabled={disabled}
       aria-label={t("composer.teachTask")}
       title={t("composer.teachTask")}
-      className={cn(
-        "flex shrink-0 items-center justify-center rounded-full transition-colors disabled:pointer-events-none disabled:opacity-40",
-        compact ? SIMPLE_CONTROL : "size-8 text-ink-secondary hover:bg-control hover:text-ink",
-      )}
+      className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-control hover:text-ink"
     >
-      <GraduationCap size={compact ? 15 : 16} strokeWidth={1.75} absoluteStrokeWidth aria-hidden="true" />
+      <GraduationCap size={16} strokeWidth={1.75} absoluteStrokeWidth />
     </button>
   );
 }
@@ -181,16 +163,38 @@ export function ApprovalChip({ choice, quiet = false }: { choice: ApprovalChoice
   );
 }
 
+export function ComposerFileInputs({
+  fileInput,
+  photoInput,
+  onFiles,
+}: {
+  fileInput: RefObject<HTMLInputElement | null>;
+  photoInput: RefObject<HTMLInputElement | null>;
+  onFiles: (files: FileList | null) => void;
+}) {
+  return (
+    <>
+      <input ref={fileInput} type="file" multiple className="hidden" onChange={(e) => { onFiles(e.target.files); e.target.value = ""; }} />
+      <input ref={photoInput} type="file" accept="image/*" multiple data-image-input="" className="hidden" onChange={(e) => { onFiles(e.target.files); e.target.value = ""; }} />
+    </>
+  );
+}
+
 /**
- * Secondary overflow menu for narrow/phone composers: holds what a narrow composer has no room for on its bar
- * (where the bot works, the thread's approval level, and the call mode). Primary actions (attach, goal, teach)
- * render directly on the toolbar and never collapse here.
+ * The composer's round +: attach files, Work until done (Finish together in a group) and Teach a task. A phone's + also
+ * holds what its narrow composer has no room for: the thread's approval level, the call mode and where the bot works,
+ * each running the handler its Advanced button runs. With attaching the only choice, the + opens the file picker.
  */
-export function ComposerPlusMenu({ approval, callBotId, extraItems = [], circle = false }: {
+export function ComposerPlusMenu({ onAttach, onAttachPhoto, goal, teach, approval, callBotId, extraItems = [], circle = false }: {
+  onAttach: () => void;
+  onAttachPhoto?: () => void;
+  /** Starts a /learn draft in the field, where the composer offers /learn. */
+  teach?: () => void;
   /** Entries a phone composer moves here from its hidden buttons, such as where the bot works. */
   extraItems?: SidebarMenuItem[];
   /** The phone dock: a round button of its own beside the field, not a small chip inside it. */
   circle?: boolean;
+  goal?: { on: boolean; onToggle: () => void; solo?: boolean };
   approval?: { name: string; choice: ApprovalChoice };
   /** The bot whose call button the call mode starts, as that button's own mode menu did. */
   callBotId?: string;
@@ -207,16 +211,26 @@ export function ComposerPlusMenu({ approval, callBotId, extraItems = [], circle 
   const lineHeldElsewhere = callMode === "live" && liveLineHeldElsewhere(media, state.liveCall);
   const calling = callBotId !== undefined && (onCall === callBotId || isLiveCallRunning(media.phase) || lineHeldElsewhere);
   const simple = !useAdvancedMode();
-  const hasPreceding = extraItems.length > 0 || Boolean(approval);
   const items: SidebarMenuItem[] = [
+    ...(onAttachPhoto ? [{ key: "photo", label: t("composer.attachPhoto"), icon: <ImageIcon size={16} />, onSelect: onAttachPhoto } satisfies SidebarMenuItem] : []),
+    { key: "attach", label: t("composer.attachFiles"), icon: <Paperclip size={16} />, onSelect: onAttach },
+    ...(goal ? [{
+      key: "goal",
+      label: t(goal.solo ? "composer.goal.soloAria" : "composer.goal.aria"),
+      icon: <Target size={16} />,
+      active: goal.on,
+      trailing: goal.on ? check : undefined,
+      onSelect: goal.onToggle,
+    } satisfies SidebarMenuItem] : []),
+    ...(teach ? [{ key: "teach", label: t("composer.teachTask"), icon: <GraduationCap size={16} />, onSelect: teach } satisfies SidebarMenuItem] : []),
     ...extraItems,
-    ...(approval ? [approvalItem(approval.name, approval.choice, simple, extraItems.length > 0)] : []),
+    ...(approval ? [approvalItem(approval.name, approval.choice, simple)] : []),
     ...(callBotId === undefined ? [] : CALL_MODES.map((entry, index): SidebarMenuItem => {
       const unavailable = entry.id === "turns" ? turnsHelp : null;
       return {
         key: `call:${entry.id}`,
         heading: index === 0 ? t("call.mode.menu") : undefined,
-        separatorBefore: index === 0 && hasPreceding,
+        separatorBefore: index === 0,
         label: t(entry.label),
         // Only a reason it can't be used: the modes' long hints would make the + menu a page.
         note: unavailable ? `${unavailable.label}. ${unavailable.reason}` : undefined,
@@ -227,7 +241,6 @@ export function ComposerPlusMenu({ approval, callBotId, extraItems = [], circle 
       };
     })),
   ];
-  if (items.length === 0) return null;
   const trigger = (open: boolean) => circle ? (
     <span
       data-composer-plus
@@ -244,12 +257,19 @@ export function ComposerPlusMenu({ approval, callBotId, extraItems = [], circle 
       <Plus size={20} strokeWidth={1.75} absoluteStrokeWidth aria-hidden="true" />
     </span>
   );
+  if (!circle && items.length === 1) {
+    return (
+      <button type="button" onClick={onAttach} aria-label={t("composer.attachFiles")} title={t("composer.attachFiles")} className="flex shrink-0 rounded-full">
+        {trigger(false)}
+      </button>
+    );
+  }
   if (!circle) return <ComposerMenu items={items} renderTrigger={trigger} />;
   return (
     <SidebarPopoverMenu
       items={items}
-      ariaLabel={t("chat.more")}
-      triggerTitle={t("chat.more")}
+      ariaLabel={t("common.add")}
+      triggerTitle={t("common.add")}
       triggerClassName="flex shrink-0 rounded-full"
       renderTrigger={({ open }) => trigger(open)}
     />

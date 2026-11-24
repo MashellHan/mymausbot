@@ -4,7 +4,7 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IMAGE_MAX_BYTES } from "@/lib/composer-attachments";
-import { changeDraftAttachmentPending, restoreComposerDraft } from "@/lib/drafts";
+import { restoreComposerDraft } from "@/lib/drafts";
 import { t } from "@/lib/i18n";
 import { makePwaOwnerKey } from "@/lib/pwa-config";
 import { resetPwaCacheForTests } from "@/lib/pwa-cache";
@@ -230,16 +230,21 @@ describe("Stage 5-7 Composer offline drafting, receipt images, and PwaPinBotButt
     expect(pinButton!.getAttribute("aria-pressed")).toBe("false");
   });
 
-  it("unfolds attach, photo, teach and goal buttons in PWA composer with loading/disabled states preserved", () => {
+  it("keeps the chat input pill clean and places Attach photo and Attach files inside the + menu", () => {
     flushSync(() => root.render(createElement(Composer, { bot })));
-    const attach = container.querySelector<HTMLButtonElement>('button[aria-label="Attach files"]')!;
-    const photo = container.querySelector<HTMLButtonElement>('button[aria-label="Attach photo"]')!;
-    const goal = container.querySelector<HTMLButtonElement>('button[aria-label="Work until done"]')!;
-    expect(attach).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Attach files"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Attach photo"]')).toBeNull();
+
+    const plusBtn = container.querySelector<HTMLButtonElement>('button[aria-label="Add"]')!;
+    expect(plusBtn).not.toBeNull();
+    flushSync(() => plusBtn.click());
+
+    const photo = document.body.querySelector<HTMLButtonElement>('[role="menu"] [data-menu-key="photo"]')!;
+    const attach = document.body.querySelector<HTMLButtonElement>('[role="menu"] [data-menu-key="attach"]')!;
+    const goal = document.body.querySelector<HTMLButtonElement>('[role="menu"] [data-menu-key="goal"]')!;
     expect(photo).not.toBeNull();
-    expect(goal.getAttribute("aria-pressed")).toBe("false");
-    expect(attach.disabled).toBe(false);
-    expect(photo.disabled).toBe(false);
+    expect(attach).not.toBeNull();
+    expect(goal).not.toBeNull();
 
     const clicked: HTMLInputElement[] = [];
     vi.spyOn(HTMLInputElement.prototype, "click").mockImplementation(function (this: HTMLInputElement) {
@@ -248,12 +253,6 @@ describe("Stage 5-7 Composer offline drafting, receipt images, and PwaPinBotButt
     flushSync(() => photo.click());
     expect(clicked).toHaveLength(1);
     expect(clicked[0]!.accept).toBe("image/*");
-
-    flushSync(() => changeDraftAttachmentPending(draftId, true));
-    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Attach files"]')!.disabled).toBe(true);
-    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Attach photo"]')!.disabled).toBe(true);
-    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Attach photo"]')!.getAttribute("aria-busy")).toBe("true");
-    flushSync(() => changeDraftAttachmentPending(draftId, false));
   });
 
   it("compresses oversized online photos and HEIC images in PWA composer before uploading with Bearer auth", async () => {
