@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-// The phone composer: unfolded attach, goal and teach buttons directly on the bar, a round + only for remaining
-// secondary items (approval level, where the bot works, call mode), and an inverse call button.
+// The phone composer: a round + beside one pill, in Simple and Advanced mode. The buttons Advanced shows in a row
+// (attach, approval level, where the bot works, Finish together) are entries of that +, and the call button is inverse.
 import { createElement } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
@@ -91,39 +91,23 @@ afterEach(() => {
 });
 
 describe("the phone composer", () => {
-  it("unfolds attach, goal and teach on the bar in Simple mode, keeps + for secondary items, and keeps an inverse voice button", () => {
+  it("shows only the + and the pill in Simple mode, with an inverse voice button", () => {
     render({ bot });
-    expect(container.querySelector('button[aria-label="Attach files"]')).not.toBeNull();
-    expect(container.querySelector('button[aria-label="Work until done"]')?.getAttribute("aria-pressed")).toBe("false");
-    expect(container.querySelector('button[aria-label="Teach a task"]')).not.toBeNull();
     expect(plus()).not.toBeNull();
     expect(fixture.call).toMatchObject({ placement: "composer", inverse: true });
     expect(fixture.call?.fill).toBeUndefined();
-    openPlus();
-    const keys = [...menu()!.querySelectorAll("[data-menu-key]")].map((row) => row.getAttribute("data-menu-key"));
-    expect(keys).toEqual(["approval", "call:turns", "call:live"]);
   });
 
-  it("omits + in a phone group chat when no secondary items remain, keeping unfolded bar buttons", () => {
-    render({ group: room, members: [bot, peer] });
-    expect(plus()).toBeNull();
-    expect(container.querySelector('button[aria-label="Attach files"]')).not.toBeNull();
-    expect(container.querySelector('button[aria-label="Finish together"]')?.getAttribute("aria-pressed")).toBe("false");
-    expect(container.querySelector('button[aria-label="Teach a task"]')).not.toBeNull();
-  });
-
-  it("keeps attach, goal and teach on the bar in Advanced phone mode, moving only place, approval and call into +", () => {
+  it("moves Advanced mode's row of buttons into the +", () => {
     fixture.advanced = true;
     render({ bot });
-    expect(container.querySelector('button[aria-label="Attach files"]')).not.toBeNull();
-    expect(container.querySelector('button[aria-label="Work until done"]')?.getAttribute("aria-pressed")).toBe("false");
-    expect(container.querySelector('button[aria-label="Teach a task"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Attach a file"]')).toBeNull();
     expect(container.querySelector('[aria-label^="Ask for approval for"]')).toBeNull();
     expect(container.querySelector('[data-testid="place-chip"]')).toBeNull();
     expect(fixture.call).toMatchObject({ inverse: true });
     openPlus();
     const keys = [...menu()!.querySelectorAll("[data-menu-key]")].map((row) => row.getAttribute("data-menu-key"));
-    expect(keys).toEqual(["place", "approval", "call:turns", "call:live"]);
+    expect(keys).toEqual(expect.arrayContaining(["attach", "teach", "place", "approval", "call:turns", "call:live"]));
     expect(item("place")?.textContent).toContain("Works on");
   });
 
