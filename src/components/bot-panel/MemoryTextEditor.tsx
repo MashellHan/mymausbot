@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 import { Maximize2, Minimize2 } from "lucide-react";
 
@@ -40,7 +40,7 @@ export function MarkdownTextEditor<T extends VersionedText>({ botName, file, doc
   document?: boolean;
   maxBytes?: number;
   showConflictCurrent?: boolean;
-  renderPreview?: (draft: string) => ReactNode;
+  renderPreview?: (draft: string, region: Ref<HTMLElement>) => ReactNode;
   save: (text: string, expectedHash: string) => Promise<WriteResult<T>>;
   onDone: (saved: T | null) => void;
 }) {
@@ -54,6 +54,8 @@ export function MarkdownTextEditor<T extends VersionedText>({ botName, file, doc
   // Full window shows the same text over the whole app; going in or out keeps what was typed.
   const [wide, setWide] = useState(false);
   const field = useRef<HTMLTextAreaElement>(null);
+  const previewRegion = useRef<HTMLElement>(null);
+  const focusDraft = () => (renderPreview ? previewRegion.current : field.current)?.focus();
   const firstRender = useRef(true);
   useEffect(() => {
     if (document) return;
@@ -91,7 +93,7 @@ export function MarkdownTextEditor<T extends VersionedText>({ botName, file, doc
     setBase({ text: conflict.current, hash: conflict.currentHash });
     setText(conflict.current);
     setConflict(null);
-    field.current?.focus();
+    focusDraft();
   };
 
   const label = document ? file : t("memory.botMemory");
@@ -114,12 +116,12 @@ export function MarkdownTextEditor<T extends VersionedText>({ botName, file, doc
           readOnly={saving}
           onChange={(event) => setText(event.target.value)}
         />
-        {renderPreview?.(text)}
+        {renderPreview?.(text, previewRegion)}
         {over && <p role="status" className="text-[12px] text-danger">
           {t("botIdentity.soul.bytesOver", { bytes: bytes.toLocaleString(intlLocale()), limit: maxBytes.toLocaleString(intlLocale()) })}
         </p>}
         {error && <div role="alert" className="text-[13px] text-danger">{error}</div>}
-        {savedDraft !== null && <UnsavedDraft text={savedDraft} onDismiss={() => { setSavedDraft(null); field.current?.focus(); }} />}
+        {savedDraft !== null && <UnsavedDraft text={savedDraft} onDismiss={() => { setSavedDraft(null); focusDraft(); }} />}
         <div className="flex justify-end gap-2">
           {!document && <button type="button" data-memory-wide="" className={cn(buttonCls, "mr-auto inline-flex items-center gap-1.5")} onClick={() => setWide(!wide)}>
             {wide ? <Minimize2 size={14} aria-hidden="true" /> : <Maximize2 size={14} aria-hidden="true" />}

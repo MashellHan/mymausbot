@@ -127,6 +127,25 @@ describe("persistent Mini App frame", () => {
       expect(field.value).toBe(draft);
       expect(action("Save").disabled).toBe(false);
       expect(fixture.api).toHaveBeenCalledTimes(1);
+
+      act(() => action("Preview").click());
+      fixture.api.mockRejectedValueOnce(new ApiError("Role changed", 409, {
+        code: "conflict", current: "# Current role", currentHash: "current",
+      }));
+      await act(async () => action("Save").click());
+      act(() => {
+        action("Reload").focus();
+        action("Reload").click();
+      });
+      const currentPreview = dialog.querySelector('[aria-label="Preview"]')!;
+      expect(window.document.activeElement).toBe(currentPreview);
+      expect(currentPreview.querySelector("h1")?.textContent).toBe("Current role");
+
+      act(() => {
+        action("Dismiss draft").focus();
+        action("Dismiss draft").click();
+      });
+      expect(window.document.activeElement).toBe(currentPreview);
     } finally { act(() => root.unmount()); }
   });
 
