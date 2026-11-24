@@ -56,6 +56,39 @@ beforeEach(() => {
 afterEach(() => { container.remove(); window.document.body.innerHTML = ""; vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("persistent Mini App frame", () => {
+  it("opens the native Agent MD editor from the current managed frame and accepts only its exact member target", () => {
+    const managed = { ...teamDocument, app: { ...teamDocument.app, release: {
+      packageId: "mashellhan.agent-team", appVersion: "0.1.4", sourceCommit: "a".repeat(40),
+      tag: "mini-app/agent-team/v0.1.4", requires: ["agent-team-v1"], htmlSha256: "b".repeat(64),
+      htmlBytes: 16, queriesSha256: "c".repeat(64), queriesBytes: 8,
+    } } };
+    Object.defineProperties(container, { clientWidth: { value: 500 }, clientHeight: { value: 500 } });
+    vi.spyOn(window.document, "visibilityState", "get").mockReturnValue("visible");
+    const onAgentRoleEdit = vi.fn();
+    const mount = mountMiniAppFrame({ container, document: managed, state: { ...state, data: [] }, onRevoked: vi.fn(), onAgentRoleEdit });
+    const view = mount.iframe.contentWindow!;
+    const dispatch = (data: unknown, origin = "null") => window.dispatchEvent(new MessageEvent("message", {
+      source: view as unknown as MessageEventSource, data, origin,
+    }));
+    const selection = { agentId: "w6:p1", occupantId: "o1234567890abcdef" };
+    const request = { mausMiniApp: 1, type: "agent-md-edit", id: "mini:2", selection };
+    expect(mount.iframe.srcdoc).toContain("openAgentEditor");
+    try {
+      dispatch(request);
+      dispatch({ jsonrpc: "2.0", method: "ui/notifications/initialized" });
+      dispatch(request, "https://synthetic.invalid");
+      dispatch({ ...request, selection: { ...selection, text: "# Unexpected" } });
+      dispatch({ ...request, selection: { ...selection, path: "/tmp/private.md" } });
+      expect(onAgentRoleEdit).not.toHaveBeenCalled();
+      dispatch(request);
+      expect(onAgentRoleEdit).toHaveBeenCalledExactlyOnceWith({ ...selection, appId: app.id, revision: 3 });
+      mount.update({ ...state, revision: 4, data: [] });
+      dispatch(request);
+      expect(onAgentRoleEdit).toHaveBeenCalledTimes(1);
+      expect(fixture.api).not.toHaveBeenCalled();
+    } finally { mount.retire(); }
+  });
+
   it("carries an HTML SDK history selection through the existing frame and registry guards", async () => {
     const root = await mkdtemp(join(tmpdir(), "omb-mini-trace-"));
     const db = new DatabaseSync(":memory:");

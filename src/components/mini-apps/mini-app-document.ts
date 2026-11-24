@@ -22,7 +22,7 @@ export const MINI_APP_CSP = [
   "form-action 'none'",
 ].join("; ");
 
-function buildMiniAppSdkSource(githubActivity: boolean, managedRelease: boolean, site: MiniAppSite | undefined, hongguo: boolean): string {
+function buildMiniAppSdkSource(githubActivity: boolean, managedRelease: boolean, site: MiniAppSite | undefined, hongguo: boolean, roleEditor: boolean): string {
   return `(function () {
   "use strict";
   var parent = window.parent;
@@ -136,7 +136,7 @@ function buildMiniAppSdkSource(githubActivity: boolean, managedRelease: boolean,
     },
     dashboard: Object.freeze({ read: function (selection) {
       return ready.then(function () { return request({ mausMiniApp: 1, type: "dashboard-read", selection: selection }); });
-    } }),
+    }${roleEditor ? ', openAgentEditor: function (selection) { return ready.then(function () { return request({ mausMiniApp: 1, type: "agent-md-edit", selection: selection }); }); }' : ""} }),
     onDataChanged: function (listener) {
       if (typeof listener !== "function") throw new TypeError("A listener is required.");
       listeners.add(listener);
@@ -209,9 +209,9 @@ function buildMiniAppSdkSource(githubActivity: boolean, managedRelease: boolean,
 })();`;
 }
 
-export function miniAppFrameDocument(document: MiniAppDocument, desktopOpenerAvailable: boolean, scope: { site?: MiniAppSite; hongguo?: boolean } = {}): AppDocument {
+export function miniAppFrameDocument(document: MiniAppDocument, desktopOpenerAvailable: boolean, scope: { site?: MiniAppSite; hongguo?: boolean; roleEditor?: boolean } = {}): AppDocument {
   const managedRelease = document.app.status === "active" && Boolean((document.app as { release?: unknown }).release);
-  const sdk = buildMiniAppSdkSource(isEligibleGithubActivityDocument(document), managedRelease, scope.site, scope.hongguo === true);
+  const sdk = buildMiniAppSdkSource(isEligibleGithubActivityDocument(document), managedRelease, scope.site, scope.hongguo === true, scope.roleEditor === true);
   const html = `<style>${APP_THEME_STYLE}</style><script>${sdk}</script>${stripDocumentPreamble(document.html)}`;
   return {
     v: 1,

@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -52,6 +52,39 @@ async function fixture() {
 }
 
 describe("verified local Agent Team configuration", () => {
+  it("edits the exact shared role body, preserving launch metadata and external edits", async () => {
+    const data = await fixture();
+    const playbook = join(data.repo, ".agents/team/playbook.md");
+    await data.put(playbook, `${await readFile(playbook, "utf8")}\n| mausbot-mini-review | Designer |`);
+    const source = join(data.repo, ".agents/team/roles/designer.md");
+    const prefix = "---\r\nname: MausBot Designer\r\nruntime: codex\r\n---\r\n";
+    await data.put(source, `${prefix}# Original\r\n`);
+    const provider = createLocalAgentConfigurationProvider({ home: data.home, run: data.run, discoverSkills: noDiscovery });
+    const selected = await provider.getAgent("w6:p2");
+    const target = { agentId: selected.agentId, occupantId: selected.occupantId! };
+    const doc = (await provider.getRoleDocument(target))!;
+    expect(doc).toMatchObject({ file: ".agents/team/roles/designer.md", agentName: "mausbot-design",
+      memberNames: ["mausbot-design", "mausbot-mini-review"], text: "# Original\r\n" });
+    const input = { ...target, documentId: doc.documentId, expectedHash: doc.hash, text: "# New rules\n适用" };
+    const guard = () => {};
+    expect(await provider.saveRoleDocument(input, guard)).toMatchObject({ status: "saved", doc: { text: input.text } });
+    expect(await readFile(source, "utf8")).toBe(prefix + input.text);
+    expect((await provider.getAgent(target.agentId)).agent.markdown).toBe(prefix + input.text);
+    await data.put(source, `${prefix}# External edit`);
+    expect(await provider.saveRoleDocument(input, guard)).toMatchObject({ status: "conflict", doc: { text: "# External edit" } });
+    expect(await provider.saveRoleDocument({ ...input, occupantId: "o0000000000000000" }, guard)).toEqual({ status: "unavailable" });
+    expect(await provider.saveRoleDocument({ ...input, documentId: "0".repeat(64) }, guard)).toEqual({ status: "unavailable" });
+    const external = (await provider.getRoleDocument(target))!;
+    await expect(provider.saveRoleDocument({ ...input, expectedHash: external.hash }, () => { throw Error("revoked"); })).rejects.toThrow("revoked");
+    expect(await readFile(source, "utf8")).toBe(`${prefix}# External edit`);
+    await unlink(source);
+    const outside = join(data.home, "outside.md");
+    await data.put(outside, "# Outside");
+    await symlink(outside, source);
+    expect(await provider.saveRoleDocument(input, guard)).toEqual({ status: "unavailable" });
+    expect(await readFile(outside, "utf8")).toBe("# Outside");
+  });
+
   it("binds the real role and multiple declared skills without claiming session loading", async () => {
     const data = await fixture();
     const provider = createLocalAgentConfigurationProvider({ home: data.home, run: data.run, discoverSkills: noDiscovery });
