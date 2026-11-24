@@ -64,6 +64,8 @@ describe("GET /api/threads/:id/export", () => {
     const markdown = await fetch(`${base}/api/threads/${bot.threadId}/export`);
     expect(markdown.status).toBe(200);
     expect(markdown.headers.get("content-type")).toBe("text/markdown; charset=utf-8");
+    expect(markdown.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(markdown.headers.get("cache-control")).toBe("private, no-store");
     expect((await markdown.text()).split("\n").slice(2)).toEqual([
       "**Milind:**", "", "What is open?", "",
       "**Scout:**", "",
@@ -76,9 +78,36 @@ describe("GET /api/threads/:id/export", () => {
       "**Milind:**", "", "Merge the two ready", "",
     ]);
 
-    const exported = await (await fetch(`${base}/api/threads/${bot.threadId}/export?format=json`)).json() as { messages: Array<Record<string, any>> };
+    const jsonRes = await fetch(`${base}/api/threads/${bot.threadId}/export?format=json`);
+    expect(jsonRes.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(jsonRes.headers.get("cache-control")).toBe("private, no-store");
+    const exported = await jsonRes.json() as { messages: Array<Record<string, any>> };
     expect(exported.messages.map((message) => message.kind)).toEqual(["text", "widget", "text"]);
     expect(exported.messages[1]).toMatchObject({ id: shown.messageId, widget: { v: 1, root: { type: "ListView", title: "Pull requests" }, settled: { ref: "confirm", label: "Merge the two ready", tone: "confirm" } } });
     expect(exported.messages[2]).toMatchObject({ replyToId: shown.messageId });
+  });
+
+  it("allowlists inline image MIME types and hardens response headers on /api/threads/:tid/messages/:mid/image", async () => {
+    const store = new Store(() => sonnet);
+    const bot = store.createBot({ name: "Scout" }, { seedMessages: false });
+    const pngId = store.appendMessage(bot.threadId, { role: "bot", kind: "screen", png: Buffer.from("png").toString("base64"), mime: "image/png" }).id;
+    const svgId = store.appendMessage(bot.threadId, { role: "bot", kind: "screen", png: Buffer.from("<svg/>").toString("base64"), mime: "image/svg+xml" }).id;
+    const base = await serve(store);
+
+    const pngRes = await fetch(`${base}/api/threads/${bot.threadId}/messages/${pngId}/image`);
+    expect(pngRes.status).toBe(200);
+    expect(pngRes.headers.get("content-type")).toBe("image/png");
+    expect(pngRes.headers.get("content-disposition")).toBeNull();
+    expect(pngRes.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(pngRes.headers.get("content-security-policy")).toBe("default-src 'none'; sandbox");
+    expect(pngRes.headers.get("cross-origin-resource-policy")).toBe("same-origin");
+
+    const svgRes = await fetch(`${base}/api/threads/${bot.threadId}/messages/${svgId}/image`);
+    expect(svgRes.status).toBe(200);
+    expect(svgRes.headers.get("content-type")).toBe("application/octet-stream");
+    expect(svgRes.headers.get("content-disposition")).toBe("attachment");
+    expect(svgRes.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(svgRes.headers.get("content-security-policy")).toBe("default-src 'none'; sandbox");
+    expect(svgRes.headers.get("cross-origin-resource-policy")).toBe("same-origin");
   });
 });

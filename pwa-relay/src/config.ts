@@ -16,6 +16,13 @@ export interface BridgeConfig {
   maxConcurrentStreams: number;
   maxStreamBufferBytes: number;
   maxWsBufferedBytes: number;
+  maxPendingBodyBytes: number;
+  idleUploadTimeoutMs: number;
+  maxPendingAuth: number;
+  preAuthMaxFrameBytes: number;
+  authFailWindowMs: number;
+  authMaxFailures: number;
+  authBlockMs: number;
   heartbeatIntervalMs: number;
   maxMissedPongs: number;
   authDeadlineMs: number;
@@ -134,6 +141,13 @@ export function loadConfig(env: NodeJS.ProcessEnv): BridgeConfig {
     maxConcurrentStreams: parsePositiveInt(env.MAX_CONCURRENT_STREAMS, 128, "MAX_CONCURRENT_STREAMS", 1, 4096),
     maxStreamBufferBytes: parsePositiveInt(env.MAX_STREAM_BUFFER_BYTES, 4 * MiB, "MAX_STREAM_BUFFER_BYTES", 64 * KiB, 32 * MiB),
     maxWsBufferedBytes: parsePositiveInt(env.MAX_WS_BUFFERED_BYTES, 64 * MiB, "MAX_WS_BUFFERED_BYTES", 1024, 512 * MiB),
+    maxPendingBodyBytes: parsePositiveInt(env.MAX_PENDING_BODY_BYTES, 32 * MiB, "MAX_PENDING_BODY_BYTES", 256, 256 * MiB),
+    idleUploadTimeoutMs: parsePositiveInt(env.IDLE_UPLOAD_TIMEOUT_MS, 10_000, "IDLE_UPLOAD_TIMEOUT_MS", 50, 300_000),
+    maxPendingAuth: parsePositiveInt(env.MAX_PENDING_AUTH, 16, "MAX_PENDING_AUTH", 1, 1024),
+    preAuthMaxFrameBytes: parsePositiveInt(env.PRE_AUTH_MAX_FRAME_BYTES, 4096, "PRE_AUTH_MAX_FRAME_BYTES", 256, 65_536),
+    authFailWindowMs: parsePositiveInt(env.AUTH_FAIL_WINDOW_MS, 60_000, "AUTH_FAIL_WINDOW_MS", 100, 3_600_000),
+    authMaxFailures: parsePositiveInt(env.AUTH_MAX_FAILURES, 5, "AUTH_MAX_FAILURES", 1, 1000),
+    authBlockMs: parsePositiveInt(env.AUTH_BLOCK_MS, 60_000, "AUTH_BLOCK_MS", 100, 3_600_000),
     heartbeatIntervalMs: parsePositiveInt(env.HEARTBEAT_INTERVAL_MS, 15_000, "HEARTBEAT_INTERVAL_MS", 200, 120_000),
     maxMissedPongs: parsePositiveInt(env.MAX_MISSED_PONGS, 2, "MAX_MISSED_PONGS", 1, 10),
     authDeadlineMs: parsePositiveInt(env.AUTH_DEADLINE_MS, 5_000, "AUTH_DEADLINE_MS", 200, 30_000),

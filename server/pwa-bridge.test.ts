@@ -977,7 +977,7 @@ describe("PWA bridge unit, config, and route enforcement", () => {
     expect(inviteRevoked.status).toBe(401);
     expect(openPairingCalls).toBe(0);
 
-    // Managed policy flips to deny while awaiting POST /api/pwa-bridge/invite body -> 403 and 0 invites opened.
+    // Policy flips to deny while awaiting POST /api/pwa-bridge/invite body -> 403 and 0 invites opened.
     live = true;
     policyRefusal = undefined;
     const inviteDenied = await invoke("POST", "/api/pwa-bridge/invite", { label: "Phone" }, () => {
@@ -986,6 +986,74 @@ describe("PWA bridge unit, config, and route enforcement", () => {
     expect(inviteDenied.status).toBe(403);
     expect(inviteDenied.body?.code).toBe("managed_policy");
     expect(openPairingCalls).toBe(0);
+  });
+
+  it("strips trailers, replaces loopback/empty remoteAddr with pwa-bridge, and times out incomplete req.body streams", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pwa-bridge-hardening-"));
+    dirs.push(dir);
+    const relay = await MockBridgeRelay.start();
+    relays.push(relay);
+
+    const seen: Array<{ xff: unknown; trailers: unknown }> = [];
+    const bridge = startPwaBridge({
+      dataDir: dir,
+      bodyTimeoutMs: 80,
+      maxPendingBodyBytes: 120,
+      handle: (req, res) => {
+        seen.push({ xff: req.headers["x-forwarded-for"], trailers: req.headers.trailers });
+        res.setHeader("trailers", "X-Checksum");
+        json(res, 200, { ok: true });
+      },
+    })!;
+    bridges.push(bridge);
+
+    bridge.applyConfig({
+      enabled: true,
+      relayUrl: relay.url,
+      hostId: "mac-mini",
+      bridgeSecret: "omb_bridge_hardening_secret_1234",
+      pwaOrigin: "https://mausbot.mxhan.com",
+      defaultBotId: null,
+    });
+    await relay.waitForHost();
+
+    for (const remoteAddr of ["127.0.0.1", "::1", "::ffff:127.0.0.1", ""]) {
+      const res = await relay.request({
+        method: "GET",
+        path: "/api/bots",
+        remoteAddr,
+        headers: { trailers: "X-Checksum" },
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.trailers).toBeUndefined();
+    }
+    expect(seen).toEqual([
+      { xff: "pwa-bridge", trailers: undefined },
+      { xff: "pwa-bridge", trailers: undefined },
+      { xff: "pwa-bridge", trailers: undefined },
+      { xff: "pwa-bridge", trailers: undefined },
+    ]);
+
+    // Incomplete req.body stream (without EOF) times out after bodyTimeoutMs with 408 and releases pending byte budget.
+    const stalled = await relay.request({
+      method: "POST",
+      path: "/api/bots/bot-acct/messages",
+      headers: { "content-type": "application/json", "content-length": "100" },
+      bodyFrames: [{ chunkB64: Buffer.alloc(90, 97).toString("base64"), eof: false }],
+      omitEof: true,
+    });
+    expect(stalled.status).toBe(408);
+    expect(stalled.json.code).toBe("request_timeout");
+    expect(bridge.status().activeStreams).toBe(0);
+
+    // Budget was released so a full 90-byte POST succeeds immediately afterward.
+    const afterTimeout = await relay.request({
+      method: "POST",
+      path: "/api/bots/bot-acct/messages",
+      headers: { "content-type": "application/json", "content-length": "90" },
+      body: JSON.stringify({ text: "a".repeat(79) }),
+    });
+    expect(afterTimeout.status).toBe(200);
   });
 });
 
@@ -1274,5 +1342,45 @@ describe("PWA bridge real handleRequest integration", () => {
       headers: { authorization: `Bearer ${token}` },
     });
     expect(afterLogout.status).toBe(401);
+
+    // 10. Pre-gate DNS-rebinding Host checks (403) and 8_192-byte body cap (413) on /api/auth/pair and /api/pair.
+    const rawHttp = async (method: string, path: string, hostHeader: string, bodyText?: string) => {
+      const target = new URL(base);
+      const { request } = await import("node:http");
+      return await new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const req = request(
+          {
+            host: target.hostname,
+            port: Number(target.port),
+            method,
+            path,
+            headers: {
+              Host: hostHeader,
+              ...(bodyText !== undefined ? { "content-type": "application/json", "content-length": String(Buffer.byteLength(bodyText)) } : {}),
+            },
+          },
+          (res) => {
+            const chunks: Buffer[] = [];
+            res.on("data", (c) => chunks.push(c));
+            res.on("end", () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));
+          },
+        );
+        req.on("error", reject);
+        if (bodyText !== undefined) req.write(bodyText);
+        req.end();
+      });
+    };
+
+    expect((await rawHttp("GET", "/.well-known/openmausbot/environment", "evil.attacker.com:4199")).status).toBe(403);
+    expect((await rawHttp("POST", "/api/auth/pair", "evil.attacker.com:4199", "{}")).status).toBe(403);
+    expect((await rawHttp("POST", "/api/pair", "evil.attacker.com:4199", "{}")).status).toBe(403);
+
+    const oversizedPair = JSON.stringify({ code: "ABCD-EFGH-JK23", pad: "x".repeat(9_000) });
+    expect((await rawHttp("POST", "/api/auth/pair", targetHost(base), oversizedPair)).status).toBe(413);
+    expect((await rawHttp("POST", "/api/pair", targetHost(base), oversizedPair)).status).toBe(413);
   });
 });
+
+function targetHost(baseUrl: string): string {
+  return new URL(baseUrl).host;
+}
