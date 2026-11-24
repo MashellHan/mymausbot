@@ -431,33 +431,35 @@ describe("phone sidebar header, mobile cards, and drawer compositor props", () =
     expect(opened).toContain("max-md:translate-x-0");
   });
 
-  it("renders mobile card surfaces on BotListItem, GroupListItem, and PhoneHero with a 72px hero avatar", async () => {
+  it("renders Grokbot-style borderless mobile rows and a centered 76px PhoneHero", async () => {
     const { BotListItem, GroupListItem } = await import("./Sidebar");
     const { PhoneHero } = await import("./SidebarPhoneHero");
     const bot = { id: "b1", threadId: "t1", name: "Maus", title: "", description: "", notifications: true, color: "green", unread: false, modelSelection: { instanceId: "fake", model: "m" }, messages: [], chiefOfStaff: true } as const;
     const group = { id: "g1", threadId: "gt1", name: "Room", memberIds: ["b1"], messages: [], defaultResponder: { kind: "mentions" }, bulletin: "", unread: false, createdAt: 1 } as const;
     const heroHtml = renderToStaticMarkup(createElement(StoreProvider, null, createElement(PhoneHero, { bot: bot as never, selected: false, onOpen: () => {}, onMenu: () => {} })));
-    expect(heroHtml).toContain('width="72px" height="72px"');
+    expect(heroHtml).toContain('width="76px" height="76px"');
     expect(heroHtml).toContain("rounded-2xl");
-    expect(heroHtml).toContain("bg-card");
-    expect(heroHtml).toContain("active:scale-[0.985]");
+    expect(heroHtml).not.toContain("bg-card");
+    expect(heroHtml).toContain("active:scale-[0.97]");
 
     const botHtml = renderToStaticMarkup(createElement(StoreProvider, null, createElement(BotListItem, {
       bot: bot as never, selected: false, deleting: false, mascotMotion: null, reveal: null, pendingQueued: {}, instances: [], liveCall: null, locale: "en", density: "comfortable", query: "", dispatch: () => {}, onMenu: () => {},
     })));
-    expect(botHtml).toContain("max-md:bg-card");
+    expect(botHtml).not.toContain("max-md:bg-card");
     expect(botHtml).toContain("max-md:rounded-2xl");
-    expect(botHtml).toContain("max-md:px-3.5");
-    expect(botHtml).toContain("max-md:py-3");
+    expect(botHtml).toContain("max-md:px-2.5");
+    expect(botHtml).toContain("max-md:py-2.5");
+    expect(botHtml).toContain("max-md:text-[16px]");
     expect(botHtml).toContain("max-md:active:scale-[0.985]");
 
     const groupHtml = renderToStaticMarkup(createElement(StoreProvider, null, createElement(GroupListItem, {
       group: group as never, density: "comfortable", onMenu: () => {},
     })));
-    expect(groupHtml).toContain("max-md:bg-card");
+    expect(groupHtml).not.toContain("max-md:bg-card");
     expect(groupHtml).toContain("max-md:rounded-2xl");
-    expect(groupHtml).toContain("max-md:px-3.5");
-    expect(groupHtml).toContain("max-md:py-3");
+    expect(groupHtml).toContain("max-md:px-2.5");
+    expect(groupHtml).toContain("max-md:py-2.5");
+    expect(groupHtml).toContain("max-md:text-[16px]");
     expect(groupHtml).toContain("max-md:active:scale-[0.985]");
   });
 });
