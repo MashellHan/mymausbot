@@ -1,5 +1,8 @@
 const CACHE_PREFIX = "omb-pwa-shell-";
-const CACHE_NAME = `${CACHE_PREFIX}v3`;
+const CACHE_NAME = `${CACHE_PREFIX}v4`;
+const NAV_NETWORK_TIMEOUT_MS = 400;
+const STALE_ASSET_HEAL_COOLDOWN_MS = 10_000;
+let lastStaleAssetHealAt = 0;
 const APP_SHELL_URLS = [
   "/",
   "/manifest.webmanifest",
@@ -85,7 +88,7 @@ self.addEventListener("fetch", (event) => {
       caches.open(CACHE_NAME).then(async (cache) => {
         const cached = await cache.match("/");
         const networkTarget = url.pathname === "/index.html" ? "/" : request;
-        const networkUpdate = fetch(networkTarget)
+        const networkUpdate = fetch(networkTarget, { cache: "no-cache" })
           .then(async (response) => {
             if (response && response.ok && response.type === "basic") {
               const clean = await cleanResponse(response);
@@ -97,6 +100,11 @@ self.addEventListener("fetch", (event) => {
           .catch(() => null);
         if (cached) {
           event.waitUntil(networkUpdate);
+          const fresh = await Promise.race([
+            networkUpdate,
+            new Promise((resolve) => setTimeout(() => resolve(null), NAV_NETWORK_TIMEOUT_MS)),
+          ]);
+          if (fresh && fresh.ok) return fresh;
           return cached.redirected ? cleanResponse(cached) : cached;
         }
         return (await networkUpdate) || Response.error();
@@ -112,9 +120,29 @@ self.addEventListener("fetch", (event) => {
         if (cached && !isHtmlResponse(cached)) return cached;
         const response = await fetch(request);
         // Cloudflare Pages returns 200 text/html (SPA fallback) for pruned /assets/* hashes;
-        // never cache it under an asset URL and drop any stale cached shell so reload recovers.
+        // never cache it under an asset URL, drop stale cached "/", and trigger one reload so the fresh shell takes over.
         if (isHtmlResponse(response)) {
-          if (typeof cache.delete === "function") void cache.delete("/");
+          if (typeof cache.delete === "function") await cache.delete("/");
+          const now = Date.now();
+          if (
+            now - lastStaleAssetHealAt > STALE_ASSET_HEAL_COOLDOWN_MS &&
+            self.clients &&
+            typeof self.clients.matchAll === "function"
+          ) {
+            lastStaleAssetHealAt = now;
+            event.waitUntil(
+              self.clients
+                .matchAll({ type: "window" })
+                .then((clients) =>
+                  Promise.all(
+                    clients.map((client) =>
+                      typeof client.navigate === "function" ? client.navigate(client.url).catch(() => null) : null,
+                    ),
+                  ),
+                )
+                .catch(() => {}),
+            );
+          }
           return new Response("", { status: 404, statusText: "Not Found" });
         }
         if (response && response.ok && response.type === "basic" && !response.redirected) {
