@@ -609,4 +609,37 @@ describe("pwa pairing lifecycle, IndexedDB persistence, and authenticated fetch"
     expect(createdBlobs.at(-1)?.type).toBe("application/octet-stream");
     expect(link.click).toHaveBeenCalledTimes(1);
   });
+
+  it("generates a valid v4 pairRequestId when crypto.randomUUID is unavailable", async () => {
+    const idb = createMemoryIdb();
+    vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto) });
+    let sentPairRequestId: string | undefined;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/pair")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { pairRequestId?: string };
+        sentPairRequestId = body.pairRequestId;
+        return new Response(JSON.stringify({ token: "tok-http-1", device: { id: "dev-http-1" }, serverName: "Mac" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/auth/session")) {
+        return new Response(
+          JSON.stringify({ kind: "session", id: "sess-http-1", environmentId: "env-http-1", scopes: ["client"] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ environmentId: "env-http-1", label: "Mac" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const result = await activatePwaPairing(
+      { relayUrl: "https://relay.mxhan.com", credential: `omb_pair_${"u".repeat(43)}` },
+      { idb, fetchImpl: fetchMock },
+    );
+    expect(result.ok).toBe(true);
+    expect(sentPairRequestId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
 });
