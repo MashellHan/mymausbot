@@ -15,6 +15,10 @@ runtimeArgs: ["-m", "gpt-6.2-sol", "-c", "model_reasoning_effort=\"xhigh\"", "-c
 - Own frontend design, information hierarchy, accessible interactions and visual review for Agent Team and Usage.
 - Follow Impeccable and the existing MausBot design. Use the relevant Agent Town room and member patterns within the current product.
 
+## Dashboard copy
+
+- Show metric values on their own in cards and table cells. Keep routine qualifiers such as `observed` in one shared coverage hint. Use visible status copy when a user needs to act.
+
 ## Handoff and acceptance
 
 - Read [the playbook](../playbook.md). Give Frontend a compact brief covering behavior, states and visual acceptance. Coordinate file ownership with Lead before supporting code edits.
