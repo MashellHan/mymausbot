@@ -1151,6 +1151,41 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     expect(recorder.events.some((event) => event.type === "runtime.error" && event.message.includes("cannot safely update bot instructions"))).toBe(true);
   });
 
+  it.each([
+    ["timeout", { method: "config/read", hang: true }, "rpc_error", false, true],
+    ["transient 503", { method: "config/read", error: { code: -32603, message: "provider returned 503: upstream capacity exceeded secret-cold-503" } }, "rpc_error", false, false],
+    ["auth", { method: "config/read", error: { code: -32603, message: "unexpected status 401 Unauthorized: missing bearer secret-cold-token" } }, "auth_required", true, false],
+    ["provider_safety", { method: "config/read", error: { code: -32603, message: "HTTP 503: This task was blocked by our safety systems. secret-cold-detail" } }, "provider_safety", false, false],
+  ])("handles cold config/read %s on the first attempt without transient retry while preserving terminal causes", async (_label, fault, stopReason, expectSetup, shortTimeout) => {
+    const faultFile = join(scratch, "cold-config-fault.json");
+    const log = join(scratch, "cold-config-log.ndjson");
+    const dump = join(scratch, "cold-config-dump.json");
+    vi.stubEnv("FAKE_CODEX_RETRY_SCALE", "0.001");
+    if (shortTimeout) {
+      const rpcTimeout = codexProcess.codexRpcTimeoutMs;
+      vi.spyOn(codexProcess, "codexRpcTimeoutMs").mockImplementation((method) => method === "config/read" ? 150 : rpcTimeout(method));
+    }
+    await create();
+    vi.stubEnv("FAKE_CODEX_FAULT_FILE", faultFile);
+    vi.stubEnv("FAKE_CODEX_STARTUP_LOG", log);
+    vi.stubEnv("FAKE_CODEX_DUMP", dump);
+    writeFileSync(faultFile, JSON.stringify(fault));
+
+    await instance.adapter.sendTurn({ threadId: "t-cold-config-read", text: "Hello" });
+    await expect(recorder.until((event) => event.type === "turn.completed")).resolves.toMatchObject({ ok: false, stopReason });
+    expect(recorder.events.some((event) => event.type === "turn.retrying")).toBe(false);
+    const errors = recorder.events.filter((event) => event.type === "runtime.error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({ message: "Could not read Codex configuration; cannot safely update bot instructions. Retry after checking Codex." });
+    expect(JSON.stringify(errors[0])).not.toContain("secret-cold");
+    if (expectSetup) expect(errors[0]).toMatchObject({ setup: true });
+    else expect(errors[0]).not.toHaveProperty("setup");
+    const entries = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(entries.filter((entry) => entry.event === "initialize")).toHaveLength(1);
+    const calls = (JSON.parse(readFileSync(dump, "utf8")).calls as Array<{ method: string }>).map((call) => call.method);
+    expect(calls).toEqual(["initialize", "initialized", "config/read"]);
+  });
+
   it("sends current-turn images inline, so the boxed Codex never opens an attachments path", async () => {
     vi.stubEnv("FAKE_CODEX_ECHO_INPUT", "1");
     await create();

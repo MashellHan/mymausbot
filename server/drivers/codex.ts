@@ -1163,6 +1163,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       active.set(threadId, { stop, turnId, asks, steer: steerActiveTurn, pid: child.pid });
       if (attempt === 0 && !announced) emit({ ...base(threadId, turnId), type: "turn.started" });
 
+      let configReadFailed = false;
       try {
         const initialized = reused ? reused.carried.initialized : await request("initialize", {
           clientInfo: { name: "openmausbot", title: "OpenMausBot", version: serverVersion() },
@@ -1179,6 +1180,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           });
           effectiveConfig = configured?.config;
         } catch (error) {
+          configReadFailed = true;
           // Never expose a possibly secret-bearing config error; codex's "invalid configuration" carries none.
           const invalid = error instanceof CodexRpcError && /^invalid configuration\b/i.test(error.message);
           throw new Error(
@@ -1384,7 +1386,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         if (detailRaw !== raw) hideRefusedModel(detailRaw);
         const reported: ReturnType<typeof codexUserFailure> = refused ? { message: codexSignInExpired(raw) } : codexUserFailure(raw, route);
         const needsAuth = refused || /(?:\b401\b|unauthorized|missing bearer|authentication required)/i.test(raw) || /(?:\b401\b|unauthorized|missing bearer|authentication required)/i.test(detailRaw);
-        const verdict = detail === e || detail instanceof Error ? classifyError(failure) : classifyError({ text: `${raw} ${detailRaw}` });
+        const classified = detail === e || detail instanceof Error ? classifyError(failure) : classifyError({ text: `${raw} ${detailRaw}` });
+        const verdict = configReadFailed && classified.transient ? classifyError({ text: raw }) : classified;
         if (reused && !promptSubmitted && !state.settled && !abandoned && !stopRequested && !needsAuth && verdict.reason !== "auth" && verdict.reason !== "provider_safety" && verdict.reason !== "quota" && verdict.reason !== "unknown_model" && codexTurnId === null && earlyNotifications.length === 0) {
           return relaunch("", reported.message, "rpc_error", true);
         }
