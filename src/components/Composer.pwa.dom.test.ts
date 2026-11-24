@@ -230,7 +230,9 @@ describe("Stage 5-7 Composer offline drafting, receipt images, and PwaPinBotButt
     expect(pinButton!.getAttribute("aria-pressed")).toBe("false");
   });
 
-  it("keeps the chat input pill clean and places Attach photo and Attach files inside the + menu", () => {
+  it("keeps the chat input pill clean and places Attach photo and Attach files inside the + menu even when connected with empty instances", () => {
+    fixture.connected = true;
+    fixture.instances = [];
     flushSync(() => root.render(createElement(Composer, { bot })));
     expect(container.querySelector('button[aria-label="Attach files"]')).toBeNull();
     expect(container.querySelector('button[aria-label="Attach photo"]')).toBeNull();
