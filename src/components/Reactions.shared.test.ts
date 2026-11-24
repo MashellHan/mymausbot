@@ -11,7 +11,7 @@ vi.mock("@/state/store", async (original) => {
 });
 vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
   kind: "session", id: "s1", label: "Alice's laptop", scopes: ["client"], expiresAt: 1, reactor: "p_alice",
-}))));
+}), { headers: { "content-type": "application/json" } })));
 const { setLocale } = await import("@/lib/i18n");
 const { ReactionChips } = await import("./Reactions");
 
