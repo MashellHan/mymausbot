@@ -124,8 +124,13 @@ export function createPwaBridgeRoutes(deps: PwaBridgeRouteDeps): RouteHandler {
         return;
       }
 
+      const updatingSettings =
+        parsed.data.relayUrl !== undefined ||
+        parsed.data.hostId !== undefined ||
+        parsed.data.pwaOrigin !== undefined ||
+        parsed.data.defaultBotId !== undefined;
       const next: PwaBridgeConfig = {
-        enabled: parsed.data.enabled ?? current.enabled,
+        enabled: parsed.data.enabled ?? (updatingSettings ? true : current.enabled),
         relayUrl: relay.origin,
         hostId: host.hostId,
         bridgeSecret: current.bridgeSecret,
@@ -154,8 +159,11 @@ export function createPwaBridgeRoutes(deps: PwaBridgeRouteDeps): RouteHandler {
 
     if (isRotate && method === "POST") {
       const { secret, sha256 } = generatePwaBridgeSecret();
+      const current = bridge.config();
+      const shouldEnable = !current.enabled && Boolean(current.relayUrl && current.hostId) && !deps.managedRemoteAccessRefusal?.();
       const next: PwaBridgeConfig = {
-        ...bridge.config(),
+        ...current,
+        enabled: shouldEnable ? true : current.enabled,
         bridgeSecret: secret,
       };
       savePwaBridgeConfig(deps.dataDir, next);

@@ -84,6 +84,8 @@ const sessionSchema = z.object({
   vouchedAt: z.number().optional(),
   /** A browser sign-in (PairingCode `browser`): accepted only as its browser's cookie, never as a bearer token. */
   cookieOnly: z.literal(true).optional(),
+  /** A remote mobile PWA session opened via `/api/pwa-bridge/invite`. */
+  pwa: z.literal(true).optional(),
   owner: z.string().max(254).optional(),
   /** A Team Cloud's sign-in for moving one bot in (server/team-move-in.ts): it reaches that bot's move routes only. */
   moveIn: z.string().regex(/^[\w-]{1,128}$/).optional(),
@@ -107,6 +109,8 @@ export interface PublicSession {
   owner?: string;
   teamRole?: TeamRole;
   token?: true;
+  pwa?: true;
+  browser?: true;
   /** Who this device belongs to, when the server can tell and it is not just the device's own label. */
   person?: string;
 }
@@ -194,6 +198,8 @@ function publicSession(record: SessionRecord, personName?: (record: SessionRecor
   if (record.owner) view.owner = record.owner;
   if (record.teamRole) view.teamRole = record.teamRole;
   if (record.token) view.token = true;
+  if (record.pwa) view.pwa = true;
+  if (record.cookieOnly) view.browser = true;
   const person = personName?.(record).trim();
   if (person && person !== record.label) view.person = person;
   return view;
@@ -500,6 +506,7 @@ export class SessionRegistry {
       lastSeenAt: now,
       expiresAt: pairing.member ? teamSessionExpiresAt(checkedAt, now + SESSION_TTL_MS) : now + Math.min(pairing.tokenTtlMs ?? SESSION_TTL_MS, SESSION_MAX_AGE_MS),
       ...(pairing.tokenTtlMs !== undefined ? { token: true as const } : {}),
+      ...(pairing.pwa ? { pwa: true as const } : {}),
       ...(pairing.browser ? { cookieOnly: true as const, ...(pairing.owner ? { owner: pairing.owner } : {}) } : {}),
       ...(pairing.member ? { email: pairing.member.email, teamRole: pairing.member.role, membershipAuthority: "team" as const } : {}),
       ...(pairing.member && pairing.memberCheckedAt !== undefined ? { memberCheckedAt: pairing.memberCheckedAt } : {}),
