@@ -207,6 +207,41 @@ describe("the anchored menu in a document", () => {
     expect(document.activeElement).toBe(trigger());
   });
 
+  it("does not steal focus back to the trigger when selecting an item moves focus outside or the trigger is inside an inert ancestor", async () => {
+    const external = document.createElement("button");
+    document.body.appendChild(external);
+    try {
+      await act(async () => {
+        root.render(createElement(SidebarPopoverMenu, {
+          items: [{ key: "go", label: "Go", onSelect: () => { external.focus(); } }],
+          ariaLabel: "Tools",
+          renderTrigger: () => "Tools",
+        }));
+      });
+      await key(trigger(), "ArrowDown");
+      await flush();
+      const row = sheet()!.querySelector<HTMLElement>('[role="menuitem"]')!;
+      await act(async () => row.click());
+      expect(sheet()).toBeNull();
+      expect(document.activeElement).toBe(external);
+
+      await act(async () => {
+        root.render(createElement("div", { inert: true },
+          createElement(SidebarPopoverMenu, {
+            items: [{ key: "stay", label: "Stay", onSelect: () => {} }],
+            ariaLabel: "Tools",
+            renderTrigger: () => "Tools",
+          })));
+      });
+      await act(async () => trigger().click());
+      await key(sheet()!, "Escape");
+      expect(sheet()).toBeNull();
+      expect(document.activeElement).not.toBe(trigger());
+    } finally {
+      external.remove();
+    }
+  });
+
   describe("inside something that also closes on Escape, such as a panel", () => {
     const outer = vi.fn();
     const onWindow = vi.fn();

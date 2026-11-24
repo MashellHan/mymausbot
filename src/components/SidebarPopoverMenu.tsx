@@ -261,7 +261,8 @@ export function SidebarPopoverMenu({
     setOpen(false);
     setSubmenu(null);
     setEngaged(false);
-    if (refocus) triggerRef.current?.focus();
+    const trigger = triggerRef.current;
+    if (refocus && trigger && !trigger.closest("[inert]")) trigger.focus();
   }, []);
 
   const insideRef = useRef({
@@ -331,8 +332,11 @@ export function SidebarPopoverMenu({
       else openSub(item, row, keyboard);
       return;
     }
+    const activeBefore = document.activeElement;
     item.onSelect();
-    if (!item.keepOpen) close(anchored);
+    const activeAfter = document.activeElement;
+    const focusMovedOut = activeAfter instanceof Element && activeAfter !== activeBefore && activeAfter !== document.body && !insideRef.current.contains(activeAfter);
+    if (!item.keepOpen) close(anchored && keyboard && !focusMovedOut);
   };
 
   const onMenuKey = (event: ReactKeyboardEvent<HTMLDivElement>, inSubmenu: boolean) => {
@@ -426,9 +430,12 @@ export function SidebarPopoverMenu({
       <MenuRows
         dense={dense}
         items={openItem.submenu}
-        onItem={(item) => {
+        onItem={(item, _row, keyboard) => {
+          const activeBefore = document.activeElement;
           item.onSelect();
-          if (!item.keepOpen) close(true);
+          const activeAfter = document.activeElement;
+          const focusMovedOut = activeAfter instanceof Element && activeAfter !== activeBefore && activeAfter !== document.body && !insideRef.current.contains(activeAfter);
+          if (!item.keepOpen) close(keyboard && !focusMovedOut);
         }}
       />
     </div>

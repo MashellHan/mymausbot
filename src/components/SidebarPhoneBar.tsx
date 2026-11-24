@@ -12,12 +12,12 @@ import { SidebarPopoverMenu, type SidebarMenuItem } from "./SidebarPopoverMenu";
 import { UpdateIndicator } from "./UpdateIndicator";
 
 /** The phone's bottom bar: a round button for the tools that are rows in the desktop sidebar, and a search pill. */
-export function SidebarPhoneBar({ query, onQuery }: { query: string; onQuery: (query: string) => void }) {
+export function SidebarPhoneBar({ query, onQuery, onOpened }: { query: string; onQuery: (query: string) => void; onOpened?: () => void }) {
   const { state, dispatch } = useStore();
   const automationsNeedYou = useAutomationsNeedYou();
   const filesReady = useCloudFilesReady();
   const remotePwa = isRemotePwaMode();
-  const items: SidebarMenuItem[] = [
+  const items: SidebarMenuItem[] = ([
     {
       key: "automations",
       label: t("sidebar.nav.automations"),
@@ -54,7 +54,13 @@ export function SidebarPhoneBar({ query, onQuery }: { query: string; onQuery: (q
       active: state.pluginsOpen,
       onSelect: () => dispatch({ type: "togglePlugins", open: true }),
     }] : []),
-  ];
+  ] satisfies SidebarMenuItem[]).map((item) => ({
+    ...item,
+    onSelect: () => {
+      item.onSelect();
+      onOpened?.();
+    },
+  }));
   return (
     <div data-sidebar-phone-bar className="px-3 pb-3 pt-1">
       <CloudRoomCard />
