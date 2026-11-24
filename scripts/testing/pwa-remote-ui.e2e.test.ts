@@ -372,7 +372,7 @@ describe("Remote PWA real-browser E2E via pwa-relay and Mac fixture", () => {
           await page1.dispose();
         }
 
-        // 2. Blocked IndexedDB (SecurityError) still pairs in-memory and renders without white screen.
+        // 2. Blocked IndexedDB (SecurityError) still pairs via localStorage backup and survives reload.
         const page2 = await openIsolatedPage(
           'Object.defineProperty(window, "indexedDB", { get() { return { open() { throw new DOMException("Storage disabled", "SecurityError"); } }; } });',
         );
@@ -385,14 +385,30 @@ describe("Remote PWA real-browser E2E via pwa-relay and Mac fixture", () => {
             })
             .toBe(true);
           expect(await page2.evalJs("location.hash")).toBe("");
+          await page2.req("Page.reload");
+          await expect
+            .poll(() => page2.evalJs('document.querySelector(\'textarea[aria-label^="Message"]\') !== null'), {
+              timeout: 25_000,
+            })
+            .toBe(true);
           expect(page2.exceptions).toEqual([]);
         } finally {
           await page2.dispose();
         }
 
-        // 3. Invalid #pair= shows PairPage fallback UI instead of an empty white #root.
+        // 3. Unpaired static-SPA root visit and invalid #pair= both show PairPage fallback instead of hanging on Connecting.
         const page3 = await openIsolatedPage();
         try {
+          await page3.req("Page.navigate", { url: `${spa.origin}/` });
+          await expect
+            .poll(
+              () =>
+                page3.evalJs(
+                  'Boolean(document.getElementById("root")?.innerHTML?.length) && !document.body.innerText.includes("Connecting to your bots") && document.body.innerText.trim().length > 0',
+                ),
+              { timeout: 15_000 },
+            )
+            .toBe(true);
           await page3.req("Page.navigate", { url: `${spa.origin}/#pair=not-valid-base64` });
           await expect
             .poll(
