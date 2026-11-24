@@ -42,7 +42,8 @@ export function botSupportsImagesInComposer(
   if (!candidate) return false;
   const inst = state.instances.find((i) => i.instanceId === candidate.modelSelection.instanceId);
   if (inst) return Boolean(inst.capabilities?.images);
-  return (isRemotePwaMode() || Boolean(state.cachedHydrated)) && !state.connected;
+  if (isRemotePwaMode()) return true;
+  return Boolean(state.cachedHydrated) && !state.connected;
 }
 
 export function prepareComposerSendPayload(
