@@ -16,6 +16,7 @@ vi.mock("@/state/store", () => ({
 }));
 
 import { ApiError } from "@/state/store";
+import { AgentRoleEditor } from "./AgentRoleEditor";
 import { MiniAppFrame, mountMiniAppFrame } from "./MiniAppFrame";
 import { miniAppFrameDocument, MINI_APP_CSP } from "./mini-app-document";
 import { AppDocs } from "../../../server/app-docs";
@@ -89,6 +90,44 @@ describe("persistent Mini App frame", () => {
       expect(onAgentRoleEdit).toHaveBeenCalledTimes(1);
       expect(fixture.api).not.toHaveBeenCalled();
     } finally { mount.retire(); }
+  });
+
+  it("previews the unsaved Agent MD draft and keeps it when switching back to edit", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    fixture.api.mockResolvedValue({
+      text: "# Original", hash: "original", documentId: "fixture", agentName: "Fixture agent",
+      file: "roles/dev.md", sourcePath: "/fixture/roles/dev.md", memberNames: ["Fixture agent"], runtime: "codex",
+    });
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(createElement(AgentRoleEditor, {
+        selection: { agentId: "w6:p1", occupantId: "o1234567890abcdef", appId: app.id, revision: 3 },
+        onClose: vi.fn(), onSaved: vi.fn(),
+      })));
+      const dialog = window.document.querySelector<HTMLDialogElement>("dialog[data-agent-role-editor]")!;
+      const field = dialog.querySelector("textarea")!;
+      const action = (label: string) => [...dialog.querySelectorAll("button")].find((button) => button.textContent === label)!;
+      expect(field.hidden).toBe(false);
+      expect(action("Preview").nextElementSibling?.textContent).toBe("Close");
+      const draft = "# Unsaved heading\n\n- Item\n\n![Image](https://example.invalid/image.png)";
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(field, draft);
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+
+      act(() => action("Preview").click());
+      expect(field.hidden).toBe(true);
+      const preview = dialog.querySelector('[aria-label="Preview"]')!;
+      expect(preview.querySelector("h1")?.textContent).toBe("Unsaved heading");
+      expect(preview.querySelector("li")?.textContent).toBe("Item");
+      expect(preview.querySelector("img")).toBeNull();
+
+      act(() => action("Edit").click());
+      expect(field.hidden).toBe(false);
+      expect(field.value).toBe(draft);
+      expect(action("Save").disabled).toBe(false);
+      expect(fixture.api).toHaveBeenCalledTimes(1);
+    } finally { act(() => root.unmount()); }
   });
 
   it("reopens Agent MD after the managed document advances within the same template version", () => {

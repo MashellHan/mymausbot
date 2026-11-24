@@ -33,13 +33,14 @@ export function MemoryTextEditor({ bot, doc, mine, document = false, onDone }: {
 type VersionedText = { text: string; hash: string };
 type WriteResult<T> = { ok: true; doc: T } | ({ ok: false } & BotDocumentConflict);
 
-export function MarkdownTextEditor<T extends VersionedText>({ botName, file, doc, document = false, maxBytes, showConflictCurrent, save, onDone }: {
+export function MarkdownTextEditor<T extends VersionedText>({ botName, file, doc, document = false, maxBytes, showConflictCurrent, renderPreview, save, onDone }: {
   botName?: string;
   file: string;
   doc: T;
   document?: boolean;
   maxBytes?: number;
   showConflictCurrent?: boolean;
+  renderPreview?: (draft: string) => ReactNode;
   save: (text: string, expectedHash: string) => Promise<WriteResult<T>>;
   onDone: (saved: T | null) => void;
 }) {
@@ -103,6 +104,7 @@ export function MarkdownTextEditor<T extends VersionedText>({ botName, file, doc
         <textarea
           ref={field}
           data-memory-text=""
+          hidden={Boolean(renderPreview)}
           className={cn(inputCls, wide ? "min-h-0 flex-1 resize-none" : "min-h-[280px] resize-y", "font-mono text-[13px] leading-relaxed", document && "focus-visible:ring-2 focus-visible:ring-focus")}
           value={text}
           placeholder={document ? undefined : t("memory.indexPlaceholder")}
@@ -112,6 +114,7 @@ export function MarkdownTextEditor<T extends VersionedText>({ botName, file, doc
           readOnly={saving}
           onChange={(event) => setText(event.target.value)}
         />
+        {renderPreview?.(text)}
         {over && <p role="status" className="text-[12px] text-danger">
           {t("botIdentity.soul.bytesOver", { bytes: bytes.toLocaleString(intlLocale()), limit: maxBytes.toLocaleString(intlLocale()) })}
         </p>}
