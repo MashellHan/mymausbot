@@ -128,7 +128,7 @@ export function Composer({
   needsInputStop?: boolean;
 }) {
   const bot = profile ? currentTaskBot(profile) : undefined;
-  const state = useStoreSelector((s) => ({ instances: s.instances, config: s.config, connected: s.connected, cachedHydrated: s.cachedHydrated, queued: s.pendingQueued[group?.threadId ?? bot?.threadId ?? ""] }), sameFields), dispatch = useStoreDispatch(), store = useStoreRef(), bots = useStoreSelector((s) => s.bots, sameDrawnBots);
+  const state = useStoreSelector((s) => ({ instances: s.instances, config: s.config, offlineCached: Boolean(s.cachedHydrated && !s.connected && !isRemotePwaMode()), cachedHydrated: s.cachedHydrated, queued: s.pendingQueued[group?.threadId ?? bot?.threadId ?? ""] }), sameFields), dispatch = useStoreDispatch(), store = useStoreRef(), bots = useStoreSelector((s) => s.bots, sameDrawnBots);
   const locked = isComposerLocked({ setupLocked, awaitingThreadSnapshot: bot?.awaitingThreadSnapshot, cachedHydrated: state.cachedHydrated });
   const { threads, currentBotId } = useThreadRefs();
   const advanced = useAdvancedMode();
@@ -278,7 +278,7 @@ export function Composer({
   const mentionListRef = useRef<HTMLDivElement>(null);
   const commandListRef = useRef<HTMLDivElement>(null);
 
-  const botSupportsImages = (candidate?: Bot) => botSupportsImagesInComposer(state, candidate);
+  const botSupportsImages = (candidate?: Bot) => botSupportsImagesInComposer({ instances: state.instances, cachedHydrated: state.offlineCached, connected: !state.offlineCached }, candidate);
   const imageTargetsSupport = (message: string, mode: "chat" | "goal") => {
     if (!group) return botSupportsImages(bot);
     if (mode === "goal") {
@@ -485,7 +485,7 @@ export function Composer({
   const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
   const modeBot = group ? undefined : bot;
   const { choice: approvalChoice, dialogs: approvalDialogs } = useThreadApproval(modeBot);
-  const uploadImage = useCallback((file: File) => uploadDraftImage(draftId, file, { offline: !state.connected }), [draftId, state.connected]);
+  const uploadImage = useCallback((file: File) => uploadDraftImage(draftId, file, { offline: !store.state().connected }), [draftId, store]);
   const pickFiles = async (picked: FileList | readonly File[] | null) => {
     if (!picked?.length) return;
     changeDraftAttachmentPending(draftId, true);
@@ -540,7 +540,7 @@ export function Composer({
     }
   };
   const send = (followUp: FollowUp | undefined = followUpFor(false)) => {
-    if (locked || attachmentPending || isPwaOfflineDraftBlocked({ ...state, attachments })) return;
+    if (locked || attachmentPending || isPwaOfflineDraftBlocked({ connected: store.state().connected, cachedHydrated: state.cachedHydrated, attachments })) return;
     if (unresolvedReply) {
       dispatch({ type: "error", message: t("chat.reply.cancelToSend") });
       return;
