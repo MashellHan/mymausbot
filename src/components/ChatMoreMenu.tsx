@@ -14,6 +14,7 @@ import {
 } from "@/lib/export-transcript";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
+import { isRemoteClientSession } from "@/lib/pwa-transport";
 import { localizedTaskTitle } from "@/lib/task-title";
 import { useContextAction } from "./ContextWarning";
 import { ELEVATED_CONTROL, ELEVATED_HOVER, ELEVATED_OPEN } from "./elevated";
@@ -39,7 +40,7 @@ export function useChatMoreItems(profile: Bot, phoneHeader = false): { items: Si
   const showThreads = useShowThreads();
   const findOpen = useChatFindOpen(bot.threadId);
   const [copyStatus, setCopyStatus] = useState<"copied" | "failed" | null>(null);
-  const remoteClient = window.ogb?.remoteClient?.active === true;
+  const remoteClient = isRemoteClientSession();
   const usage = usageSummary(bot, state.instances);
   const hasMessages = messages.length > 0;
   const contextAction = useContextAction();
@@ -69,15 +70,15 @@ export function useChatMoreItems(profile: Bot, phoneHeader = false): { items: Si
       onSelect: () => dispatch({ type: "toggleSettings", open: true }),
     },
   ] : [];
-  const phoneScreen: SidebarMenuItem[] = phoneHeader ? [
-    ...(remoteClient ? [] : [{
+  const phoneScreen: SidebarMenuItem[] = phoneHeader && !remoteClient ? [
+    {
       key: "model",
       label: t("model.simple.model"),
       icon: <Cpu size={16} />,
       value: modelName,
       trailing: <UsageBars engine={selection?.instanceId} hover={false} />,
       onSelect: () => openBotSettings(dispatch, "model"),
-    } satisfies SidebarMenuItem]),
+    } satisfies SidebarMenuItem,
     {
       key: "computer",
       label: t("chat.computer"),

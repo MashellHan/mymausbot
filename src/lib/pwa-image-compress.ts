@@ -1,4 +1,11 @@
-import { AttachError, IMAGE_MAX_BYTES, canonicalImageNameForMime, isImageFile } from "./composer-attachments.ts";
+import {
+  AttachError,
+  IMAGE_MAX_BYTES,
+  canonicalImageNameForMime,
+  imageFileMime,
+  isHeicImageFile,
+  isImageFile,
+} from "./composer-attachments.ts";
 
 export const PWA_IMAGE_MAX_EDGE = 1280;
 export const PWA_IMAGE_QUALITY = 0.82;
@@ -113,10 +120,12 @@ export async function compressImageForOutbox(
   options: CompressImageOptions = {},
 ): Promise<CompressedOutboxImage> {
   const originalName = (typeof file.name === "string" && file.name.trim()) ? file.name : "image";
-  const originalMime = (file.type || "").split(";", 1)[0]!.trim().toLowerCase();
-  if (!isImageFile({ type: originalMime, size: file.size })) {
-    throw new Error(`Unsupported image type: ${originalMime || "unknown"}`);
+  const declaredMime = (file.type || "").split(";", 1)[0]!.trim().toLowerCase();
+  if (!isImageFile({ type: declaredMime, name: originalName, size: file.size })) {
+    throw new Error(`Unsupported image type: ${declaredMime || "unknown"}`);
   }
+  const heic = isHeicImageFile({ type: declaredMime, name: originalName });
+  const originalMime = imageFileMime({ type: declaredMime, name: originalName });
 
   // Keep GIFs untouched to preserve animations; enforce the server's 10 MiB cap.
   if (originalMime === "image/gif") {
@@ -140,6 +149,7 @@ export async function compressImageForOutbox(
   }
 
   if (!decoded) {
+    if (heic) throw new Error(`Unsupported image type: ${originalMime || "unknown"}`);
     if (file.size > IMAGE_MAX_BYTES) throw new AttachError(originalName, IMAGE_MAX_BYTES);
     return {
       blob: file,
@@ -157,6 +167,7 @@ export async function compressImageForOutbox(
       : defaultCreateCanvas(target.width, target.height);
 
     if (!canvas) {
+      if (heic) throw new Error(`Unsupported image type: ${originalMime || "unknown"}`);
       if (file.size > IMAGE_MAX_BYTES) throw new AttachError(originalName, IMAGE_MAX_BYTES);
       return {
         blob: file,
@@ -170,7 +181,7 @@ export async function compressImageForOutbox(
     const encoded = await encodeCandidate(canvas, quality, originalMime);
 
     // Keep the original when dimensions already fit and compression did not reduce size.
-    if (!needsResize && file.size <= IMAGE_MAX_BYTES && (!encoded || encoded.size >= file.size)) {
+    if (!heic && !needsResize && file.size <= IMAGE_MAX_BYTES && (!encoded || encoded.size >= file.size)) {
       return {
         blob: file,
         mime: originalMime,
@@ -179,7 +190,13 @@ export async function compressImageForOutbox(
       };
     }
 
-    const chosen = encoded && (needsResize || encoded.size < file.size) ? encoded : file;
+    if (heic && !encoded) {
+      throw new Error(`Unsupported image type: ${originalMime || "unknown"}`);
+    }
+
+    const chosen = encoded && (heic || needsResize || file.size > IMAGE_MAX_BYTES || encoded.size < file.size)
+      ? encoded
+      : file;
     const chosenMime = (chosen.type || originalMime).split(";", 1)[0]!.trim().toLowerCase() || originalMime;
     if (chosen.size > IMAGE_MAX_BYTES) {
       throw new AttachError(originalName, IMAGE_MAX_BYTES);

@@ -66,7 +66,7 @@ import { createBotPatchQueue, flushWhenLeaving, keepaliveFits, type BotUpdatePat
 import { liveCallFromFrame, nextLiveCallLookup } from "./live-call";
 import { isNoAiRefusal, useChatErrorClear } from "./chat-error";
 import { openLiveEvents, publishLiveFrame, publishMissedFrames, withoutScreenPixels } from "@/lib/live-events";
-import { getPwaAuth, isRemotePwaMode, remoteFetch } from "@/lib/pwa-config"; import { setMacOffline } from "@/lib/pwa-transport"; import { initialStoreStateFromPwaCache, reduceHydrateFromCache, resolveLiveResumeId, usePwaCacheSync, type HydrateFromCacheAction } from "./pwa-boot"; import { enqueuePwaBotSend, enqueuePwaGroupSend, noteOutboxSendArrived, overlayPwaOutboxOnState } from "./pwa-outbox";
+import { getPwaAuth, isRemoteClientSession, isRemotePwaMode, remoteFetch } from "@/lib/pwa-config"; import { setMacOffline } from "@/lib/pwa-transport"; import { initialStoreStateFromPwaCache, reduceHydrateFromCache, resolveLiveResumeId, usePwaCacheSync, type HydrateFromCacheAction } from "./pwa-boot"; import { enqueuePwaBotSend, enqueuePwaGroupSend, noteOutboxSendArrived, overlayPwaOutboxOnState } from "./pwa-outbox";
 import { noteRefusedRequest } from "@/lib/session-ended";
 import { unlessRefused } from "@/lib/admin-scope";
 import { olderRunsSince, ROUTINE_RUNS_WINDOW_MS, trimRoutineRuns, withOlderRoutineRuns } from "./routine-runs";
@@ -2894,13 +2894,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return current;
     };
     const peripheralParts: PeripheralPart[] = [
-      {
+      ...(isRemoteClientSession() ? [] : [{
         key: "instances",
         request: async () => {
           const answer = await unlessRefused<{ instances: InstanceInfo[] } | null>("/api/instances", async () => snapshotArrays<{ instances: InstanceInfo[] }>(await api("/api/instances"), "instances"), null);
           return () => { if (answer) rawDispatch({ type: "instances", instances: answer.instances }); };
         },
-      },
+      } satisfies PeripheralPart]),
       {
         key: "config",
         request: async () => {
@@ -2922,7 +2922,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           return () => rawDispatch({ type: "notificationsHydrated", notifications: Array.isArray(notifications) ? notifications : [] });
         },
       },
-      ...(window.ogb?.remoteClient?.active ? [] : [{
+      ...(isRemoteClientSession() ? [] : [{
         key: "webhooks",
         request: async () => {
           const { webhooks, attempts, ingress } = snapshotArrays(await api("/api/webhooks"), "webhooks");
@@ -2983,12 +2983,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const taskIdsAtStart = new Set([...stateRef.current.bots, ...stateRef.current.groups].flatMap(owner => owner.tasks?.map(task => task.threadId) ?? []));
       const since = stateRef.current.liveCallVersion;
       const seq = nextLiveCallLookup();
-      void unlessRefused<unknown>("/api/live/call", () => api<unknown>("/api/live/call"), null)
-        .then((body) => {
-          const answer = liveCallFromFrame(body);
-          if (alive && answer) flushSync(() => rawDispatch({ type: "liveCallLookup", call: answer.call, since, seq }));
-        })
-        .catch(() => {});
+      if (!isRemoteClientSession()) {
+        void unlessRefused<unknown>("/api/live/call", () => api<unknown>("/api/live/call"), null)
+          .then((body) => {
+            const answer = liveCallFromFrame(body);
+            if (alive && answer) flushSync(() => rawDispatch({ type: "liveCallLookup", call: answer.call, since, seq }));
+          })
+          .catch(() => {});
+      }
       const chat = () =>
         api(`/api/bots?messages=${MESSAGE_PAGE_SIZE}`).then((answer) => snapshotArrays(answer, "bots")).then(({ bots, groups, sections, computerControl, botQueuedMessages }) => {
           if (!alive) return;
@@ -3246,6 +3248,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const instanceProbes = useRef(new Map<string, Promise<void>>());
   const refreshInstances = useCallback(async (options?: { reportErrors?: boolean; cached?: boolean }) => {
+    if (isRemoteClientSession()) return;
     const path = options?.cached ? "/api/instances" : "/api/instances?fresh=1", probes = instanceProbes.current;
     const probe = probes.get(path) ?? api(path, { timeoutMs: 120_000 }).then(({ instances }) => {
       if (!Array.isArray(instances)) throw new Error(t("engineSetup.invalidStatus"));
@@ -3266,6 +3269,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const lastFocusProbe = useRef(0);
   useEffect(() => {
     const onFocus = () => {
+      if (isRemoteClientSession()) return;
       const now = Date.now();
       if (now - lastFocusProbe.current < 30_000) return; // a status read can run engine CLIs, and a Keychain prompt refocuses the window
       lastFocusProbe.current = now;

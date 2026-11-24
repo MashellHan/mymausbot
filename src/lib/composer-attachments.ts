@@ -1,5 +1,5 @@
 import { isCitationAttachment, serializeCitation, type CitationAttachment } from "./citations.ts";
-import { remoteFetch } from "./pwa-transport.ts";
+import { isElectronDesktop, isRemotePwaMode, remoteFetch } from "./pwa-transport.ts";
 import { randomUuid } from "./random-uuid.ts";
 import { FILE_MAX_BYTES } from "../../shared/upload-limits.ts";
 export { dataContextFor, type DataContext, type DataViewContext } from "../../shared/data-context.ts";
@@ -107,14 +107,20 @@ export function imageLimitNotice(leftOut: readonly string[]): string {
   return `A message takes up to ${TURN_IMAGE_MAX_COUNT} images, ${TURN_IMAGE_MAX_BYTES / (1024 * 1024)} MB in all. ${leftOut.join(", ")} ${leftOut.length === 1 ? "wasn't" : "weren't"} attached.`;
 }
 
-/** Splits images by the slots and bytes left: an image over IMAGE_MAX_BYTES is kept to fail with its own size error but takes no room. */
-export function fitImagesToSlots<T extends { size: number }>(images: readonly T[], slots: number, bytes = Infinity): { kept: T[]; leftOut: T[] } {
+/** Splits images by the slots and bytes left: an image over IMAGE_MAX_BYTES is kept to fail with its own size error unless oversize uploads will be compressed first. */
+export function fitImagesToSlots<T extends { size: number }>(
+  images: readonly T[],
+  slots: number,
+  bytes = Infinity,
+  options?: { allowOversizePastSlots?: boolean },
+): { kept: T[]; leftOut: T[] } {
   const kept: T[] = [];
   const leftOut: T[] = [];
   let room = slots;
   let bytesRoom = bytes;
+  const allowOversizePastSlots = options?.allowOversizePastSlots ?? true;
   for (const image of images) {
-    if (image.size > IMAGE_MAX_BYTES) kept.push(image);
+    if (allowOversizePastSlots && image.size > IMAGE_MAX_BYTES) kept.push(image);
     else if (room > 0 && image.size <= bytesRoom) {
       room -= 1;
       bytesRoom -= image.size;
@@ -217,11 +223,41 @@ export function documentMime(file: Pick<File, "name" | "type">): string | null {
   return DOCUMENT_MIMES[extension] ?? null;
 }
 
-export function isImageFile(file: { type: string; size?: number }): boolean {
-  return (
-    file.type.startsWith("image/") &&
-    ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.type.split(";")[0]!.trim().toLowerCase())
-  );
+const SERVER_IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const BROWSER_IMAGE_MIMES = new Set([
+  "image/heic",
+  "image/heif",
+  "image/heic-sequence",
+  "image/heif-sequence",
+]);
+
+function normalizedImageMime(type: string | undefined): string {
+  return (type ?? "").split(";", 1)[0]!.trim().toLowerCase();
+}
+
+function hasHeicExtension(name: string | undefined): boolean {
+  return typeof name === "string" && /\.(heic|heif)$/i.test(name.trim());
+}
+
+export function isHeicImageFile(file: { type: string; name?: string }): boolean {
+  const mime = normalizedImageMime(file.type);
+  if (BROWSER_IMAGE_MIMES.has(mime)) return true;
+  return (!mime || mime === "application/octet-stream") && hasHeicExtension(file.name);
+}
+
+export function imageFileMime(file: { type: string; name?: string }): string {
+  const mime = normalizedImageMime(file.type);
+  if (SERVER_IMAGE_MIMES.has(mime) || BROWSER_IMAGE_MIMES.has(mime)) return mime;
+  if (hasHeicExtension(file.name)) {
+    return file.name!.trim().toLowerCase().endsWith(".heif") ? "image/heif" : "image/heic";
+  }
+  return mime;
+}
+
+export function isImageFile(file: { type: string; name?: string; size?: number }): boolean {
+  const mime = normalizedImageMime(file.type);
+  if (SERVER_IMAGE_MIMES.has(mime)) return true;
+  return !isElectronDesktop() && isHeicImageFile(file);
 }
 
 /** Items first: Chromium on macOS exposes screenshots via items while clipboardData.files may stay empty. */
@@ -348,7 +384,7 @@ export function optimisticImageAttachment(
 ): ImageAttachment | null {
   if (!isImageFile(file)) return null;
   if (!options?.allowOversize && file.size > IMAGE_MAX_BYTES) throw new AttachError(file.name, IMAGE_MAX_BYTES);
-  const mime = file.type.split(";", 1)[0]!.trim().toLowerCase();
+  const mime = imageFileMime(file);
   const previewUrl = typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : undefined;
   return {
     kind: "image",
@@ -366,7 +402,8 @@ export async function imageAttachmentFromFile(
   file: File,
   optimistic?: Pick<ImageAttachment, "id" | "previewUrl">,
 ): Promise<ImageAttachment | null> {
-  if (!isImageFile(file)) return null;
+  const mime = normalizedImageMime(file.type);
+  if (!SERVER_IMAGE_MIMES.has(mime)) return null;
   if (file.size > IMAGE_MAX_BYTES) throw new AttachError(file.name, IMAGE_MAX_BYTES);
   const bytes = new Uint8Array(await file.arrayBuffer());
   const uploadId = newUploadId();
@@ -800,8 +837,16 @@ export async function intakeFiles<T extends DroppedFile & { type: string }>(
   },
 ): Promise<{ attachments: Attachment[]; problems: AttachProblem[]; notice: string | null }> {
   const { allowImages, getPath, uploadImage } = _opts;
+  const remotePwa = isRemotePwaMode();
   const images = allowImages ? _files.filter((file) => isImageFile(file)) : [];
-  const overflow = new Set(fitImagesToSlots(images, _opts.imageSlots ?? Infinity, _opts.imageBytes).leftOut);
+  const overflow = new Set(
+    fitImagesToSlots(
+      images,
+      _opts.imageSlots ?? Infinity,
+      remotePwa ? Infinity : _opts.imageBytes,
+      { allowOversizePastSlots: !remotePwa },
+    ).leftOut,
+  );
   const leftOut = [...overflow].map((file) => file.name);
   const files = _files.filter((file) => !overflow.has(file));
   const uploadFile = _opts.uploadFile ?? (async (file: T, anyType?: boolean) => {

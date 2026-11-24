@@ -1,15 +1,17 @@
 import { useEffect, type Dispatch, type RefObject, type SetStateAction } from "react";
 import { focusComputerPanelEntry } from "./computer-panel-focus";
+import { isRemotePwaMode } from "./pwa-transport";
 
 export type ComputerPanelView = "computer" | "android" | "browser" | "routines" | "files" | "data" | "mini-apps";
 
-type PanelTabsContext = { advanced: boolean; androidConnected: boolean };
+type PanelTabsContext = { advanced: boolean; androidConnected: boolean; remotePwa?: boolean };
 
-export function computerPanelTabs({ advanced, androidConnected }: PanelTabsContext): ComputerPanelView[] {
+export function computerPanelTabs({ advanced, androidConnected, remotePwa = isRemotePwaMode() }: PanelTabsContext): ComputerPanelView[] {
   const android = androidConnected ? (["android"] as const) : [];
+  const miniApps = remotePwa ? ([] as const) : (["mini-apps"] as const);
   return advanced
-    ? ["computer", "routines", ...android, "browser", "data", "files", "mini-apps"]
-    : ["computer", ...android, "browser", "data", "files", "mini-apps"];
+    ? ["computer", "routines", ...android, "browser", "data", "files", ...miniApps]
+    : ["computer", ...android, "browser", "data", "files", ...miniApps];
 }
 
 export function resolveComputerPanelView(view: ComputerPanelView, context: PanelTabsContext): ComputerPanelView {

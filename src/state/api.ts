@@ -37,6 +37,13 @@ type ApiInit = RequestInit & { timeoutMs?: number; background?: boolean };
 /** Background reads waiting for a hidden page to show again, one per path: a poll that ticks while hidden asks once. */
 const heldReads = new Map<string, Promise<unknown>>();
 
+const isBridgeRouteForbidden = (body: unknown): boolean => {
+  if (!body || typeof body !== "object") return false;
+  const record = body as { code?: unknown; error?: unknown };
+  if (record.code === "bridge_route_forbidden") return true;
+  return Boolean(record.error && typeof record.error === "object" && (record.error as { code?: unknown }).code === "bridge_route_forbidden");
+};
+
 /** `background`: a poll nobody asked for just now. It never wakes a Cloud home that went to sleep (it is refused here
  * instead, src/lib/cloud-power.ts) and the home doesn't count it as someone using it. Anything else wakes it. While the
  * page is hidden (a background tab, a minimized window) a background request waits until it shows again, so a page out of
@@ -66,7 +73,7 @@ export async function api<T = any>(path: string, init?: ApiInit): Promise<T> {
     const message = typeof error === "string" ? error : typeof error?.message === "string" ? error.message : `${res.status} ${res.statusText}`;
     const retryAfterMs = parseRetryAfterMs(res.headers?.get?.("Retry-After") ?? null);
     const refused = new ApiError(serverErrorText(body, message), res.status, body, retryAfterMs);
-    if (res.status === 401 || (res.status === 403 && !lacksAdminScope(refused))) noteRefusedRequest();
+    if (res.status === 401 || (res.status === 403 && !lacksAdminScope(refused) && !isBridgeRouteForbidden(body))) noteRefusedRequest();
     if (res.status === 409 && isBotLimitRefusal(refused)) showBotLimit();
     if (res.status === 409 && isBotPausedRefusal(refused)) showBotLimit("paused");
     throw refused;

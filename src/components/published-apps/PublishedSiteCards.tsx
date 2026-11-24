@@ -8,6 +8,7 @@ import { memoInLocale } from "@/lib/locale-memo";
 import { askAboutSite, useKnownPublishedApps } from "@/lib/own-published-apps";
 import { showAppBesideChat } from "@/lib/page-open";
 import { publishedSiteLinks, type SiteCardLink } from "@/lib/published-site-links";
+import { isRemotePwaMode } from "@/lib/pwa-transport";
 import { isLiveReply } from "@/state/live-reply";
 import type { Message } from "@/state/store";
 import { useOptionalStoreRef } from "@/state/store-ref";
@@ -54,14 +55,15 @@ function useNewestFor(links: readonly SiteCardLink[], messageId: string, at: num
  * full screen on a phone) and Open in browser. Any other site stays a plain link. Nothing while the reply streams, and
  * nothing on a published page's or a template's own card. */
 export const PublishedSiteCards = memoInLocale(function PublishedSiteCards({ message }: { message: Message }) {
+  const remotePwa = isRemotePwaMode();
   const apps = useKnownPublishedApps();
-  const done = message.role === "bot" && message.kind === "text" && !message.publishedPage && !message.template && !isLiveReply(message);
+  const done = !remotePwa && message.role === "bot" && message.kind === "text" && !message.publishedPage && !message.template && !isLiveReply(message);
   const text = done ? message.text ?? "" : "";
   const origin = typeof window === "undefined" ? undefined : window.location?.origin;
   const { cards, unknown } = useMemo(() => (text && origin ? publishedSiteLinks(text, origin, apps) : { cards: [], unknown: [] }), [text, origin, apps]);
-  useEffect(() => { for (const href of unknown) askAboutSite(href); }, [unknown]);
+  useEffect(() => { if (!remotePwa) for (const href of unknown) askAboutSite(href); }, [unknown, remotePwa]);
   const shown = useNewestFor(cards, message.id, message.at ?? 0);
-  if (shown.length === 0) return null;
+  if (remotePwa || shown.length === 0) return null;
   return (
     <div data-published-sites="" className="flex w-full flex-col items-start gap-2">
       {shown.map((link) => <PublishedSiteCard key={link.appId} link={link} />)}

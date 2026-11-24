@@ -12,6 +12,7 @@ import { setInboxSupport } from "@/state/inbox";
 const fixture = vi.hoisted(() => ({
   density: "comfortable" as SidebarDensity,
   advanced: true,
+  phone: false,
   windowChrome: undefined as "mac-inset" | "win-caption" | "native" | undefined,
   windowFrame: undefined as boolean | undefined,
   hostLabel: undefined as string | undefined,
@@ -23,6 +24,10 @@ vi.mock("@/lib/sidebar-preferences", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/sidebar-preferences")>(),
   useSidebarDensity: () => fixture.density,
 }));
+vi.mock("@/lib/use-media-query", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/lib/use-media-query")>();
+  return { ...original, useMediaQuery: (query: string, fallback = false) => query === original.PHONE_LAYOUT ? fixture.phone : fallback };
+});
 vi.mock("@/lib/interface-mode", () => ({ useAdvancedMode: () => fixture.advanced, setAdvancedMode: () => {} }));
 vi.mock("@/lib/chrome-rail", () => ({ useChromeRail: () => fixture.rail, setChromeRailHidden: () => {} }));
 vi.mock("./DesktopCapabilities", async (importOriginal) => ({
@@ -36,13 +41,14 @@ vi.mock("./DesktopCapabilities", async (importOriginal) => ({
 
 import { Sidebar } from "./Sidebar";
 
-const render = () => renderToStaticMarkup(
-  createElement(StoreProvider, null, createElement(RawPresentation, { value: fixture.raw }, createElement(Sidebar, { open: true, onClose: () => {} }))),
+const render = (open = true) => renderToStaticMarkup(
+  createElement(StoreProvider, null, createElement(RawPresentation, { value: fixture.raw }, createElement(Sidebar, { open, onClose: () => {} }))),
 );
 
 beforeEach(() => {
   fixture.density = "comfortable";
   fixture.advanced = true;
+  fixture.phone = false;
   fixture.windowChrome = undefined;
   fixture.windowFrame = undefined;
   fixture.hostLabel = undefined;
@@ -388,5 +394,70 @@ describe("sidebar foot in Simple mode", () => {
     expect(html.match(/data-sidebar-nav="automations"/g)).toHaveLength(1);
     expect(html.indexOf('data-sidebar-nav="automations"')).toBeGreaterThan(html.indexOf('data-glass-bar="bottom"'));
     expect(html.match(/data-sidebar-nav="apps"/g)).toHaveLength(1);
+  });
+});
+
+describe("phone sidebar header, mobile cards, and drawer compositor props", () => {
+  it("puts the compact Inbox icon button inside data-sidebar-top-buttons to the left of + and removes max-md:h-16", () => {
+    fixture.phone = true;
+    fixture.advanced = false;
+    setInboxSupport("yes");
+    vi.stubGlobal("window", { innerWidth: 390, location: { protocol: "http:", search: "" } });
+    const html = render();
+    const topRowMatch = html.match(/data-sidebar-top-row="true" class="([^"]*)"/);
+    expect(topRowMatch?.[1]).toContain("h-12");
+    expect(topRowMatch?.[1]).toContain("max-md:pt-1");
+    expect(topRowMatch?.[1]).not.toContain("max-md:h-16");
+    const buttonsStart = html.indexOf("data-sidebar-top-buttons");
+    const buttonsEnd = html.indexOf("data-sidebar-top-slot") > buttonsStart ? html.length : html.indexOf("</div", html.indexOf('aria-label="New or share"'));
+    const topButtons = html.slice(buttonsStart, buttonsEnd);
+    expect(topButtons).toContain("data-sidebar-inbox=");
+    expect(topButtons).toContain("rounded-full");
+    expect(topButtons.indexOf("data-sidebar-inbox=")).toBeLessThan(topButtons.indexOf('aria-label="New or share"'));
+    expect(html.match(/data-sidebar-inbox=/g)).toHaveLength(1);
+  });
+
+  it("sets inert and compositor-layer classes on the closed mobile drawer and activates translate-x-0 when open", () => {
+    fixture.phone = true;
+    fixture.advanced = false;
+    vi.stubGlobal("window", { innerWidth: 390, location: { protocol: "http:", search: "" } });
+    const closed = render(false);
+    expect(closed).toMatch(/<aside[^>]*inert=""/);
+    expect(closed).toContain("max-md:will-change-transform");
+    expect(closed).toContain("max-md:duration-[240ms]");
+    expect(closed).toContain("max-md:pointer-events-none");
+    const opened = render(true);
+    expect(opened).not.toMatch(/<aside[^>]*inert=""/);
+    expect(opened).toContain("max-md:translate-x-0");
+  });
+
+  it("renders mobile card surfaces on BotListItem, GroupListItem, and PhoneHero with a 72px hero avatar", async () => {
+    const { BotListItem, GroupListItem } = await import("./Sidebar");
+    const { PhoneHero } = await import("./SidebarPhoneHero");
+    const bot = { id: "b1", threadId: "t1", name: "Maus", title: "", description: "", notifications: true, color: "green", unread: false, modelSelection: { instanceId: "fake", model: "m" }, messages: [], chiefOfStaff: true } as const;
+    const group = { id: "g1", threadId: "gt1", name: "Room", memberIds: ["b1"], messages: [], defaultResponder: { kind: "mentions" }, bulletin: "", unread: false, createdAt: 1 } as const;
+    const heroHtml = renderToStaticMarkup(createElement(StoreProvider, null, createElement(PhoneHero, { bot: bot as never, selected: false, onOpen: () => {}, onMenu: () => {} })));
+    expect(heroHtml).toContain('width="72px" height="72px"');
+    expect(heroHtml).toContain("rounded-2xl");
+    expect(heroHtml).toContain("bg-card");
+    expect(heroHtml).toContain("active:scale-[0.985]");
+
+    const botHtml = renderToStaticMarkup(createElement(StoreProvider, null, createElement(BotListItem, {
+      bot: bot as never, selected: false, deleting: false, mascotMotion: null, reveal: null, pendingQueued: {}, instances: [], liveCall: null, locale: "en", density: "comfortable", query: "", dispatch: () => {}, onMenu: () => {},
+    })));
+    expect(botHtml).toContain("max-md:bg-card");
+    expect(botHtml).toContain("max-md:rounded-2xl");
+    expect(botHtml).toContain("max-md:px-3.5");
+    expect(botHtml).toContain("max-md:py-3");
+    expect(botHtml).toContain("max-md:active:scale-[0.985]");
+
+    const groupHtml = renderToStaticMarkup(createElement(StoreProvider, null, createElement(GroupListItem, {
+      group: group as never, density: "comfortable", onMenu: () => {},
+    })));
+    expect(groupHtml).toContain("max-md:bg-card");
+    expect(groupHtml).toContain("max-md:rounded-2xl");
+    expect(groupHtml).toContain("max-md:px-3.5");
+    expect(groupHtml).toContain("max-md:py-3");
+    expect(groupHtml).toContain("max-md:active:scale-[0.985]");
   });
 });

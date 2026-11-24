@@ -110,4 +110,18 @@ describe("glass surface", () => {
     expect(mcp).toContain('data-mcp-row className="flex flex-wrap items-center gap-3"');
     expect(mcp).toContain('data-mcp-row-actions className="ml-auto flex flex-wrap items-center justify-end gap-1"');
   });
+
+  it("disables expensive backdrop blur on mobile glass bars and Settings sheets and defines view-enter", () => {
+    const mobileAt = css.indexOf("@media (max-width: 767.98px)");
+    expect(mobileAt).toBeGreaterThan(-1);
+    const sheetPane = rule(".glass-popup-frame[data-settings-sheet] > .glass-popup", mobileAt);
+    expect(sheetPane).toContain("backdrop-filter: none");
+    expect(sheetPane).toContain("contain: layout paint");
+    const mobileBarAt = css.indexOf("@media (max-width: 767.98px)", css.indexOf(".glass-bar::before"));
+    expect(mobileBarAt).toBeGreaterThan(-1);
+    const mobileBar = rule(".glass-bar::before", mobileBarAt);
+    expect(mobileBar).toContain("backdrop-filter: none");
+    expect(mobileBar).toContain("mask-image: none");
+    expect(css).toContain("@keyframes view-enter");
+  });
 });

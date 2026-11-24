@@ -41,7 +41,37 @@ export function EffortRow({
   }
   const levels = pickerModelEffortLevels(instance, selection.model);
   const effort = selection.effort;
-  if (!levels.length && effort === undefined) return null;
+  if (levels.length === 0) {
+    if (effort === undefined) return null;
+    if (compact) {
+      return (
+        <div className={cn("flex items-center justify-between gap-3", className)}>
+          {label}
+          <span
+            data-effort-readonly=""
+            aria-label={t("model.effort.label")}
+            className="rounded-md bg-control/60 px-2 py-0.5 text-[12px] text-ink-secondary"
+          >
+            {effortLabel(effort)}
+          </span>
+        </div>
+      );
+    }
+    return (
+      <div className={className}>
+        {label}
+        <div className="mt-2 flex flex-wrap gap-1">
+          <span
+            data-effort-readonly=""
+            aria-label={t("model.effort.label")}
+            className="rounded-full border border-hairline/40 bg-control/60 px-2.5 py-1 text-[12px] text-ink-secondary"
+          >
+            {effortLabel(effort)}
+          </span>
+        </div>
+      </div>
+    );
+  }
   const unavailable = effort !== undefined && !levels.includes(effort);
 
   if (compact) return (

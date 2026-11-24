@@ -83,7 +83,7 @@ import { RoomWorkingFolder } from "./RoomWorkingFolder";
 import { RoomBulletin } from "./RoomBulletin";
 import { RoomHeader } from "./RoomHeader";
 import { useChatFindRequests, useChatFindShortcut } from "@/lib/chat-find";
-import { simpleRoomHeader } from "@/lib/room-panel";
+import { simpleRoomHeader } from "@/lib/room-panel"; import { isRemoteClientSession } from "@/lib/pwa-transport";
 import { RoomToolChip } from "./RoomToolChip";
 export { RoomToolChip } from "./RoomToolChip";
 
@@ -658,7 +658,7 @@ function RoomSetup({ group, members }: { group: Group; members: Bot[] }) {
 }
 export function GroupView({ group, inForkPanel = false }: { group: Group; inForkPanel?: boolean }) {
   const { state, dispatch } = useStore();
-  const remoteClient = window.ogb?.remoteClient?.active === true;
+  const remoteClient = isRemoteClientSession();
   const composerDockRef = useRef<HTMLDivElement>(null);
   const composerDock = useComposerDockPad(composerDockRef);
   const [folderOpen, setFolderOpen] = useState(false);
