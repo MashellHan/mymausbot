@@ -43,6 +43,27 @@ type TokenType = typeof tokenTypeKeys[number];
 type AgentSeries = { kind: "agent"; key: string; name: string; teamId: string; teamName: string };
 export type TokenTrendSeries = { kind: "type"; key: TokenType } | { kind: "model"; key: string } | AgentSeries
   | { kind: "other" | "unknown"; key: "other" | "unknown" };
+export type TokenTrendRow = { series: TokenTrendSeries; amount: number };
+
+type TokenTrendStack = {
+  series: TokenTrendSeries[];
+  points: (number | null)[][];
+  modelTooltips?: TokenTrendRow[][];
+};
+
+function rankModels(models: ReadonlyMap<string, number>) {
+  return [...models].filter(([, tokens]) => tokens > 0)
+    .sort(([a, aTokens], [b, bTokens]) => bTokens - aTokens || (a < b ? -1 : 1));
+}
+
+function modelTooltipRows({ models, unknown }: { models: ReadonlyMap<string, number>; unknown: number | null }): TokenTrendRow[] {
+  const ranked = rankModels(models);
+  const rows: TokenTrendRow[] = ranked.slice(0, 3).map(([key, amount]) => ({ series: { kind: "model", key }, amount }));
+  const other = ranked.slice(3).reduce((total, [, amount]) => total + amount, 0);
+  if (other > 0) rows.push({ series: { kind: "other", key: "other" }, amount: other });
+  if (unknown !== null && unknown > 0) rows.push({ series: { kind: "unknown", key: "unknown" }, amount: unknown });
+  return rows;
+}
 
 function daysInBucket(byDay: ReadonlyMap<string, UsageTrendDay>, bucket: UsageTrendBucket) {
   const rows: UsageTrendDay[] = [];
@@ -90,7 +111,7 @@ function agentTokenStacks(byDay: ReadonlyMap<string, UsageTrendDay>, buckets: Us
     item.kind === "agent" ? point.assigned.get(item.key)?.total ?? null : point.unknown)) };
 }
 
-export function tokenTrendStacks(days: UsageTrendDay[], buckets: UsageTrendBucket[], mode: TokenTrendMode) {
+export function tokenTrendStacks(days: UsageTrendDay[], buckets: UsageTrendBucket[], mode: TokenTrendMode): TokenTrendStack {
   const byDay = new Map(days.map((day) => [day.day, day]));
   if (mode === "agents") return agentTokenStacks(byDay, buckets);
   const modelTotals = new Map<string, number>();
@@ -119,13 +140,13 @@ export function tokenTrendStacks(days: UsageTrendDay[], buckets: UsageTrendBucke
     }
     return { types, models, unknown: bucket.totalTokens - knownTotal };
   });
-  const ranked = [...modelTotals].sort(([a, aTokens], [b, bTokens]) => bTokens - aTokens || (a < b ? -1 : 1));
+  const ranked = rankModels(modelTotals);
   const top = new Set(ranked.slice(0, 5).map(([name]) => name));
   const series: TokenTrendSeries[] = mode === "types" ? tokenTypeKeys.map((key) => ({ kind: "type", key }))
     : [...top].map((key) => ({ kind: "model", key }));
   if (ranked.length > top.size) series.push({ kind: "other", key: "other" });
   if (points.some(({ unknown }) => unknown !== null && unknown > 0)) series.push({ kind: "unknown", key: "unknown" });
-  return { series, points: points.map((point) => {
+  return { series, modelTooltips: mode === "models" ? points.map(modelTooltipRows) : undefined, points: points.map((point) => {
     const other = [...point.models].reduce((total, [model, tokens]) => top.has(model) ? total : total + tokens, 0);
     return series.map((item) => item.kind === "type" ? point.types?.[item.key] ?? null
       : item.kind === "model" ? point.models.get(item.key) ?? 0 : item.kind === "other" ? other : point.unknown);

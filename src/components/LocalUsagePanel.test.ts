@@ -276,10 +276,10 @@ describe("local Usage panel", () => {
     await act(async () => bar.focus());
     expect(tooltip()).toContain("2026-11-03 · Tue");
     expect(tooltip()).toContain("Total tokens110");
-    expect(modelRows().map(([name]) => name)).toEqual(["Unattributed tokens", "A", "B", "C", "D", "E", "Other models"]);
-    expect(modelRows()[0]).toEqual(["Unattributed tokens", "50", "—"]);
-    expect(modelRows()[1]).toEqual(["A", "10", "9.1%"]);
-    expect(modelRows().at(-1)).toEqual(["Other models", "10", "9.1%"]);
+    expect(modelRows().map(([name]) => name)).toEqual(["A", "B", "C", "Other models", "Unattributed tokens"]);
+    expect(modelRows()[0]).toEqual(["A", "10", "9.1%"]);
+    expect(modelRows()[3]).toEqual(["Other models", "30", "27.3%"]);
+    expect(modelRows().at(-1)).toEqual(["Unattributed tokens", "50", "—"]);
     expect(chart.querySelector('[role="tooltip"] p.sr-only')?.textContent).toBe("Recorded tokens only");
     expect(bar.getAttribute("aria-label")).toContain("Partial coverage");
     expect(bar.getAttribute("aria-describedby")).toBe(chart.querySelector('[role="tooltip"]')?.id);
@@ -315,12 +315,52 @@ describe("local Usage panel", () => {
     await act(async () => { first.focus(); first.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })); });
     expect(tooltip()).toContain("2026-11-02 – 2026-11-03");
     expect(tooltip()).toContain("Total tokens220");
-    expect(modelRows().slice(0, 2)).toEqual([["Unattributed tokens", "160", "—"], ["Other models", "20", "9.1%"]]);
+    expect(modelRows().map(([name]) => name)).toEqual(["A", "B", "C", "Other models", "Unattributed tokens"]);
+    expect(modelRows().slice(-2)).toEqual([["Other models", "30", "13.6%"], ["Unattributed tokens", "160", "—"]]);
     const last = document.activeElement as HTMLButtonElement;
     await hover(last, "other");
     expect(highlighted()).toBe("other");
     await act(async () => last.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     expect(tooltip()).toBeUndefined();
+  });
+
+  it("shows a daily leader grouped by the chart's range-wide model stacks", async () => {
+    const snapshot = structuredClone(sample);
+    const day = snapshot.trend.at(-1)!;
+    const earlier = snapshot.trend.find((row) => row.day === "2026-10-31")!;
+    const estimatedCost = { coverage: "unavailable", usd: null } as const;
+    const model = (name: string, totalTokens: number) => ({ model: name, totalTokens, input: totalTokens, output: 0, cacheRead: 0, estimatedCost });
+    const details = (rows: ReturnType<typeof model>[]) => ({ input: rows.reduce((total, row) => total + row.totalTokens, 0), output: 0, cacheRead: 0,
+      estimatedCost, models: { coverage: "ready" as const, rows } });
+    Object.assign(earlier, { totalTokens: 1000, newTokens: 1000, cacheRead: 0,
+      tokenDetails: details(["A", "B", "C", "D", "E"].map((name) => model(name, 200))) });
+    day.tokenDetails = details([model("A", 40), model("Daily leader", 30), model("B", 20), model("C", 12), model("D", 5), model("E", 3)]);
+    await renderRaw(snapshot);
+    const chart = host.querySelector('[data-usage-trend="totalTokens"]')!;
+    const bar = chart.querySelector<HTMLButtonElement>(`[data-usage-day="${day.day}"]`)!;
+    const highlighted = () => [...chart.querySelectorAll('[data-usage-token-highlighted="true"]')]
+      .map((row) => row.getAttribute("data-usage-token-row"));
+    const hover = (key: string) => act(async () => bar.querySelector(`[data-usage-token-segment="${key}"]`)!
+      .dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
+    expect(chart.querySelector("[data-usage-token-legend]")?.textContent).not.toContain("Daily leader");
+    await act(async () => bar.focus());
+    expect([...chart.querySelectorAll<HTMLTableRowElement>("[data-usage-token-row]")]
+      .map((row) => [...row.cells].map((cell) => cell.textContent))).toEqual([
+      ["A", "40", "36.4%"], ["Daily leader", "30", "27.3%"], ["B", "20", "18.2%"], ["Other models", "20", "18.2%"],
+    ]);
+    await hover("other");
+    expect(highlighted()).toEqual(["Daily leader"]);
+    await hover("C");
+    expect(highlighted()).toEqual(["other"]);
+    await renderRaw(structuredClone(snapshot));
+    expect(highlighted()).toEqual(["other"]);
+    const refreshed = structuredClone(snapshot);
+    for (const point of refreshed.trend) {
+      const row = point.tokenDetails?.models?.rows.find(({ model }) => model === "C");
+      if (row) row.model = "New stack model";
+    }
+    await renderRaw(refreshed);
+    expect(highlighted()).toEqual([]);
   });
 
   it("breaks out verified members, team totals and unattributed tokens on the same calendar", async () => {
