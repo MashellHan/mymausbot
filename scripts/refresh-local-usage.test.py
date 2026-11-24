@@ -476,8 +476,38 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False, history_d
         self.assertEqual(result["status"], "partial")
         self.assertEqual(result["historyDays"], 59)
         self.assertEqual(result["daily"], [{"tokenStatus": "partial", "totalTokens": 123}])
-        self.assertEqual(result["sources"], [{"device": str(i), "status": status, "tokenStatus": token_status, "commitStatus": commit_status}
+        self.assertEqual(result["sources"], [{"device": str(i), "status": status, "tokenStatus": token_status,
+                                              "commitStatus": commit_status,
+                                              "commitCategoryStatus": {category: commit_status for category in
+                                                                       ("work", "personal", "unclassified")}}
                          for i, (status, _, token_status, commit_status) in enumerate(cases)])
+
+    def test_incomplete_ado_preserves_personal_commit_qualification(self):
+        collector = self.root / "collector-ado-partial.py"
+        output = self.root / "ado-partial.json"
+        collector.write_text("""import json
+import datetime as dt
+def instant(value):
+    return dt.datetime.fromisoformat(value.replace("Z", "+00:00")) if isinstance(value, str) else None
+def run(args, timeout=35):
+    raise AssertionError("No CLI should run in this fixture")
+def aggregate(machines, prs, at, history_days=30):
+    return {"status": "partial",
+            "sources": [{"device": machine["device"], "status": machine["status"]} for machine in machines],
+            "daily": [], "historyDays": history_days}
+def refresh(config, upload=False, skip_api=False, reuse_sources=False, history_days=30):
+    at = dt.datetime(2026, 11, 6, 8, tzinfo=dt.timezone.utc)
+    with open(config["result"], "w") as stream:
+        json.dump(aggregate(config["machines"], {}, at, history_days), stream)
+""")
+        config = {"azureCli": "/fixture/az", "authorEmails": [OWNER], "result": str(output),
+                  "adoRemotes": ["https://dev.azure.com/example/project/_git/repo"],
+                  "machines": [{"device": "0", "status": "ok"}]}
+        usage.refresh(collector, config, self.root, skip_api=True, reuse_sources=True)
+        result = json.loads(output.read_text())
+        self.assertEqual(result["sources"], [{"device": "0", "status": "ok", "tokenStatus": "ready",
+            "commitStatus": "partial", "commitCategoryStatus": {
+                "work": "partial", "personal": "ready", "unclassified": "ready"}}])
 
     def test_legacy_join_deduplicates_sha_and_preserves_partial_coverage(self):
         collector = self.root / "collector-ado-join.py"
@@ -714,16 +744,20 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False, history_d
                                 "errors": [{"source": "git-fetch", "code": "DisabledByAuthBoundary"}]}]}
         usage.refresh(collector, config, self.root, skip_api=True, reuse_sources=True)
         result = json.loads(output.read_text())
-        self.assertEqual(result["sources"], [{"device": "0", "status": "partial", "tokenStatus": "ready", "commitStatus": "local-ref-ready"}])
+        self.assertEqual(result["sources"], [{"device": "0", "status": "partial", "tokenStatus": "ready",
+            "commitStatus": "local-ref-ready", "commitCategoryStatus": {category: "local-ref-ready" for category in
+                ("work", "personal", "unclassified")}}])
         self.assertEqual(result["daily"], [
             {"day": "2026-11-04"},
             {"day": "2026-11-05"},
-            {"day": "2026-11-06", "commitStatus": "local-ref-ready"},
+            {"day": "2026-11-06", "commitStatus": "local-ref-ready", "commitCategoryStatus": {
+                category: "local-ref-ready" for category in ("work", "personal", "unclassified")}},
         ])
         self.assertEqual(result["localHistory"]["daily"], [
             {"day": "2026-11-04"},
             {"day": "2026-11-05"},
-            {"day": "2026-11-06", "commitStatus": "local-ref-ready"},
+            {"day": "2026-11-06", "commitStatus": "local-ref-ready", "commitCategoryStatus": {
+                category: "local-ref-ready" for category in ("work", "personal", "unclassified")}},
         ])
 
         midday_output = self.root / "midday-repeat-commit.json"
@@ -748,7 +782,8 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False, history_d
         stale_result = json.loads(stale_output.read_text())
         self.assertEqual(stale_result["daily"], [
             {"day": "2026-11-04"},
-            {"day": "2026-11-05", "commitStatus": "local-ref-ready"},
+            {"day": "2026-11-05", "commitStatus": "local-ref-ready", "commitCategoryStatus": {
+                category: "local-ref-ready" for category in ("work", "personal", "unclassified")}},
             {"day": "2026-11-06"},
         ])
 
@@ -771,7 +806,9 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False, history_d
                                 "errors": [{"source": "git-fetch", "code": "DisabledByAuthBoundary"}]}]}
         usage.refresh(collector, config, self.root, skip_api=True, reuse_sources=True)
         result = json.loads(output.read_text())
-        self.assertEqual(result["sources"], [{"device": "0", "status": "partial", "tokenStatus": "ready", "commitStatus": "partial"}])
+        self.assertEqual(result["sources"], [{"device": "0", "status": "partial", "tokenStatus": "ready",
+                                               "commitStatus": "partial", "commitCategoryStatus": {
+                                                   "work": "partial", "personal": "partial", "unclassified": "partial"}}])
         self.assertEqual(result["daily"], [{"commitStatus": "partial"}])
 
     def test_profile_opt_in_routes_independently_and_preserves_skip_api(self):
@@ -802,6 +839,53 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False, history_d
                 usage._run_worker({"stage": "collect"}, 0.1)
         kill.assert_called_once_with(123, usage.signal.SIGKILL)
         self.assertEqual(worker.calls, 2)
+
+    def test_local_worker_timeout_without_reap_reports_unverified_cleanup(self):
+        class Worker:
+            pid = 123
+            returncode = None
+            def communicate(self, payload=None, timeout=None):
+                raise subprocess.TimeoutExpired("synthetic worker", timeout)
+        with patch.object(usage.subprocess, "Popen", return_value=Worker()), patch.object(usage.os, "killpg"):
+            with self.assertRaises(usage.LocalWorkerCleanupUnverified):
+                usage._run_worker({"stage": "collect"}, 0.1)
+
+    def test_confirmed_worker_timeout_does_not_poison_cleanup_marker(self):
+        lock = self.root / ".refresh.lock"
+        lock.mkdir()
+        config = {"storageDir": str(self.root), "home": str(self.root), "repoRoots": []}
+        timeout = subprocess.TimeoutExpired("local activity collection", 1)
+        with patch.object(usage, "_run_worker", side_effect=timeout):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                usage.collect_local(self.root / "collector.py", config, "fixture")
+        self.assertFalse((lock / ".detached-child-unverified").exists())
+
+    def test_unverified_worker_cleanup_keeps_fail_closed_marker(self):
+        lock = self.root / ".refresh.lock"
+        lock.mkdir()
+        config = {"storageDir": str(self.root), "home": str(self.root), "repoRoots": []}
+        with patch.object(usage, "_run_worker", side_effect=usage.LocalWorkerCleanupUnverified()):
+            with self.assertRaisesRegex(RuntimeError, "cleanup is unverified"):
+                usage.collect_local(self.root / "collector.py", config, "fixture")
+        self.assertTrue((lock / ".detached-child-unverified").is_dir())
+
+    def test_unverified_worker_cleanup_is_fail_closed_for_repository_and_opencode_stages(self):
+        for stage in ("repositories", "opencode"):
+            with self.subTest(stage=stage):
+                folder = self.root / stage
+                folder.mkdir()
+                (folder / ".refresh.lock").mkdir()
+                config = {"storageDir": str(folder), "home": str(folder),
+                          "repoRoots": ["/fixture"] if stage == "repositories" else []}
+                def worker(request, timeout):
+                    if request["stage"] == stage:
+                        raise usage.LocalWorkerCleanupUnverified()
+                    return {"start": "2026-11-05T16:00:00Z", "capturedAt": "2026-11-06T08:00:00Z",
+                            "status": "ok", "errors": [], "tokens": [], "commits": []}
+                with patch.object(usage, "_run_worker", side_effect=worker):
+                    with self.assertRaisesRegex(RuntimeError, "cleanup is unverified"):
+                        usage.collect_local(self.root / "collector.py", config, "fixture")
+                self.assertTrue((folder / ".refresh.lock/.detached-child-unverified").is_dir())
 
     def test_worker_imports_sibling_module_from_unrelated_cwd_without_pythonpath(self):
         unrelated = self.root / "unrelated"

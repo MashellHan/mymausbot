@@ -160,6 +160,7 @@ describe("local Usage projection", () => {
     for (const category of Object.values(historyYesterday.categories)) (category as { commits: number | null }).commits = null;
     Object.assign(yesterday, { commitStatus: "unavailable" });
     Object.assign(historyYesterday, { commitStatus: "unavailable" });
+    snapshot.sources.push({ status: "missing" });
     await writeFile(file, JSON.stringify(snapshot));
     const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
     expect(response.windows!["1"]).toMatchObject({ commits: null, coverage: "partial",
@@ -502,6 +503,129 @@ describe("local Usage projection", () => {
     expect(gap.trend.at(-1)?.wow.totalTokens).toBeNull();
   });
 
+  it.each(["ready", "local-ref-ready"] as const)("keeps comparable Personal commits independent of incomplete Work coverage with %s scope", async (personalScope) => {
+    const asOf = Date.parse("2026-11-03T08:00:00Z");
+    const { file, snapshot } = await historyFixture(asOf);
+    const end = snapshot.daily.at(-1)!.day;
+    const shift = (value: number) => day(end, value);
+    Object.assign(snapshot.sources[0]!, { status: "partial", tokenStatus: "partial", commitStatus: "partial",
+      commitCategoryStatus: { work: "partial", personal: personalScope, unclassified: personalScope } });
+    const personalCommits = (date: string) => date === shift(-1) || date === shift(-7) ? 12
+      : date >= shift(-6) ? 3 : 1;
+    const repositoryDaily = snapshot.localHistory.daily.map((row) => ({ day: row.day,
+      knownPrs: 0, commits: personalCommits(row.day) }));
+    const personalRepository = { id: "b".repeat(64), name: "github.com/example/personal", category: "personal",
+      daily: repositoryDaily };
+    for (const repositories of [snapshot.localRepositories, snapshot.localHistory.localRepositories]) {
+      repositories.rows.push({ ...personalRepository, daily: repositories === snapshot.localRepositories
+        ? repositoryDaily.slice(-31) : repositoryDaily });
+      repositories.attribution = repositories.attribution.map((row) => ({ ...row,
+        commits: row.commits + personalCommits(row.day) }));
+    }
+    for (const rows of [snapshot.daily, snapshot.localHistory.daily]) {
+      for (const row of rows) {
+        row.categories.personal.commits = personalCommits(row.day);
+        Object.assign(row, { tokenStatus: "partial", commitCategoryStatus: {
+          personal: personalScope, unclassified: personalScope } });
+      }
+    }
+    snapshot.sources.push({ status: "missing" });
+    await writeFile(file, JSON.stringify(snapshot));
+    const provider = createLocalUsageProvider({ file, now: () => asOf });
+    const response = await provider.get();
+    const dayWindow = response.windows!["1"];
+    const week = response.windows!["7"];
+    expect(dayWindow).toMatchObject({ commits: null,
+      categories: { personal: { commits: 3, knownCommits: 3 }, work: { commits: null } },
+      comparison: { commits: null, categories: { personal: { commits: personalScope === "ready" ? -75 : null },
+        work: { commits: null } } } });
+    expect(week.categories.personal.commits).toBe(30);
+    expect(week.comparison.categories.personal.commits).toBe(personalScope === "ready" ? (30 - 18) / 18 * 100 : null);
+    if (personalScope === "local-ref-ready") {
+      expect(dayWindow.comparison.knownCategories?.personal.commits).toBe(-75);
+      expect(week.comparison.knownCategories?.personal.commits).toBe((30 - 18) / 18 * 100);
+      expect(dayWindow.repositories.rows.find((row) => row.id === "b".repeat(64))?.knownComparison?.commits).toBe(-75);
+      const retained = retainUsageSnapshot(response, { ...response, windows: null });
+      expect(retained.windows!["1"].comparison.knownCategories?.personal.commits).toBeNull();
+      expect(retained.windows!["1"].comparison.categories.personal.commits).toBeNull();
+      const retainedRepo = retained.windows!["1"].repositories.rows.find((row) => row.id === "b".repeat(64));
+      expect(retainedRepo?.knownComparison).toBeUndefined();
+      expect(retainedRepo?.comparison.commits).toBeNull();
+
+      await writeFile(file, "{invalid");
+      const corrupt = await provider.get();
+      expect(corrupt.status).toBe("stale");
+      expect(corrupt.windows!["1"]).toMatchObject({ prs: 4, totalTokens: 256,
+        comparison: { prs: 100, categories: { personal: { prs: 0 } } } });
+      expect(corrupt.windows!["1"].comparison.knownCategories).toBeUndefined();
+      const corruptRepo = corrupt.windows!["1"].repositories.rows.find((row) => row.id === "b".repeat(64));
+      expect(corruptRepo?.knownComparison).toBeUndefined();
+      expect(corruptRepo?.comparison.prs).toBe(0);
+      await writeFile(file, JSON.stringify(snapshot));
+    } else {
+      expect(dayWindow.repositories.rows.find((row) => row.id === "b".repeat(64))?.comparison.commits).toBe(-75);
+    }
+    for (const rows of [snapshot.daily, snapshot.localHistory.daily]) {
+      rows.find((row) => row.day === end)!.categories.personal.commits++;
+    }
+    const sharedCommitRepository = { id: "c".repeat(64), name: "github.com/example/personal-shared",
+      category: "personal", daily: [{ day: end, knownPrs: 0, commits: 1 }] };
+    snapshot.localRepositories.rows.push(sharedCommitRepository);
+    snapshot.localHistory.localRepositories.rows.push(sharedCommitRepository);
+    await writeFile(file, JSON.stringify(snapshot));
+    const ambiguous = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    const ambiguousDay = ambiguous.windows!["1"];
+    expect(ambiguousDay.repositories.unattributedCommits).toBeGreaterThan(0);
+    expect(ambiguousDay.repositories.sharedCommits).toBeGreaterThan(0);
+    const originalRepository = ambiguousDay.repositories.rows.find((row) => row.id === "b".repeat(64))!;
+    expect(personalScope === "ready" ? originalRepository.comparison.commits
+      : originalRepository.knownComparison?.commits).toBeNull();
+
+    snapshot.sources[1] = { status: "missing", capturedAt: "2026-11-02T00:00:00Z" } as never;
+    await writeFile(file, JSON.stringify(snapshot));
+    const sampledMissing = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(sampledMissing.windows!["1"].comparison.knownCategories?.personal.commits).toBeUndefined();
+    expect(sampledMissing.windows!["1"].categories.personal.commits).toBeNull();
+  });
+
+  it.each([
+    { name: "same-day capturedAt", asOf: Date.parse("2026-11-03T08:00:00Z"), capturedAt: "2026-11-03T07:59:00Z" },
+    { name: "cross-midnight capturedAt", asOf: Date.parse("2026-11-02T16:01:00Z"), capturedAt: "2026-11-02T15:59:00Z" },
+  ])("requires category daily markers from active category metadata after $name", async ({ asOf, capturedAt }) => {
+    const { file, snapshot } = await historyFixture(asOf);
+    Object.assign(snapshot.sources[0]!, { status: "ok", capturedAt });
+    await writeFile(file, JSON.stringify(snapshot));
+    const legacy = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(legacy.windows!["1"].comparison.categories.work.commits).toBe(100);
+
+    Object.assign(snapshot.sources[0]!, { commitCategoryStatus: {
+      work: "ready", personal: "ready", unclassified: "ready" } });
+    await writeFile(file, JSON.stringify(snapshot));
+    const unmarked = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(unmarked.windows!["1"].comparison.categories.work.commits).toBeNull();
+    expect(unmarked.windows!["1"].repositories.rows[0]?.comparison.commits).toBeNull();
+
+    const marked = { work: "ready", personal: "ready", unclassified: "ready" } as const;
+    for (const rows of [snapshot.daily, snapshot.localHistory.daily]) {
+      for (const row of rows) Object.assign(row, { commitCategoryStatus: marked });
+    }
+    const currentDay = chinaDay(asOf);
+    for (const rows of [snapshot.daily, snapshot.localHistory.daily]) {
+      delete (rows.find((row) => row.day === currentDay) as { commitCategoryStatus?: unknown }).commitCategoryStatus;
+    }
+    await writeFile(file, JSON.stringify(snapshot));
+    const missingCurrentMarker = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(missingCurrentMarker.windows!["1"].comparison.categories.work.commits).toBeNull();
+
+    for (const rows of [snapshot.daily, snapshot.localHistory.daily]) {
+      Object.assign(rows.find((row) => row.day === currentDay)!, { commitCategoryStatus: marked });
+    }
+    await writeFile(file, JSON.stringify(snapshot));
+    const fullyMarked = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(fullyMarked.windows!["1"].comparison.categories.work.commits).toBe(100);
+    expect(fullyMarked.windows!["1"].repositories.rows[0]?.comparison.commits).toBe(100);
+  });
+
   it.each([false, true])("routes qualified local-ref 1-day and 7-day commit deltas through comparison.known.commits, unsampled machine: %s", async (unsampled) => {
     const asOf = Date.parse("2026-11-03T08:00:00Z");
     const { file, snapshot } = await historyFixture(asOf);
@@ -519,6 +643,8 @@ describe("local Usage projection", () => {
     expect(response.windows?.["7"].comparison).toMatchObject({ commits: null, known: { prs: null, commits: (16 - 7) / 7 * 100 }, totalTokens: null });
     expect(response.windows?.["30"].comparison).toMatchObject({ commits: null, totalTokens: null });
     expect(response.windows?.["30"].comparison.known).toBeUndefined();
+    expect(response.windows?.["30"].comparison.knownCategories).toBeUndefined();
+    expect(response.windows?.["30"].repositories.rows[0]?.knownComparison).toBeUndefined();
     expect(response.trend.at(-1)?.wow).toMatchObject({ commits: null, totalTokens: null });
     const view = localUsageView(response);
     expect(view.windows?.["1"].comparison.known).toEqual({ prs: null, commits: 100 });

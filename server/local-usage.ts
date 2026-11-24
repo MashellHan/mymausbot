@@ -36,11 +36,22 @@ interface DailyCategory {
   cacheRead: number;
 }
 
+type CommitCoverage = "ready" | "local-ref-ready" | "partial" | "unavailable";
+type CategoryCommitScopes = Record<LocalUsageCategory, CommitObservationScope>;
+
 interface DailyRow {
   day: string;
   tokenStatus: LocalUsageTokenStatus;
-  commitStatus?: "ready" | "local-ref-ready" | "partial" | "unavailable";
+  commitStatus?: CommitCoverage;
+  commitCategoryStatus?: Partial<Record<LocalUsageCategory, CommitCoverage>>;
   categories: Record<LocalUsageCategory, DailyCategory>;
+}
+
+function commitCoverage(value: unknown, label: string): CommitCoverage {
+  if (value !== "ready" && value !== "local-ref-ready" && value !== "partial" && value !== "unavailable") {
+    throw new Error(label);
+  }
+  return value;
 }
 
 function object(value: unknown): Record<string, unknown> {
@@ -97,13 +108,18 @@ function rows(raw: unknown, captureDay: string, span = 31): Map<string, DailyRow
     dayNumber(day);
     if (typeof day !== "string" || day < oldest || day > captureDay || daily.has(day)) throw new Error("Invalid activity day range");
     if (row.tokenStatus !== "ready" && row.tokenStatus !== "partial" && row.tokenStatus !== "unavailable") throw new Error("Invalid token coverage");
-    if (row.commitStatus !== undefined && row.commitStatus !== "ready" && row.commitStatus !== "local-ref-ready" &&
-        row.commitStatus !== "partial" && row.commitStatus !== "unavailable") throw new Error("Invalid commit coverage");
+    const commitStatus = row.commitStatus === undefined ? undefined : commitCoverage(row.commitStatus, "Invalid commit coverage");
+    const rawCategoryStatuses = row.commitCategoryStatus === undefined ? undefined : object(row.commitCategoryStatus);
+    const commitCategoryStatus = rawCategoryStatuses === undefined ? undefined : Object.fromEntries(CATEGORIES
+      .filter((key) => rawCategoryStatuses[key] !== undefined)
+      .map((key) => [key, commitCoverage(rawCategoryStatuses[key], "Invalid category commit coverage")])) as
+      Partial<Record<LocalUsageCategory, CommitCoverage>>;
     const rawCategories = object(row.categories);
     const categories = {} as Record<LocalUsageCategory, DailyCategory>;
     for (const key of CATEGORIES) categories[key] = category(rawCategories[key]);
     daily.set(day, { day, tokenStatus: row.tokenStatus,
-      ...(row.commitStatus !== undefined ? { commitStatus: row.commitStatus } : {}), categories });
+      ...(commitStatus !== undefined ? { commitStatus } : {}),
+      ...(commitCategoryStatus !== undefined ? { commitCategoryStatus } : {}), categories });
   }
   return daily;
 }
@@ -111,13 +127,21 @@ function rows(raw: unknown, captureDay: string, span = 31): Map<string, DailyRow
 type CommitObservationScope = "exact" | "local-ref" | "unknown";
 
 function sourceCoverage(raw: unknown): {
-  coverage: LocalUsageSourceCoverage; activityScopeReady: boolean; commitScope: CommitObservationScope; tokenScopeReady: boolean;
+  coverage: LocalUsageSourceCoverage; activityScopeReady: boolean; commitScope: CommitObservationScope;
+  categoryCommitScopes: CategoryCommitScopes; categoryCommitSourceMetadata: Record<LocalUsageCategory, boolean>;
+  categoryCommitLegacyExact: Record<LocalUsageCategory, boolean>; tokenScopeReady: boolean;
 } {
   if (!Array.isArray(raw) || raw.length > 100) throw new Error("Invalid activity sources");
   const coverage = { total: raw.length, ready: 0, partial: 0, stale: 0, missing: 0 };
   let missingSourcesUnsampled = true;
   let tokenReady = 0, tokenIncomplete = false;
   let commitExactReady = 0, commitLocalRefReady = 0, commitIncomplete = false;
+  const categoryCommitStatus = Object.fromEntries(CATEGORIES.map((key) => [key, [] as CommitCoverage[]])) as
+    Record<LocalUsageCategory, CommitCoverage[]>;
+  const categoryCommitSourceMetadata = Object.fromEntries(CATEGORIES.map((key) => [key, false])) as
+    Record<LocalUsageCategory, boolean>;
+  const categoryCommitSourceOk = Object.fromEntries(CATEGORIES.map((key) => [key, [] as boolean[]])) as
+    Record<LocalUsageCategory, boolean[]>;
   for (const value of raw) {
     const source = object(value);
     const status = source.status;
@@ -125,6 +149,23 @@ function sourceCoverage(raw: unknown): {
         source.tokenStatus !== "unavailable") throw new Error("Invalid token source status");
     if (source.commitStatus !== undefined && source.commitStatus !== "ready" && source.commitStatus !== "local-ref-ready" &&
         source.commitStatus !== "partial" && source.commitStatus !== "unavailable") throw new Error("Invalid commit source status");
+    if (status === "missing") {
+      const unsampled = source.capturedAt == null && source.logFiles == null && source.repositoryCount == null &&
+        source.firstUsageDay == null && source.lastUsageDay == null;
+      if (!unsampled) for (const key of CATEGORIES) categoryCommitStatus[key].push("unavailable");
+    } else if (status === "stale") {
+      for (const key of CATEGORIES) categoryCommitStatus[key].push("unavailable");
+    } else {
+      const statuses = source.commitCategoryStatus === undefined ? undefined : object(source.commitCategoryStatus);
+      const fallback: CommitCoverage = source.commitStatus as CommitCoverage | undefined ??
+        (status === "ok" ? "ready" : "partial");
+      for (const key of CATEGORIES) {
+        if (statuses?.[key] !== undefined) categoryCommitSourceMetadata[key] = true;
+        categoryCommitSourceOk[key].push(status === "ok");
+        categoryCommitStatus[key].push(commitCoverage(statuses?.[key] ?? fallback,
+          "Invalid category commit source status"));
+      }
+    }
     if (status === "ok" && (source.tokenStatus === undefined || source.tokenStatus === "ready") ||
         status === "partial" && source.tokenStatus === "ready") tokenReady++;
     else if (status !== "missing") tokenIncomplete = true;
@@ -142,8 +183,19 @@ function sourceCoverage(raw: unknown): {
   const activityScopeReady = commitExactReady > 0 && commitLocalRefReady === 0 && !commitIncomplete && missingSourcesUnsampled;
   const commitScope: CommitObservationScope = activityScopeReady ? "exact"
     : !commitIncomplete && missingSourcesUnsampled && commitExactReady + commitLocalRefReady > 0 ? "local-ref" : "unknown";
-  return { coverage, activityScopeReady, commitScope,
-    tokenScopeReady: tokenReady > 0 && !tokenIncomplete && missingSourcesUnsampled };
+  const categoryCommitScopes = Object.fromEntries(CATEGORIES.map((key) => {
+    const statuses = categoryCommitStatus[key];
+    if (!statuses.length || statuses.some((status) => status === "partial" || status === "unavailable")) {
+      return [key, "unknown"];
+    }
+    return [key, statuses.every((status) => status === "ready") ? "exact" : "local-ref"];
+  })) as CategoryCommitScopes;
+  const categoryCommitLegacyExact = Object.fromEntries(CATEGORIES.map((key) => [key,
+    categoryCommitScopes[key] === "exact" && !categoryCommitSourceMetadata[key] &&
+      categoryCommitSourceOk[key].length > 0 && categoryCommitSourceOk[key].every(Boolean)])) as
+    Record<LocalUsageCategory, boolean>;
+  return { coverage, activityScopeReady, commitScope, categoryCommitScopes, categoryCommitSourceMetadata,
+    categoryCommitLegacyExact, tokenScopeReady: tokenReady > 0 && !tokenIncomplete && missingSourcesUnsampled };
 }
 
 function prSourceCoverage(raw: unknown): LocalUsagePrSourceCoverage {
@@ -184,7 +236,7 @@ function emptyComparison(days: 1 | 7 | 30 | 60, startDay: string): LocalUsageCom
 function buildWindow<Days extends 1 | 7 | 30 | 60>(days: Days, endDay: string, asOf: number, daily: Map<string, DailyRow>,
   sources: LocalUsageSourceCoverage, prs: LocalUsagePrSourceCoverage, prComplete: boolean,
   prCoverage: Record<LocalUsageCategory, "ready" | "partial">, observedCategories: Set<LocalUsageCategory>,
-  commitScope: CommitObservationScope): LocalUsageWindow<Days> {
+  commitScope: CommitObservationScope, categoryCommitScopes: CategoryCommitScopes): LocalUsageWindow<Days> {
   const startDay = offsetDay(endDay, 1 - days);
   const dates = Array.from({ length: days }, (_, index) => offsetDay(startDay, index));
   const present = dates.map((day) => daily.get(day)).filter((row): row is DailyRow => !!row);
@@ -218,7 +270,7 @@ function buildWindow<Days extends 1 | 7 | 30 | 60>(days: Days, endDay: string, a
     categories[key] = {
       knownPrs: categoryPrs,
       prs: prCoverage[key] === "ready" && missingDays.length === 0 && observed.every((row) => row.prs !== null) ? categoryPrs : null,
-      commits: sourceObserved && commitScope !== "unknown" && missingDays.length === 0 &&
+      commits: categoryCommitScopes[key] !== "unknown" && missingDays.length === 0 &&
         observed.every((row) => row.commitObserved) ? sum(observed.map((row) => row.commits)) : null,
       knownCommits: knownCategoryCommits,
     };
@@ -242,14 +294,15 @@ function tokenComparisonReady(window: LocalUsageWindow, sources: LocalUsageSourc
 }
 
 function trend(window: LocalUsageWindow, daily: Map<string, DailyRow>, sources: LocalUsageSourceCoverage,
-  activityScopeReady: boolean, commitScope: CommitObservationScope, tokenScopeReady: boolean,
+  activityScopeReady: boolean, commitScope: CommitObservationScope, categoryCommitScopes: CategoryCommitScopes,
+  tokenScopeReady: boolean,
   prs: LocalUsagePrSourceCoverage, prComplete: boolean, prCoverage: Record<LocalUsageCategory, "ready" | "partial">,
   observedCategories: Set<LocalUsageCategory>, span = 30,
   repositories: RepositorySnapshot | null = null): LocalUsageTrendDay[] {
   return Array.from({ length: span }, (_, index) => {
     const day = offsetDay(window.startDay, index);
-    const current = buildWindow(1, day, window.asOf, daily, sources, prs, prComplete, prCoverage, observedCategories, commitScope);
-    const previous = buildWindow(1, offsetDay(day, -7), window.asOf, daily, sources, prs, prComplete, prCoverage, observedCategories, commitScope);
+    const current = buildWindow(1, day, window.asOf, daily, sources, prs, prComplete, prCoverage, observedCategories, commitScope, categoryCommitScopes);
+    const previous = buildWindow(1, offsetDay(day, -7), window.asOf, daily, sources, prs, prComplete, prCoverage, observedCategories, commitScope, categoryCommitScopes);
     const tokenReady = tokenComparisonReady(current, sources, tokenScopeReady) && tokenComparisonReady(previous, sources, tokenScopeReady);
     const wow = {
       prs: weekChange(current.prs, previous.prs),
@@ -404,10 +457,12 @@ function repositoryPrCovered(window: LocalUsageWindow, category: LocalUsageCateg
     sum(window.repositories.rows.filter((row) => row.category === category).map((row) => row.knownPrs ?? 0)) === exact;
 }
 
-function repositoryCommitsCovered(window: LocalUsageWindow, repositories: RepositorySnapshot | null,
-  activityScopeReady: boolean): boolean {
-  return activityScopeReady && window.commits !== null &&
-    window.repositories.unattributedCommits === 0 && datesCovered(window, repositories);
+function repositoryCommitsCovered(window: LocalUsageWindow, category: LocalUsageCategory,
+  repositories: RepositorySnapshot | null, scope: CommitObservationScope): boolean {
+  const commits = window.categories[category].commits;
+  return scope !== "unknown" && commits !== null && datesCovered(window, repositories) &&
+    (window.repositories.unattributedCommits === 0 || window.repositories.sharedCommits === 0) &&
+    sum(window.repositories.rows.filter((row) => row.category === category).map((row) => row.knownCommits ?? 0)) === commits;
 }
 
 function windowCommitScope(window: LocalUsageWindow, daily: Map<string, DailyRow>, commitScope: CommitObservationScope): CommitObservationScope {
@@ -418,10 +473,29 @@ function windowCommitScope(window: LocalUsageWindow, daily: Map<string, DailyRow
   return "local-ref";
 }
 
+function windowCategoryCommitScope(window: Pick<LocalUsageWindow, "days" | "startDay" | "endDay" | "missingDays">,
+  daily: Map<string, DailyRow>, category: LocalUsageCategory, sourceScope: CommitObservationScope,
+  sourceHasCategoryMetadata: boolean, legacyExact: boolean): CommitObservationScope {
+  if (sourceScope === "unknown" || window.missingDays.length > 0) return "unknown";
+  const dates = Array.from({ length: window.days }, (_, index) => offsetDay(window.startDay, index));
+  const rows = dates.map((day) => daily.get(day));
+  const hasDailyCategoryMetadata = rows.some((row) => row?.commitCategoryStatus?.[category] !== undefined);
+  let statuses: (CommitCoverage | undefined)[] | undefined;
+  if (hasDailyCategoryMetadata) statuses = rows.map((row) => row?.commitCategoryStatus?.[category]);
+  else if (!sourceHasCategoryMetadata) {
+    if (rows.some((row) => row?.commitStatus !== undefined)) statuses = rows.map((row) => row?.commitStatus);
+    else if (legacyExact) statuses = dates.map(() => "ready");
+  }
+  if (!statuses || statuses.some((status) => status !== "ready" && status !== "local-ref-ready")) return "unknown";
+  return sourceScope === "exact" && statuses.every((status) => status === "ready") ? "exact" : "local-ref";
+}
+
 function compareWindows(current: LocalUsageWindow, previous: LocalUsageWindow,
   currentRepositories: RepositorySnapshot | null, previousRepositories: RepositorySnapshot | null,
   currentDaily: Map<string, DailyRow>, previousDaily: Map<string, DailyRow>, comparisonDailyIsHistory: boolean,
-  sources: LocalUsageSourceCoverage, activityScopeReady: boolean, commitScope: CommitObservationScope, tokenScopeReady: boolean): void {
+  sources: LocalUsageSourceCoverage, activityScopeReady: boolean, commitScope: CommitObservationScope,
+  categoryCommitScopes: CategoryCommitScopes, categoryCommitSourceMetadata: Record<LocalUsageCategory, boolean>,
+  categoryCommitLegacyExact: Record<LocalUsageCategory, boolean>, tokenScopeReady: boolean): void {
   const complete = current.missingDays.length === 0 && previous.missingDays.length === 0;
   const tokenReady = tokenComparisonReady(current, sources, tokenScopeReady) && tokenComparisonReady(previous, sources, tokenScopeReady);
   const localRefCommits = (current.days === 1 || current.days === 7) && complete && !activityScopeReady &&
@@ -429,30 +503,49 @@ function compareWindows(current: LocalUsageWindow, previous: LocalUsageWindow,
     windowCommitScope(current, currentDaily, commitScope) === "local-ref" &&
     windowCommitScope(previous, previousDaily, commitScope) === "local-ref";
   const categories = {} as LocalUsageComparison["categories"];
+  const knownCategories = {} as Record<LocalUsageCategory, LocalUsageCountComparison>;
+  const comparableCategoryScopes = {} as CategoryCommitScopes;
+  let hasKnownCategoryCommits = false;
   for (const key of CATEGORIES) {
+    const currentScope = windowCategoryCommitScope(current, currentDaily, key, categoryCommitScopes[key],
+      categoryCommitSourceMetadata[key], categoryCommitLegacyExact[key]);
+    const previousScope = windowCategoryCommitScope(previous, previousDaily, key, categoryCommitScopes[key],
+      categoryCommitSourceMetadata[key], categoryCommitLegacyExact[key]);
+    const scope = currentScope === previousScope ? currentScope : "unknown";
+    const historyQualified = scope === "exact" || (scope === "local-ref" &&
+      (current.days === 1 || current.days === 7 && comparisonDailyIsHistory));
+    const comparable = complete && historyQualified;
+    comparableCategoryScopes[key] = comparable ? scope : "unknown";
     categories[key] = {
       prs: complete ? weekChange(current.categories[key].prs, previous.categories[key].prs) : null,
-      commits: complete && activityScopeReady ? weekChange(current.categories[key].commits, previous.categories[key].commits) : null,
+      commits: comparable && scope === "exact" ? weekChange(current.categories[key].commits, previous.categories[key].commits) : null,
     };
+    knownCategories[key] = { prs: null, commits: comparable && scope === "local-ref"
+      ? weekChange(current.categories[key].commits, previous.categories[key].commits) : null };
+    if (knownCategories[key].commits !== null) hasKnownCategoryCommits = true;
   }
   current.comparison = { startDay: previous.startDay, endDay: previous.endDay,
     missingDays: previous.missingDays, unavailableTokenDays: previous.unavailableTokenDays,
     prs: complete ? weekChange(current.prs, previous.prs) : null,
     commits: complete && activityScopeReady ? weekChange(current.commits, previous.commits) : null,
     ...(localRefCommits ? { known: { prs: null, commits: weekChange(current.commits, previous.commits) } } : {}),
+    ...(hasKnownCategoryCommits ? { knownCategories } : {}),
     totalTokens: complete && tokenReady
       ? weekChange(current.totalTokens, previous.totalTokens) : null, categories };
   const priorRows = new Map(previous.repositories.rows.map((row) => [row.id, row]));
   for (const row of current.repositories.rows) {
     const prior = priorRows.get(row.id);
+    const scope = comparableCategoryScopes[row.category];
+    const categoryCovered = repositoryCommitsCovered(current, row.category, currentRepositories, scope) &&
+      repositoryCommitsCovered(previous, row.category, previousRepositories, scope);
+    const comparison = categoryCovered ? weekChange(row.commits, prior?.commits ?? 0) : null;
     row.comparison = {
       prs: repositoryPrCovered(current, row.category, currentRepositories) &&
         repositoryPrCovered(previous, row.category, previousRepositories)
         ? weekChange(row.prs, prior?.prs ?? 0) : null,
-      commits: repositoryCommitsCovered(current, currentRepositories, activityScopeReady) &&
-        repositoryCommitsCovered(previous, previousRepositories, activityScopeReady)
-        ? weekChange(row.commits, prior?.commits ?? 0) : null,
+      commits: scope === "exact" ? comparison : null,
     };
+    if (scope === "local-ref") row.knownComparison = { prs: null, commits: comparison };
   }
 }
 
@@ -463,7 +556,8 @@ function project(raw: unknown, now: number): LocalUsageResponse {
       (snapshot.status !== "ready" && snapshot.status !== "partial")) throw new Error("Invalid activity snapshot");
   const endDay = chinaDay(asOf);
   const daily = rows(snapshot.daily, endDay);
-  const { coverage: sources, activityScopeReady, commitScope, tokenScopeReady } = sourceCoverage(snapshot.sources);
+  const { coverage: sources, activityScopeReady, commitScope, categoryCommitScopes, categoryCommitSourceMetadata,
+    categoryCommitLegacyExact, tokenScopeReady } = sourceCoverage(snapshot.sources);
   const prs = prSourceCoverage(snapshot.prSources);
   const rawPrCoverage = object(snapshot.prCoverage);
   const prCoverage = {} as Record<LocalUsageCategory, "ready" | "partial">;
@@ -487,25 +581,30 @@ function project(raw: unknown, now: number): LocalUsageResponse {
   const comparisonRepositories = historical?.repositories ?? repositories;
   const stale = chinaDay(now) !== endDay || now - asOf > STALE_AFTER_MS;
   const effectiveCommitScope: CommitObservationScope = stale ? "unknown" : commitScope;
+  const effectiveCategoryCommitScopes = Object.fromEntries(CATEGORIES.map((key) => [key,
+    stale ? "unknown" : categoryCommitScopes[key]])) as CategoryCommitScopes;
   const effectiveActivityScopeReady = !stale && activityScopeReady;
   const windows = {} as Record<"1" | "7" | "30", LocalUsageWindow>;
   for (const days of WINDOWS) {
     const window = buildWindow(days, endDay, asOf, daily, sources, prs, prComplete, prCoverage, observedCategories,
-      effectiveCommitScope);
+      effectiveCommitScope, effectiveCategoryCommitScopes);
     window.repositories = repositoryWindow(repositories, window);
     if (sources.total === 0 || sources.ready !== sources.total) window.repositories.coverage = window.repositories.coverage === "unavailable" ? "unavailable" : "partial";
     const previous = buildWindow(days, offsetDay(window.startDay, -1), asOf, comparisonDaily,
-      sources, prs, prComplete, prCoverage, observedCategories, effectiveCommitScope);
+      sources, prs, prComplete, prCoverage, observedCategories, effectiveCommitScope, effectiveCategoryCommitScopes);
     previous.repositories = repositoryWindow(comparisonRepositories, previous);
     compareWindows(window, previous, historical?.repositories ?? repositories, comparisonRepositories,
-      daily, comparisonDaily, historical !== null, sources, effectiveActivityScopeReady, effectiveCommitScope, tokenScopeReady);
+      daily, comparisonDaily, historical !== null, sources, effectiveActivityScopeReady, effectiveCommitScope,
+      effectiveCategoryCommitScopes, categoryCommitSourceMetadata, categoryCommitLegacyExact, tokenScopeReady);
     windows[String(days) as "1" | "7" | "30"] = window;
   }
   const status = stale ? "stale" : snapshot.status === "ready" && windows["30"].coverage === "ready" ? "ready" : "partial";
-  const recentTrend = trend(windows["30"], daily, sources, effectiveActivityScopeReady, effectiveCommitScope, tokenScopeReady,
+  const recentTrend = trend(windows["30"], daily, sources, effectiveActivityScopeReady, effectiveCommitScope,
+    effectiveCategoryCommitScopes, tokenScopeReady,
     prs, prComplete, prCoverage, observedCategories, 30, repositories);
   const baseline = trend({ ...windows["30"], startDay: offsetDay(endDay, -59) }, comparisonDaily,
-    sources, effectiveActivityScopeReady, effectiveCommitScope, tokenScopeReady, prs, prComplete, prCoverage,
+    sources, effectiveActivityScopeReady, effectiveCommitScope, effectiveCategoryCommitScopes, tokenScopeReady,
+    prs, prComplete, prCoverage,
     observedCategories, 60, comparisonRepositories);
   const { history, retained, retainedAgents } = tokenHistory(snapshot.trendHistory, endDay, recentTrend, baseline);
   const projectTokens = createLocalTokenProjector(new Date(now));
@@ -556,7 +655,7 @@ function project(raw: unknown, now: number): LocalUsageResponse {
   }
 
   const sixty = buildWindow(60, endDay, asOf, comparisonDaily, sources, prs, prComplete, prCoverage, observedCategories,
-    effectiveCommitScope);
+    effectiveCommitScope, effectiveCategoryCommitScopes);
   sixty.repositories = repositoryWindow(comparisonRepositories, sixty);
   if (sources.total === 0 || sources.ready !== sources.total || !datesCovered(sixty, comparisonRepositories)) sixty.repositories.coverage = sixty.repositories.coverage === "unavailable" ? "unavailable" : "partial";
   return { status, asOf, timeZone: "Asia/Shanghai", sourceCoverage: sources, prSourceCoverage: prs,
@@ -655,8 +754,12 @@ export function createLocalUsageProvider({ file = DEFAULT_LOCAL_FILE,
           windows: lastGood.windows ? Object.fromEntries(
             Object.entries(lastGood.windows).map(([key, window]) => [key, {
               ...window,
+              repositories: { ...window.repositories, rows: window.repositories.rows.map((row) => {
+                const { knownComparison: _unused, ...rest } = row;
+                return rest;
+              }) },
               comparison: (() => {
-                const { known: _unused, ...rest } = window.comparison;
+                const { known: _unusedKnown, knownCategories: _unusedCategories, ...rest } = window.comparison;
                 return rest;
               })(),
             }]),

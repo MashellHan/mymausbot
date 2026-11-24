@@ -57,7 +57,7 @@ import type { ApprovalMode } from "../../shared/approval-mode.ts";
 import { CodexDeviceAuthController } from "./codex-device-auth.ts"; import { messageItem } from "../harness/text-items.ts";
 import { codexAccountEmail, codexHome } from "./codex-identity.ts";
 import { keepChatsOutOfCodexHistory, linkSharedCodexHome } from "./codex-shared-home.ts";
-import { containsControlCharacter, mcpAppApprovalForm, mcpAppApprovalText, mcpElicitationDeclined, plainRecord } from "./codex-app-approval.ts";
+import { mcpAppApprovalForm, mcpAppApprovalText, mcpElicitationDeclined } from "./codex-app-approval.ts";
 import { CODEX_TOOL_CONVERSION_REFUSAL, CONNECTION_INPUT_REFUSAL, isCodexToolConversionRefusal } from "../../shared/failed-turn.ts";
 import { archivedNativeCodexThread, CODEX_MISSING_CREDENTIALS, codexConnectionInputRefused, codexProviderMismatch, CODEX_SIGN_IN_EXPIRED, codexLimitFacts, codexNotSignedIn, CodexRpcError, codexSignInExpired, codexPlanModelRefused, codexSignInRefused, codexUserError, codexUserFailure, missingNativeCodexThread, type CodexRoute } from "./codex-errors.ts";
 import { codexLoginCheck, readCodexLogin, storedCodexLogin } from "./codex-login.ts";
@@ -68,7 +68,7 @@ import { parseProtocolAskQuestions, questionChoices } from "../../shared/ask-que
 import { codexQuestionReply, openAsyncQuestion, type CodexAsk } from "./codex-questions.ts";
 import { codexReleaseUpdate, codexUpdateCommand } from "./codex-update.ts";
 export { codexUpdateCommand };
-import { effectiveApprovalPolicy, effectiveApprovalsReviewer } from "./codex-approval-config.ts"; import { AGENTS_TOOL_TIMEOUT_SECONDS } from "./agents-tool-limit.ts"; import { COMPUTER_PROXY_TIMEOUT_MS } from "../harness-budget.ts";
+import { customApprovalParams, namedApprovalParams, permissionProfileUnsupported, withResolvedSandbox, type CodexApprovalParams } from "./codex-approval-config.ts"; import { CodexConnection, codexConfigDigest, codexContractDiff, codexLoginIdentity, codexSpawnContract, codexWarmSessions } from "./codex-warm.ts"; import { AGENTS_TOOL_TIMEOUT_SECONDS } from "./agents-tool-limit.ts"; import { COMPUTER_PROXY_TIMEOUT_MS } from "../harness-budget.ts";
 import { canUseMcpServer } from "../../shared/tool-scope.ts";
 import { assertToolScopeSupported } from "../../shared/tool-scope-support.ts";
 import { appMountFor, gateServer, mcpStdioServer } from "../mcp-gate-config.ts"; import { OWN_APPS_SERVER } from "../../shared/own-apps.ts";
@@ -114,13 +114,6 @@ function noteRenamedMcpServer(name: string, mountName: string): void {
   console.error(`codex: MCP server ${JSON.stringify(name)} is mounted as ${JSON.stringify(mountName)} for this bot to keep its CLI configuration distinct`);
 }
 
-interface CodexApprovalParams {
-  thread: Record<string, unknown>;
-  turn: Record<string, unknown>;
-  /** Legacy settings for an older app-server that rejects the named-profile field. */
-  fallback?: Omit<CodexApprovalParams, "fallback">;
-}
-
 /** RequestPermissionProfile uses null for permission families that were not
  * requested; GrantedPermissionProfile requires those keys to be absent. */
 function grantedPermissions(raw: unknown): Record<string, unknown> {
@@ -135,112 +128,6 @@ function additionalPermissionSummary(permissions: unknown, reason: unknown): str
   const exact = JSON.stringify(requested);
   const prefix = typeof reason === "string" && reason.trim() ? `${reason.trim()} — ` : "";
   return `${prefix}Requested permissions: ${exact}`;
-}
-
-/** Codex persists these on its native thread, so they are explicit on start, resume and every turn.
- * Codex has no narrower "edits only" sandbox, so a stray Edits value asks. */
-function namedApprovalParams(mode: Exclude<ApprovalMode, "custom">): CodexApprovalParams {
-  if (mode === "full") {
-    return {
-      thread: {
-        approvalPolicy: "never",
-        approvalsReviewer: "user",
-        sandbox: "danger-full-access",
-      },
-      turn: {
-        approvalPolicy: "never",
-        approvalsReviewer: "user",
-        sandboxPolicy: { type: "dangerFullAccess" },
-      },
-    };
-  }
-  return {
-    thread: {
-      approvalPolicy: "on-request",
-      approvalsReviewer: mode === "auto" ? "auto_review" : "user",
-      sandbox: "workspace-write",
-    },
-    turn: {
-      approvalPolicy: "on-request",
-      approvalsReviewer: mode === "auto" ? "auto_review" : "user",
-      sandboxPolicy: { type: "workspaceWrite" },
-    },
-  };
-}
-
-function withResolvedSandbox(params: CodexApprovalParams, session: unknown): CodexApprovalParams {
-  const requested = plainRecord(params.turn.sandboxPolicy);
-  if (!requested) return params;
-  const sandbox = plainRecord(plainRecord(session)?.sandbox);
-  if (!sandbox || typeof sandbox.type !== "string") {
-    throw new Error("Codex did not return its resolved sandbox policy. Update Codex, then retry; the turn was not started because its permissions could not be verified.");
-  }
-  if (sandbox.type !== requested.type) {
-    throw new Error("Codex did not apply the requested sandbox mode; cannot safely start the turn.");
-  }
-  return { ...params, turn: { ...params.turn, sandboxPolicy: sandbox } };
-}
-
-function legacyCustomApprovalParams(config: Record<string, unknown>): CodexApprovalParams {
-  const approvalPolicy = effectiveApprovalPolicy(config.approval_policy);
-  const approvalsReviewer = effectiveApprovalsReviewer(config.approvals_reviewer);
-  const sandbox = config.sandbox_mode === "workspace-write" ||
-    config.sandbox_mode === "danger-full-access" ||
-    config.sandbox_mode === "read-only"
-    ? config.sandbox_mode
-    : "read-only";
-  let sandboxPolicy: Record<string, unknown>;
-  if (sandbox === "danger-full-access") sandboxPolicy = { type: "dangerFullAccess" };
-  else if (sandbox === "read-only") sandboxPolicy = { type: "readOnly" };
-  else {
-    const workspace = config.sandbox_workspace_write && typeof config.sandbox_workspace_write === "object"
-      ? config.sandbox_workspace_write as Record<string, unknown>
-      : {};
-    sandboxPolicy = {
-      type: "workspaceWrite",
-      ...(Array.isArray(workspace.writable_roots) ? { writableRoots: workspace.writable_roots } : {}),
-      ...(typeof workspace.network_access === "boolean" ? { networkAccess: workspace.network_access } : {}),
-      ...(typeof workspace.exclude_slash_tmp === "boolean" ? { excludeSlashTmp: workspace.exclude_slash_tmp } : {}),
-      ...(typeof workspace.exclude_tmpdir_env_var === "boolean"
-        ? { excludeTmpdirEnvVar: workspace.exclude_tmpdir_env_var }
-        : {}),
-    };
-  }
-  return {
-    thread: { approvalPolicy, approvalsReviewer, sandbox },
-    turn: { approvalPolicy, approvalsReviewer, sandboxPolicy },
-  };
-}
-
-function configuredPermissionProfile(config: Record<string, unknown>): string | null {
-  if (typeof config.default_permissions !== "string") return null;
-  const profile = config.default_permissions.trim();
-  if (!profile || profile.length > 240 || containsControlCharacter(profile)) return null;
-  return profile;
-}
-
-function customApprovalParams(raw: unknown): CodexApprovalParams {
-  const config = raw && typeof raw === "object" && !Array.isArray(raw)
-    ? raw as Record<string, unknown>
-    : {};
-  const fallback = legacyCustomApprovalParams(config);
-  const permissions = configuredPermissionProfile(config);
-  const approvalPolicy = effectiveApprovalPolicy(config.approval_policy);
-  const approvalsReviewer = effectiveApprovalsReviewer(config.approvals_reviewer);
-  // Codex 0.151 profiles define the sandbox but not the approval policy: reassert both approval
-  // fields so a resumed Full thread cannot keep `never`.
-  return permissions
-    ? {
-        thread: { permissions, approvalPolicy, approvalsReviewer },
-        turn: { permissions, approvalPolicy, approvalsReviewer },
-        fallback,
-      }
-    : fallback;
-}
-
-function permissionProfileUnsupported(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /(?:experimental api|invalid params|unknown field|unknown.*permissions|permissions.*(?:unsupported|sandbox)|cannot.*permissions)/i.test(message);
 }
 
 /** Native instructions and image bytes stay out of diagnostics; the provider still gets the unmodified request. */
@@ -424,6 +311,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       pid?: number;
     }
     const active = new Map<string, Turn>();
+    const warm = codexWarmSessions<{ initialized: any; approvalParams: CodexApprovalParams; rolloutPath: unknown }>(instanceId);
 
     const emit = (event: RuntimeEvent) => {
       for (const l of Array.from(listeners)) l(event);
@@ -517,7 +405,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       const waitForLaunchSlot = async (attempt: number) => {
         const waiting: Turn = { stop: async () => { stopRequested = true; stopSignal.abort(); return true; }, turnId, asks: new Map() };
         active.set(threadId, waiting);
-        if (attempt === 0) emit({ ...base(threadId, turnId), type: "turn.started" });
+        if (attempt === 0 && !announced) emit({ ...base(threadId, turnId), type: "turn.started" });
         announced = true;
         emit({ ...base(threadId, turnId), type: "runtime.notice", message: `Waiting for a free Codex slot: ${codexLaunchesStarting()} Codex runs are starting on this computer. This one starts on its own.` });
         const slot = await codexLaunchSlot(stopSignal.signal);
@@ -642,20 +530,26 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         if (turn.contextWindowTokens !== undefined) selectionConfig.config = { ...selectionConfig.config, model_context_window: turn.contextWindowTokens };
 
         const commandCwd = permissionLaunchCwd(turn.cwd ?? homedir());
-        const releaseSlot = tryCodexLaunchSlot() ?? await waitForLaunchSlot(attempt);
+        // A plan login reaches its process through this turn's token or bridge, which end with the turn.
+        const contract = plan ? null : codexSpawnContract({ cli: config.cli, args: appServerArgs, env, cwd: turn.cwd ?? homedir(), box: customBox,
+          login: codexLoginIdentity(ownLogin ? storedCodexLogin(env) : null), thread: { model: turn.model ?? null, approvalMode, ...selectionConfig } });
+        const reused = contract && attempt === 0 ? warm.take(threadId, contract, typeof turn.resumeCursor === "string" ? turn.resumeCursor : null) : null;
+        const releaseSlot = reused ? () => {} : tryCodexLaunchSlot() ?? await waitForLaunchSlot(attempt);
         if (!releaseSlot) return;
-        const child = spawnHoldingSlot(releaseSlot, () => spawnCli(...codexLaunch(config.cli, appServerArgs), {
+        const connection = reused?.connection ?? new CodexConnection(spawnHoldingSlot(releaseSlot, () => spawnCli(...codexLaunch(config.cli, appServerArgs), {
           cwd: turn.cwd ?? homedir(),
           env,
           stdio: ["pipe", "pipe", "pipe"], ...customBox,
-        }, "bot"));
+        }, "bot")));
+        const child = connection.child;
 
-      let abandoned = false;
+      let abandoned = false, resumedNativeThread = false;
       let codexThreadId: string | null = null;
       let codexTurnId: string | null = null;
       let startingNativeTurn = false;
       const earlyNotifications: any[] = [];
-      const mcpStartup = mcpStartupTracker(child);
+      const mcpStartup = reused ? null : mcpStartupTracker(child);
+      let mcpFailed = false, keepable: { configDigest: string; cwd: string; carried: { initialized: any; approvalParams: CodexApprovalParams; rolloutPath: unknown } } | null = null;
       const state = {
         settled: false,
         lastError: "",
@@ -671,17 +565,13 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       };
 
       const asks = new Map<string, CodexAsk>();
-      let nextId = 1;
-      const sensitiveResponseIds = new Set<number>();
       const rpcPending = new Map<number, {
         resolve: (v: any) => void;
         reject: (e: Error) => void;
       }>();
 
       const send = (obj: unknown) => {
-        try {
-          child.stdin.write(JSON.stringify(obj) + "\n");
-        } catch {}
+        connection.write(obj);
         appendNative(threadId, {
           dir: "out",
           source: "codex.app-server",
@@ -690,8 +580,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       };
       const request = (method: string, params: unknown, timeoutMs = codexRpcTimeoutMs(method)) =>
         new Promise<any>((resolve, reject) => {
-          const id = nextId++;
-          if (method === "config/read") sensitiveResponseIds.add(id);
+          const id = connection.nextId++;
+          if (method === "config/read") connection.sensitiveResponseIds.add(id);
           // A wedged app-server can accept stdin and never reply.
           const timer = setTimeout(() => {
             if (rpcPending.delete(id)) reject(new Error(`codex ${method} timed out after ${timeoutMs}ms`));
@@ -774,6 +664,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           active.delete(threadId);
           emit({ ...base(threadId, turnId), type: "turn.completed", ok, stopReason, cost: null, ...(state.usage ? { usage: state.usage } : {}) });
         };
+        if (ok && contract && keepable && codexThreadId && !stopRequested && !abandoned && !disposed && !mcpFailed
+          && warm.keep(threadId, { connection, contract, nativeThreadId: codexThreadId, ...keepable })) return complete();
         completeStoppedTurn = complete;
         if (await stop()) return;
         emit({ ...base(threadId, turnId), type: "runtime.error", message: "codex did not shut down after termination was requested" });
@@ -782,10 +674,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       };
 
       // Retires this process before anything async, so a late rpc timer rejection cannot relaunch again.
-      const relaunch = async (reason: string, failure: string, failedStop: string) => {
-        const delayMs = computeBackoff(attempt);
-        attempt++;
-        emit({ ...base(threadId, turnId), type: "turn.retrying", attempt, delayMs, reason });
+      const relaunch = async (reason: string, failure: string, failedStop: string, quiet = false) => {
+        const delayMs = quiet ? 0 : computeBackoff(attempt);
+        if (quiet) announced = true;
+        else emit({ ...base(threadId, turnId), type: "turn.retrying", attempt: ++attempt, delayMs, reason });
         abandoned = true;
         releaseSlot();
         const exited = child.exitCode !== null || child.signalCode !== null;
@@ -977,7 +869,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       // Each bot's Codex reads auth.json when it starts, possibly while another one rewrites it.
       const retryLoginRace = (raw: string, refused: boolean): boolean => {
         const missing = CODEX_MISSING_CREDENTIALS.test(raw);
-        if (!chatgptTurn || loginRaceRetried || state.streamed || attempt >= RETRY_MAX_ATTEMPTS - 1 || !(refused || missing)) return false;
+        if (!chatgptTurn || loginRaceRetried || (reused && promptSubmitted) || state.streamed || attempt >= RETRY_MAX_ATTEMPTS - 1 || !(refused || missing)) return false;
         const mark = loginMark();
         if (!mark || (!missing && mark[1] === launchedLogin)) return false;
         loginRaceRetried = true;
@@ -1009,7 +901,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         const p = msg.params ?? {};
         // MCP servers start with the thread, before it has an id; this process serves this turn alone.
         if (msg.method === "mcpServer/startupStatus/updated") {
-          mcpStartup.record(p);
+          mcpStartup?.record(p); mcpFailed ||= p.status === "failed" || p.status === "cancelled";
           if (!teamToolsNoticed && teamToolsFailed(p)) {
             teamToolsNoticed = true;
             emit({ ...base(threadId, turnId), type: "runtime.notice", message: TEAM_TOOLS_FAILED });
@@ -1024,7 +916,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           if (!codexTurnId && msg.method === "thread/tokenUsage/updated" && p.tokenUsage?.total) {
             // A total reported before this turn exists is what the process carried in: the baseline.
             const t = p.tokenUsage.total;
-            state.usageBaseline = { input: t.inputTokens ?? 0, output: t.outputTokens ?? 0, cachedInput: t.cachedInputTokens ?? 0 };
+            state.usageBaseline = connection.usageTotal = { input: t.inputTokens ?? 0, output: t.outputTokens ?? 0, cachedInput: t.cachedInputTokens ?? 0 };
             return;
           }
           if (!codexTurnId) {
@@ -1156,7 +1048,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             });
             if (t) {
               const b = state.usageBaseline ?? { input: 0, output: 0, cachedInput: 0 };
-              const now = shape(t);
+              const now = connection.usageTotal = shape(t);
               state.usage = {
                 input: Math.max(0, now.input - b.input),
                 output: Math.max(0, now.output - b.output),
@@ -1216,55 +1108,29 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         }
       };
 
-      let buf = "";
-      child.stdout.setEncoding("utf8");
-      child.stdout.on("data", (chunk) => {
+      const message = (msg: any) => {
         if (abandoned || state.settled) return;
-        buf += chunk;
-        let nl;
-        while (!state.settled && !abandoned && (nl = buf.indexOf("\n")) !== -1) {
-          const line = buf.slice(0, nl);
-          buf = buf.slice(nl + 1);
-          if (!line.trim()) continue;
-          let msg: any;
-          try {
-            msg = JSON.parse(line);
-          } catch {
-            continue;
+        const loggedMessage = codexNativeIncomingLogMessage(msg, connection.sensitiveResponseIds);
+        appendNative(threadId, { dir: "in", source: "codex.app-server", msg: loggedMessage });
+        if (msg.id !== undefined && (msg.result !== undefined || msg.error !== undefined)) {
+          const pend = rpcPending.get(msg.id);
+          if (pend) {
+            rpcPending.delete(msg.id);
+            if (msg.error) pend.reject(new CodexRpcError(msg.error));
+            else pend.resolve(msg.result);
           }
-          stderrSinceOutput = "";
-          const loggedMessage = codexNativeIncomingLogMessage(msg, sensitiveResponseIds);
-          appendNative(threadId, { dir: "in", source: "codex.app-server", msg: loggedMessage });
-          if (msg.id !== undefined && (msg.result !== undefined || msg.error !== undefined)) {
-            const pend = rpcPending.get(msg.id);
-            if (pend) {
-              rpcPending.delete(msg.id);
-              if (msg.error) pend.reject(new CodexRpcError(msg.error));
-              else pend.resolve(msg.result);
-            }
-          } else if (msg.id !== undefined && msg.method) {
-            handleServerRequest(msg);
-          } else if (msg.method) {
-            handleNotification(msg);
-          }
+        } else if (msg.id !== undefined && msg.method) {
+          handleServerRequest(msg);
+        } else if (msg.method) {
+          handleNotification(msg);
         }
-      });
-
-      let stderr = "";
-      // Only stderr after the last protocol message can explain an exit; older bytes are context.
-      let stderrSinceOutput = "";
-      child.stderr.on("data", (c) => {
-        stderr += c;
-        stderrSinceOutput += c;
-        if (stderr.length > 8192) stderr = stderr.slice(-8192);
-        if (stderrSinceOutput.length > 2048) stderrSinceOutput = stderrSinceOutput.slice(-2048);
-      });
-      child.on("error", (e) => {
+      };
+      const error = (e: Error) => {
         if (abandoned) return;
         emit({ ...base(threadId, turnId), type: "runtime.error", ...describeSpawnFailure(e, config.cli, turn.cwd ?? homedir()) });
         void settle(false, "spawn_error");
-      });
-      child.on("close", (code, signal) => {
+      };
+      const close = (code: number | null, signal: NodeJS.Signals | null) => {
         if (abandoned) return;
         if (state.settled) {
           void stop();
@@ -1274,7 +1140,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           void settle(false, "interrupted");
           return;
         }
-        const recentStderr = stderrSinceOutput.trim();
+        const recentStderr = connection.stderrSinceOutput.trim();
         const hadStreamedOutput = codexTurnId !== null || state.sawStreamDelta;
         // A signal exit (OOM, kill -9) is terminal whatever the stderr says; classifyError cannot see it.
         const verdict =
@@ -1282,27 +1148,29 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             ? { transient: false, reason: "interrupted" }
             : classifyError({ exitCode: code, stderr: recentStderr });
         const exitMessage = `codex exited ${code}${signal ? ` (signal ${signal})` : ""} before turn/completed${
-          recentStderr ? `: ${recentStderr.slice(-300)}` : hadStreamedOutput && stderr.trim() ? "; no stderr after the last app-server output" : ""
+          recentStderr ? `: ${recentStderr.slice(-300)}` : hadStreamedOutput && connection.stderr.trim() ? "; no stderr after the last app-server output" : ""
         }`;
-        // Relaunch only when turn/start was never acknowledged: a replay could re-run tools the user saw.
-        if (!stopRequested && codexTurnId === null && earlyNotifications.length === 0 && verdict.transient && attempt < RETRY_MAX_ATTEMPTS - 1) {
-          void relaunch(verdict.reason, exitMessage, "exit_before_result").catch(() => {});
+        // Relaunch only when turn/start was never sent on a kept process (excluding terminal auth/provider exits), or on a transient cold exit before ack.
+        if (!stopRequested && codexTurnId === null && earlyNotifications.length === 0 && (reused ? !promptSubmitted && verdict.reason !== "auth" && verdict.reason !== "provider_safety" && verdict.reason !== "quota" && verdict.reason !== "unknown_model" : verdict.transient && attempt < RETRY_MAX_ATTEMPTS - 1)) {
+          void relaunch(verdict.reason, exitMessage, "exit_before_result", Boolean(reused)).catch(() => {});
           return;
         }
         emit({ ...base(threadId, turnId), type: "runtime.error", message: exitMessage });
         void settle(false, "exit_before_result");
-      });
+      };
+      connection.attach({ message, error, close });
 
       active.set(threadId, { stop, turnId, asks, steer: steerActiveTurn, pid: child.pid });
       if (attempt === 0 && !announced) emit({ ...base(threadId, turnId), type: "turn.started" });
 
+      let configReadFailed = false;
       try {
-        const initialized = await request("initialize", {
+        const initialized = reused ? reused.carried.initialized : await request("initialize", {
           clientInfo: { name: "openmausbot", title: "OpenMausBot", version: serverVersion() },
           // Named permission profiles are an experimental app-server field in Codex 0.151.
           capabilities: { experimentalApi: true },
         });
-        send({ jsonrpc: "2.0", method: "initialized", params: {} });
+        if (!reused) send({ jsonrpc: "2.0", method: "initialized", params: {} });
         // developerInstructions replaces, rather than appends to, native config.
         let effectiveConfig: unknown;
         try {
@@ -1312,14 +1180,20 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           });
           effectiveConfig = configured?.config;
         } catch (error) {
+          configReadFailed = true;
           // Never expose a possibly secret-bearing config error; codex's "invalid configuration" carries none.
           const invalid = error instanceof CodexRpcError && /^invalid configuration\b/i.test(error.message);
           throw new Error(
             invalid
               ? "Codex rejected its configuration as invalid. Check ~/.codex/config.toml (or CODEX_HOME) for a broken entry, then retry."
               : "Could not read Codex configuration; cannot safely update bot instructions. Retry after checking Codex.",
+            { cause: error },
           );
         }
+        // config/read reads the files again (codex-cli 0.160.1); the loaded thread keeps what it started with.
+        const configDigest = codexConfigDigest(effectiveConfig);
+        if (reused && reused.configDigest !== configDigest) { appendNative(threadId, { dir: "out", source: "codex.session", msg: { close: "configuration changed", contractChanged: codexContractDiff(reused.configDigest, configDigest) } }); return relaunch("", "Codex configuration changed", "rpc_error", true); }
+        if (!reused) await warm.retired();
         if (privateEnv.length || authBridge) {
           const snapshot = (effectiveConfig as { features?: { shell_snapshot?: unknown } } | null)?.features?.shell_snapshot;
           if (provenPrivateEnv || authBridge ? snapshot !== false : snapshot === true) {
@@ -1380,10 +1254,12 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             : decodeCodexSelection(turn.model);
         const cursor = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
         let startedModel: string | null = null;
-        let resumedNativeThread = false;
         let rebuiltFromReplay = false;
         let promptText = turn.text;
-        if (cursor) {
+        if (reused) {
+          codexThreadId = reused.nativeThreadId; approvalParams = reused.carried.approvalParams; resumedNativeThread = true;
+          rolloutAt = rolloutMark(reused.carried.rolloutPath); state.usageBaseline = connection.usageTotal;
+        } else if (cursor) {
           const resumeThread = () => request("thread/resume", {
             ...selectionConfig,
             threadId: cursor,
@@ -1472,7 +1348,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         ];
         const startTurn = () => {
           promptSubmitted = true;
-          startingNativeTurn = true;
+          startingNativeTurn = true; keepable = { configDigest, cwd: turn.cwd ?? homedir(), carried: { initialized, approvalParams, rolloutPath: rolloutAt?.path } };
           return request("turn/start", {
             threadId: codexThreadId,
             input: turnInput,
@@ -1486,12 +1362,12 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           });
         };
         const waitNames = supportsMcpStartup(initialized?.userAgent) ? enabledMcpMounts([...selectedMcp.keys(), ...directMounts], effectiveConfig, turn.toolScope !== undefined) : [];
-        const mcpReady = await mcpStartup.settled(waitNames, stopSignal.signal);
+        const mcpReady = !mcpStartup || await mcpStartup.settled(waitNames, stopSignal.signal);
         if (!mcpReady || stopRequested || state.settled) return releaseSlot();
         try {
           await startTurn();
         } catch (error) {
-          if (!approvalParams.fallback || !permissionProfileUnsupported(error)) throw error;
+          if (reused || !approvalParams.fallback || !permissionProfileUnsupported(error)) throw error;
           approvalParams = approvalParams.fallback;
           await startTurn();
         }
@@ -1501,22 +1377,29 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       } catch (e) {
         const failure = e instanceof Error ? e : { text: String(e) };
         const raw = e instanceof Error ? e.message : String(e);
-        if (!state.settled && !abandoned && codexConnectionInputRefused(e)) return failConnection(CONNECTION_INPUT_REFUSAL);
-        if (!state.settled && !abandoned && route === "other" && isCodexToolConversionRefusal(raw)) return failConnection(CODEX_TOOL_CONVERSION_REFUSAL);
-        const refused = chatgptTurn && loginMark() !== null && codexSignInRefused({ message: raw });
+        const detail = e instanceof Error && e.cause !== undefined ? e.cause : e;
+        const detailRaw = detail instanceof Error ? detail.message : typeof detail === "object" && detail && "message" in detail && typeof (detail as { message?: unknown }).message === "string" ? (detail as { message: string }).message : String(detail);
+        if (!state.settled && !abandoned && (codexConnectionInputRefused(e) || codexConnectionInputRefused(detail))) return failConnection(CONNECTION_INPUT_REFUSAL);
+        if (!state.settled && !abandoned && route === "other" && (isCodexToolConversionRefusal(raw) || isCodexToolConversionRefusal(detailRaw))) return failConnection(CODEX_TOOL_CONVERSION_REFUSAL);
+        const refused = chatgptTurn && loginMark() !== null && (codexSignInRefused({ message: raw }) || codexSignInRefused(detail));
         hideRefusedModel(raw);
+        if (detailRaw !== raw) hideRefusedModel(detailRaw);
         const reported: ReturnType<typeof codexUserFailure> = refused ? { message: codexSignInExpired(raw) } : codexUserFailure(raw, route);
-        const needsAuth = refused || /(?:\b401\b|unauthorized|missing bearer|authentication required)/i.test(raw);
-        const verdict = classifyError(failure);
-        if (!state.settled && !abandoned && !recoveredMissingSession && !stopRequested && !needsAuth && codexTurnId === null && earlyNotifications.length === 0 && verdict.transient && attempt < RETRY_MAX_ATTEMPTS - 1 && state.sawStreamDelta === false) {
+        const needsAuth = refused || /(?:\b401\b|unauthorized|missing bearer|authentication required)/i.test(raw) || /(?:\b401\b|unauthorized|missing bearer|authentication required)/i.test(detailRaw);
+        const classified = detail === e || detail instanceof Error ? classifyError(failure) : classifyError({ text: `${raw} ${detailRaw}` });
+        const verdict = configReadFailed && classified.transient ? classifyError({ text: raw }) : classified;
+        if (reused && !promptSubmitted && !state.settled && !abandoned && !stopRequested && !needsAuth && verdict.reason !== "auth" && verdict.reason !== "provider_safety" && verdict.reason !== "quota" && verdict.reason !== "unknown_model" && codexTurnId === null && earlyNotifications.length === 0) {
+          return relaunch("", reported.message, "rpc_error", true);
+        }
+        if (!state.settled && !abandoned && !recoveredMissingSession && !stopRequested && !needsAuth && codexTurnId === null && earlyNotifications.length === 0 && (!reused || !promptSubmitted) && verdict.transient && attempt < RETRY_MAX_ATTEMPTS - 1 && state.sawStreamDelta === false) {
           return relaunch(verdict.reason, reported.message, "rpc_error");
         }
         if (!state.settled && !abandoned) {
-          if (refused) loginRefused(); else if (chatgptTurn && CODEX_MISSING_CREDENTIALS.test(raw)) loginCheck.forget();
+          if (refused) loginRefused(); else if (chatgptTurn && (CODEX_MISSING_CREDENTIALS.test(raw) || CODEX_MISSING_CREDENTIALS.test(detailRaw))) loginCheck.forget();
           emit({
             ...base(threadId, turnId), type: "runtime.error",
             ...codexActionFailure(reported.message, earlyNotifications.some((event) => ["commandExecution", "fileChange", "mcpToolCall", "webSearch"].includes(event.params?.item?.type)), reported.text),
-            ...(needsAuth ? { setup: true } : codexLimitFacts(raw, route)),
+            ...(needsAuth ? { setup: true } : codexLimitFacts(detailRaw, route)),
           });
           await settle(false, needsAuth ? "auth_required" : verdict.reason === "provider_safety" ? "provider_safety" : "rpc_error");
         }
@@ -1640,7 +1523,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       signOut: async () => {
         if (!planAuth) {
           const mark = loginMark();
-          await authentication.signOut();
+          await warm.closeAll("signed out"); await authentication.signOut();
           loginAccepted(mark);
           return;
         }
@@ -1697,7 +1580,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       hasSession: (threadId) => active.has(threadId),
       enginePid: (threadId) => active.get(threadId)?.pid,
       stopAll: async () => {
-        await Promise.all([...active.values()].map(({ stop }) => stop()));
+        await Promise.all([...active.values()].map(({ stop }) => stop())); await warm.closeAll("stopAll");
       },
       onEvent: (listener) => {
         listeners.add(listener);
@@ -1709,7 +1592,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       planGeneration++;
       await authentication.dispose();
       await planAuth?.dispose();
-      await Promise.all([...active.values()].map(({ stop }) => stop()));
+      await Promise.all([...active.values()].map(({ stop }) => stop())); await warm.closeAll("dispose");
       listeners.clear();
     },
   };
