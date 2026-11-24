@@ -254,4 +254,28 @@ describe("Bot overview documents", () => {
     await click(button("Try again"));
     expect(editor()?.value).toBe("");
   });
+
+  it("hides Soul, Memory, and AGENTS.md document entries in remote PWA mode", async () => {
+    const { setActivePwaAuth } = await import("@/lib/pwa-transport");
+    setActivePwaAuth({
+      ownerKey: "https://relay.mxhan.com::env::s1",
+      relayUrl: "https://relay.mxhan.com",
+      token: "omb_sess_1",
+      deviceId: "d1",
+      environmentId: "env",
+      sessionId: "s1",
+      serverName: "Mac",
+      scopes: ["client"],
+      pairedAt: 1,
+    });
+    try {
+      await render();
+      expect(host.querySelector('[data-panel-page="soul"]')).toBeNull();
+      expect(host.querySelector('[data-panel-page="memory"]')).toBeNull();
+      expect(host.querySelector('[data-panel-page="agents"]')).toBeNull();
+      expect(fixture.api).not.toHaveBeenCalled();
+    } finally {
+      setActivePwaAuth(null);
+    }
+  });
 });

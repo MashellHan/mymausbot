@@ -66,7 +66,7 @@ import {
   type ComputerPanelView,
 } from "@/lib/computer-panel-view";
 import { approvalModeFor } from "../../shared/approval-mode";
-import { openPlaceAction, panelCloudRefusal, placeBlocked, placeFacts, placeHasIssue, placeViewFor, usePlaceSeat, worksOnSimpleLabel } from "@/lib/place-view";
+import { openPlaceAction, panelCloudRefusal, placeBlocked, placeFacts, placeHasIssue, placeViewFor, usePlaceSeat, worksOnSimpleLabel } from "@/lib/place-view"; import { isRemotePwaMode } from "@/lib/pwa-transport";
 import type { PlaceActionId, PlaceFacts, PlaceView } from "../../shared/place-view";
 import { t } from "@/lib/i18n";
 import { LocalizedPanelError, panelErrorText } from "@/lib/computer-messages";
@@ -1292,7 +1292,7 @@ export function ComputerPanel({ bot: profileBot, onOpenVmWorkspace, panelWidth: 
             <DataPanel key={bot.id} bot={bot} requestedCard={dataRequest} />
           </Suspense>
         </div>
-      ) : panelView === "files" || panelView === "mini-apps" ? (
+      ) : panelView === "files" || (!isRemotePwaMode() && panelView === "mini-apps") ? (
         <ComputerPanelInfoTab view={panelView} bot={bot} filePreview={filePreview} onPreviewClose={() => setFilePreview(null)} requestedApp={requestedApp} />
       ) : panelView === "android" && androidConnected ? (
         <div {...tabPanelProps("android")} className={cn("flex-1 overflow-y-auto px-4 pt-2", TAB_PANEL_FOCUS)}>

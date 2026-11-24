@@ -93,14 +93,17 @@ import { PairPage } from "./pair/PairPage";
 import { WebPanelPage } from "@/components/WebPanelPage";
 import { AppPreviewPanel } from "@/components/published-apps/AppPreviewPanel";
 import { refreshPublishedApps } from "@/lib/own-published-apps";
+import { isRemoteClientSession, isRemotePwaMode } from "@/lib/pwa-transport";
 
 function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
+  const remoteClient = isRemoteClientSession();
+  const remotePwa = isRemotePwaMode();
   const { state, dispatch } = useStore();
   useTeamChats(state.config);
   const needsYou = needsYouVersion(state.bots, state.groups, state.notifications);
   useTeamPeopleLoader(state.config, needsYou);
   useInboxLoader(`${inboxVersion(state.bots) ?? ""}|${needsYou}`);
-  useEffect(() => { refreshPublishedApps(); }, []);
+  useEffect(() => { if (!remoteClient) refreshPublishedApps(); }, [remoteClient]);
   const inboxReady = useInboxReady();
   const inboxShown = useInboxPanel().open && inboxReady;
   // A Switch AI pick lands once its stopped turn's chat is idle, wherever the person is by then.
@@ -111,7 +114,6 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   const unreadCount =
     state.bots.filter((bot) => !bot.hidden).reduce((sum, bot) => sum + botUnreadCount(bot), 0) +
     state.groups.filter((group) => group.unread).length;
-  const remoteClient = window.ogb?.remoteClient?.active === true;
   const twoSidePanelsFit = useMediaQuery(TWO_SIDE_PANELS_FIT, true);
   const sidebarAndPanelFit = useMediaQuery(SIDEBAR_AND_PANEL_FIT, true);
   const sidebarInline = useMediaQuery(SIDEBAR_INLINE, false);
@@ -175,7 +177,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   const interfaceMode = useInterfaceMode();
   const advanced = interfaceMode === "advanced";
   const roomPanelOpen = useRoomPanelShown({ group, state, simple: !advanced && !remoteClient });
-  const sidePanelOpen = (Boolean(bot) && (state.settingsOpen || state.computerOpen || state.inspectorOpen || state.activityOpen)) || (Boolean(group) && !remoteClient && state.computerOpen) || Boolean(state.forkPanel) || roomPanelOpen || (notificationFeed && state.notificationsOpen) || inboxShown;
+  const sidePanelOpen = (Boolean(bot) && (state.settingsOpen || (!remotePwa && state.computerOpen) || (!remoteClient && (state.inspectorOpen || state.activityOpen)))) || (Boolean(group) && !remoteClient && state.computerOpen) || Boolean(state.forkPanel) || roomPanelOpen || (notificationFeed && state.notificationsOpen) || inboxShown;
   const collapseSidebar = sidePanelOpen && !sidebarAndPanelFit;
   const calendarFocus = state.activeView === "routines" && state.routinesFocus.view === "calendar";
   const notificationTray = notificationFeed && !calendarFocus;
@@ -246,9 +248,9 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   }, [unreadCount]);
 
   useEffect(() => {
-    if (!state.connected) return;
+    if (!state.connected || remotePwa) return;
     void preloadConnectedApps(false, true).catch(() => {}); // a background read: a reconnect is nobody using a Cloud home
-  }, [state.connected]);
+  }, [state.connected, remotePwa]);
   useUsageSnapshot();
 
   useEffect(() => preloadScreens(), []);
@@ -401,7 +403,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
         <FilesView />
       ) : state.activeView === "web-panel" ? (
         <WebPanelPage />
-      ) : state.activeView === "published-apps" ? (
+      ) : !remoteClient && state.activeView === "published-apps" ? (
         <PublishedAppsPage />
       ) : state.activeView === "announcements" ? (
         <AnnouncementsPage />
@@ -454,7 +456,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
           ? <RemoteAgentSettingsPanel bot={bot} overlay={state.computerOpen && !twoSidePanelsFit} />
           : <BotSettingsDialog key={`settings:${bot.id}`} bot={bot} overlay={(state.inspectorOpen || state.computerOpen || (notificationFeed && state.notificationsOpen)) && !twoSidePanelsFit} />
       )}
-      {state.computerOpen && bot && (
+      {state.computerOpen && bot && !remotePwa && (
         remoteClient ? (
           <RemoteDesktopPanel key={`computer:${bot.id}`} bot={bot} />
         ) : (
@@ -475,7 +477,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
           onPanelWidthChange={setComputerPanelWidth}
         />
       )}
-      <AppPreviewPanel />
+      {!remoteClient && <AppPreviewPanel />}
       {state.forkPanel && sidebarInline && <ForkPanel />}
       {!state.forkPanel && roomPanelOpen && group && (
         <RoomPanel key={`room:${group.id}`} group={group} overlay={notificationFeed && state.notificationsOpen && !twoSidePanelsFit} />

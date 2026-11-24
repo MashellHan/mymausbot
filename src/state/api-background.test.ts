@@ -69,6 +69,27 @@ describe("api() and a Cloud home that sleeps", () => {
     await expect(held).rejects.toMatchObject({ status: 503 });
     expect(fetch).not.toHaveBeenCalled();
   });
+
+  it("does not end the paired session on 403 bridge_route_forbidden, while still checking on 401 or other 403", async () => {
+    const fetch = vi.fn(async (path: string) => {
+      if (path === "/api/instances") {
+        return new Response(JSON.stringify({ error: "forbidden: route not available over PWA bridge", code: "bridge_route_forbidden" }), { status: 403 });
+      }
+      if (path === "/api/auth/session") {
+        return new Response(JSON.stringify({ kind: "unauthenticated" }), { status: 401 });
+      }
+      return new Response(JSON.stringify({ error: "forbidden" }), { status: 403 });
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(api("/api/instances")).rejects.toMatchObject({ status: 403 });
+    expect(fetch.mock.calls.map(([path]) => path)).toEqual(["/api/instances"]);
+
+    await expect(api("/api/other")).rejects.toMatchObject({ status: 403 });
+    await vi.waitFor(() => {
+      expect(fetch.mock.calls.map(([path]) => path)).toEqual(["/api/instances", "/api/other", "/api/auth/session"]);
+    });
+  });
 });
 
 /** A hidden page's `document`, as far as api() reads it, that can be shown. */

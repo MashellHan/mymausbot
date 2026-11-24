@@ -4,6 +4,7 @@ import { FileText } from "lucide-react";
 import { t } from "@/lib/i18n";
 import { readBotDocument, writeBotDocument, type BotDocument, type BotDocumentKind } from "@/lib/bot-documents";
 import { MEMORY_INDEX, SOUL_PATH, fetchMemoryDoc, type MemoryDoc } from "@/lib/memory";
+import { isRemotePwaMode } from "@/lib/pwa-transport";
 import { useStore, type Bot } from "@/state/store";
 import { SoulDocumentField } from "./SoulField";
 import { MarkdownTextEditor, MemoryTextEditor } from "./bot-panel/MemoryTextEditor";
@@ -17,6 +18,7 @@ const documents = [
 type Document = typeof documents[number];
 
 export function BotOverviewDocuments({ bot, intro, children }: { bot: Bot; intro: ReactNode; children: ReactNode }) {
+  const remotePwa = isRemotePwaMode();
   const mine = Boolean(useStore().state.config?.team);
   const [selected, setSelected] = useState<Document | null>(null);
   const overview = useRef<HTMLDivElement>(null);
@@ -33,9 +35,9 @@ export function BotOverviewDocuments({ bot, intro, children }: { bot: Bot; intro
 
   const back = () => setSelected(null);
   return <>
-    <div ref={overview} hidden={selected !== null}>
+    <div ref={overview} hidden={!remotePwa && selected !== null}>
       {intro}
-      <Card anchor="documents">
+      {!remotePwa && <Card anchor="documents">
         {documents.map((entry) => <NavRow
           key={entry.id}
           data-panel-page={entry.id}
@@ -43,10 +45,10 @@ export function BotOverviewDocuments({ bot, intro, children }: { bot: Bot; intro
           icon={FileText}
           onClick={() => { opener.current = entry.id; setSelected(entry); }}
         />)}
-      </Card>
+      </Card>}
       {children}
     </div>
-    {selected && <div ref={page} className="space-y-3 pt-2" data-bot-document={selected.id}>
+    {!remotePwa && selected && <div ref={page} className="space-y-3 pt-2" data-bot-document={selected.id}>
       <PageHeader back={t("rail.back")} title={selected.file} onBack={back} />
       {selected.id === "memory"
         ? bot.memoryEnabled === false
