@@ -24,6 +24,7 @@ import {
   decodeBase64Chunk,
   isBridgeRouteAllowed,
   mapBridgeCloseError,
+  normalizeBridgeRemoteAddr,
   normalizeBridgeTarget,
   parseInboundFrame,
   relayWsUrl,
@@ -35,7 +36,6 @@ import {
   type HeaderMap,
   type InboundBridgeFrame,
 } from "./pwa-bridge-wire.ts";
-import { sanitizeSource } from "./request-auth.ts";
 import { isPairingCredential } from "./sessions.ts";
 
 export {
@@ -51,6 +51,7 @@ export {
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
 const DEFAULT_HEARTBEAT_TIMEOUT_MS = 30_000;
+const DEFAULT_PRE_DISPATCH_TIMEOUT_MS = 35_000;
 const RECONNECT_BACKOFF_MS = [500, 1_000, 2_000, 5_000] as const;
 
 export interface PwaBridge {
@@ -67,6 +68,7 @@ export interface PwaBridgeOptions {
   refusal?: string | null;
   heartbeatIntervalMs?: number;
   heartbeatTimeoutMs?: number;
+  bodyTimeoutMs?: number;
   maxPendingBodyBytes?: number;
   reconnectDelaysMs?: readonly number[];
   jitterFactor?: () => number;
@@ -109,6 +111,7 @@ interface ActiveStream {
   dispatched: boolean;
   responseStarted: boolean;
   finished: boolean;
+  bodyTimer: ReturnType<typeof setTimeout> | null;
   clientReq: ReturnType<typeof httpRequest> | null;
   near: Duplex | null;
   far: Duplex | null;
@@ -124,6 +127,7 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
   let currentConfig = loadPwaBridgeConfig(options.dataDir);
   const heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
   const heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? DEFAULT_HEARTBEAT_TIMEOUT_MS;
+  const bodyTimeoutMs = options.bodyTimeoutMs ?? DEFAULT_PRE_DISPATCH_TIMEOUT_MS;
   const maxPendingBodyBytes = options.maxPendingBodyBytes ?? PWA_BRIDGE_MAX_PENDING_BODY_BYTES;
   const reconnectDelays = options.reconnectDelaysMs ?? RECONNECT_BACKOFF_MS;
   const jitter = options.jitterFactor ?? Math.random;
@@ -219,6 +223,10 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
     const stream = streams.get(streamId);
     if (!stream) return;
     stream.finished = true;
+    if (stream.bodyTimer) {
+      clearTimeout(stream.bodyTimer);
+      stream.bodyTimer = null;
+    }
     stream.pendingChunks.length = 0;
     releasePendingBytes(stream);
     streams.delete(streamId);
@@ -275,6 +283,10 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
   };
 
   const dispatchStream = (socket: WebSocket, stream: ActiveStream) => {
+    if (stream.bodyTimer) {
+      clearTimeout(stream.bodyTimer);
+      stream.bodyTimer = null;
+    }
     if (stream.finished || stream.dispatched || ws !== socket || socket.readyState !== WebSocket.OPEN) {
       cleanupStream(stream.streamId, true);
       return;
@@ -450,7 +462,7 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
       return;
     }
 
-    const remoteAddr = sanitizeSource(frame.remoteAddr || "pwa-bridge");
+    const remoteAddr = normalizeBridgeRemoteAddr(frame.remoteAddr);
     const scrubbed = scrubHeadersObject(frame.headers, remoteAddr);
     if (!scrubbed.ok) {
       sendImmediateJson(socket, frame.streamId, scrubbed.status, { error: scrubbed.error });
@@ -481,10 +493,19 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
       dispatched: false,
       responseStarted: false,
       finished: false,
+      bodyTimer: null,
       clientReq: null,
       near: null,
       far: null,
     };
+    stream.bodyTimer = setTimeout(() => {
+      if (stream.finished || stream.dispatched) return;
+      if (ws === socket && socket.readyState === WebSocket.OPEN && !stream.responseStarted) {
+        sendImmediateJson(socket, stream.streamId, 408, { error: "Request body timed out", code: "request_timeout" });
+      }
+      cleanupStream(stream.streamId, true);
+    }, bodyTimeoutMs);
+    stream.bodyTimer.unref?.();
     streams.set(frame.streamId, stream);
   };
 

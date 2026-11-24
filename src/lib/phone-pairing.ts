@@ -132,12 +132,28 @@ export function takePairOnOpen(): boolean {
   return asked;
 }
 
+function hasForbiddenDestinationChar(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x20 || code === 0x7f || code === 0x5c) return true;
+  }
+  return false;
+}
+
 /** Where a page signed in by the app goes next: the phone pairing, back to a path of this same server, or a linked thread. */
 export function pairedDestination(search: string): string {
   const params = new URLSearchParams(search);
   if (params.get("desktop-settings") === "phone") return params.get("pair") === "open" ? "/?desktop-settings=phone&pair=open" : "/?desktop-settings=phone";
   const next = params.get("next");
-  if (next && /^\/(?!\/)/.test(next) && !next.startsWith("/pair") && !/[\\\s]/.test(next)) return next;
+  if (next && /^\/(?!\/)/.test(next) && !next.startsWith("/pair") && !hasForbiddenDestinationChar(next)) {
+    try {
+      const resolved = new URL(next, "https://omb.invalid");
+      if (resolved.origin === "https://omb.invalid" && !resolved.pathname.startsWith("/pair")) {
+        return next;
+      }
+    } catch {
+    }
+  }
   const thread = params.get("thread");
   if (thread === null) return "/";
   const keep = new URLSearchParams({ thread });

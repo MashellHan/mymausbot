@@ -9,6 +9,7 @@ mausbot.mxhan.com {
 	header -Server
 	encode zstd gzip
 	header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://relay.mxhan.com; media-src 'self' blob: https://relay.mxhan.com; font-src 'self' data:; connect-src 'self' https://relay.mxhan.com wss://relay.mxhan.com; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 	header X-Content-Type-Options "nosniff"
 	header Referrer-Policy "no-referrer"
 	header X-Frame-Options "DENY"

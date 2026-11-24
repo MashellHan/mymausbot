@@ -17,7 +17,8 @@ function isHtmlResponse(response) {
   return /^\s*(?:text\/html|application\/xhtml\+xml)\b/i.test(contentType);
 }
 
-function isApiOrDynamicPath(pathname) {
+function isApiOrDynamicPath(rawPathname) {
+  const pathname = String(rawPathname || "").toLowerCase();
   return (
     pathname === "/sw.js" ||
     pathname === "/api" ||
@@ -92,7 +93,9 @@ self.addEventListener("fetch", (event) => {
           .then(async (response) => {
             if (response && response.ok && response.type === "basic") {
               const clean = await cleanResponse(response);
-              void cache.put("/", clean.clone());
+              if (isHtmlResponse(clean)) {
+                void cache.put("/", clean.clone());
+              }
               return clean;
             }
             return cleanResponse(response);

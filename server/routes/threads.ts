@@ -30,6 +30,7 @@ import { createJobRoutes } from "./jobs.ts";
 import { PASS, type RouteContext, type RouteHandler } from "./table.ts";
 
 const UPLOADED_NAME = /^[A-Za-z0-9-]+\.[A-Za-z0-9]{1,10}$/;
+const INLINE_SAFE_IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
 export type MessagePage = { messages: Array<Message | Record<string, unknown>>; hasMore?: boolean; activeLeafId: string | null };
 
@@ -169,10 +170,16 @@ export function createThreadRoutes(deps: ThreadRouteDeps): RouteHandler {
       const message = store.messagesFor(m[1]).find((msg) => msg.id === m![2]);
       if (!message?.png) return json(res, 404, { error: "no image on that message" });
       const bytes = Buffer.from(message.png, "base64");
+      const rawMime = (message.mime ?? "image/png").split(";")[0]?.trim().toLowerCase() ?? "image/png";
+      const safeInline = INLINE_SAFE_IMAGE_MIMES.has(rawMime);
       res.writeHead(200, {
-        "content-type": message.mime ?? "image/png",
+        "content-type": safeInline ? rawMime : "application/octet-stream",
+        ...(safeInline ? {} : { "content-disposition": "attachment" }),
         "content-length": String(bytes.byteLength),
         "cache-control": "private, no-store",
+        "x-content-type-options": "nosniff",
+        "content-security-policy": "default-src 'none'; sandbox",
+        "cross-origin-resource-policy": "same-origin",
       });
       return res.end(bytes);
     }
@@ -561,6 +568,8 @@ export function createThreadRoutes(deps: ThreadRouteDeps): RouteHandler {
         res.writeHead(200, {
           "content-type": "application/json",
           "content-disposition": `attachment; filename="${filename}.json"`,
+          "x-content-type-options": "nosniff",
+          "cache-control": "private, no-store",
         });
         return res.end(JSON.stringify({ name: title, threadId, messages: slim }, null, 2));
       }
@@ -581,6 +590,8 @@ export function createThreadRoutes(deps: ThreadRouteDeps): RouteHandler {
       res.writeHead(200, {
         "content-type": "text/markdown; charset=utf-8",
         "content-disposition": `attachment; filename="${filename}.md"`,
+        "x-content-type-options": "nosniff",
+        "cache-control": "private, no-store",
       });
       return res.end(lines.join("\n"));
     }

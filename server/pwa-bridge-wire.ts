@@ -28,6 +28,7 @@ const HOP_BY_HOP_HEADERS = new Set([
   "proxy-authorization",
   "te",
   "trailer",
+  "trailers",
   "transfer-encoding",
   "upgrade",
 ]);
@@ -174,12 +175,14 @@ function appendHeaderValue(out: HeaderMap, key: string, next: string | string[])
   out[key] = next;
 }
 
+const FORBIDDEN_HEADER_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
 function sanitizeInboundHeaders(raw: unknown): HeaderMap | undefined {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
-  const out: HeaderMap = {};
+  const out = Object.create(null) as HeaderMap;
   for (const [k, v] of Object.entries(raw)) {
     const key = k.toLowerCase();
-    if (!key || key === "__proto__" || /[\r\n:]/.test(key)) return undefined;
+    if (!key || FORBIDDEN_HEADER_KEYS.has(key) || /[\r\n:]/.test(key)) return undefined;
     if (typeof v === "string") {
       if (/[\r\n]/.test(v)) return undefined;
       appendHeaderValue(out, key, v);
@@ -271,6 +274,25 @@ function isSensitiveHeader(name: string): boolean {
   );
 }
 
+function isLoopbackAddr(addr: string): boolean {
+  const normalized = addr.replace(/^\[|\]$/g, "").toLowerCase();
+  return (
+    normalized === "localhost" ||
+    normalized === "::1" ||
+    normalized === "0:0:0:0:0:0:0:1" ||
+    normalized.startsWith("127.") ||
+    normalized.startsWith("::ffff:127.")
+  );
+}
+
+export function normalizeBridgeRemoteAddr(raw: string | undefined): string {
+  const cleaned = sanitizeSource(raw || "");
+  if (!cleaned || cleaned === "unknown" || isLoopbackAddr(cleaned)) {
+    return "pwa-bridge";
+  }
+  return cleaned;
+}
+
 export function scrubHeadersObject(
   headers: IncomingHttpHeaders | HeaderMap,
   remoteAddr: string,
@@ -313,7 +335,7 @@ export function scrubHeadersObject(
     clean[name] = value;
   }
   clean.host = "pwa-bridge.invalid";
-  clean["x-forwarded-for"] = sanitizeSource(remoteAddr || "pwa-bridge");
+  clean["x-forwarded-for"] = normalizeBridgeRemoteAddr(remoteAddr);
   return { ok: true, headers: clean, declaredContentLength };
 }
 
@@ -330,7 +352,7 @@ export function scrubIncomingRequest(req: IncomingMessage, remoteAddr: string): 
     }
   }
   req.headers.host = "pwa-bridge.invalid";
-  req.headers["x-forwarded-for"] = sanitizeSource(remoteAddr || "pwa-bridge");
+  req.headers["x-forwarded-for"] = normalizeBridgeRemoteAddr(remoteAddr);
 }
 
 export function sanitizeResponseHeaders(headers: IncomingHttpHeaders): HeaderMap {

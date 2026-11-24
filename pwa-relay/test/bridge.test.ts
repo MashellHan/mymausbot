@@ -36,6 +36,7 @@ function assertCorsAndNoStore(headers: Headers) {
   assert.equal(headers.get("vary"), "Origin");
   assert.equal(headers.get("access-control-expose-headers"), "Retry-After");
   assert.equal(headers.get("cache-control"), "no-store");
+  assert.equal(headers.get("x-content-type-options"), "nosniff");
   assert.match(headers.get("access-control-allow-headers") ?? "", /Authorization/i);
   assert.match(headers.get("access-control-allow-headers") ?? "", /x-omb-background/i);
 }
@@ -175,7 +176,9 @@ describe("pwa-relay bridge", () => {
       headers: {
         Authorization: "Bearer omb_sess_secret_token_xyz",
         "Content-Type": "application/json",
+        Cookie: "omb_session=forged",
         "x-omb-background": "1",
+        "x-openmausbot-desktop-owner": "forged",
       },
       body: JSON.stringify({ text: "lunch 42rmb secret_body_marker" }),
     });
@@ -184,7 +187,10 @@ describe("pwa-relay bridge", () => {
     assert.equal(open.method, "POST");
     assert.equal(open.path, "/api/bots/b1/messages?ticket=secret-ticket-999");
     assert.equal(open.headers.authorization, "Bearer omb_sess_secret_token_xyz");
-    assert.equal(open.headers["x-omb-background"], "1");
+    assert.equal(open.headers.cookie, undefined);
+    assert.equal(open.headers.host, undefined);
+    assert.equal(open.headers["x-omb-background"], undefined);
+    assert.equal(open.headers["x-openmausbot-desktop-owner"], undefined);
 
     const bodyFrame = (await mac.waitForFrame((f) => f.type === "req.body" && f.streamId === open.streamId && f.chunkB64.length > 0)) as Extract<
       BridgeFrame,
@@ -201,6 +207,7 @@ describe("pwa-relay bridge", () => {
         "retry-after": "7",
         "cache-control": "public, max-age=3600",
         "access-control-allow-origin": "*",
+        "set-cookie": "spoofed=1",
       },
     });
     mac.sendFrame({
@@ -213,6 +220,7 @@ describe("pwa-relay bridge", () => {
     const res = await resPromise;
     assert.equal(res.status, 429);
     assert.equal(res.headers.get("retry-after"), "7");
+    assert.equal(res.headers.get("set-cookie"), null);
     assertCorsAndNoStore(res.headers);
     assert.deepEqual(await res.json(), { error: "rate limited" });
 
@@ -683,11 +691,21 @@ describe("pwa-relay bridge", () => {
   it("propagates SSE client cancellation through an HTTP reverse proxy and enforces Caddyfile hardening", async () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const caddyfile = readFileSync(resolvePath(here, "../deploy/Caddyfile"), "utf8");
+    const caddySite = readFileSync(resolvePath(here, "../deploy/Caddyfile.pwa-site.example"), "utf8");
+    const cfHeaders = readFileSync(resolvePath(here, "../../deploy/pwa-cf/public/_headers"), "utf8");
     assert.ok(!caddyfile.includes("flush_interval -1"), "Caddyfile must not set flush_interval -1 (breaks SSE cancellation)");
     assert.match(caddyfile, /handle_errors\s*\{[\s\S]*Access-Control-Allow-Origin\s+\{\$PWA_ORIGIN\}/);
     assert.match(caddyfile, /handle_errors\s*\{[\s\S]*Cache-Control\s+"no-store"/);
     assert.match(caddyfile, /replace ticket REDACTED/);
     assert.match(caddyfile, /request>headers>Authorization delete/);
+    assert.match(caddyfile, /Strict-Transport-Security "max-age=31536000; includeSubDomains"/);
+    assert.match(caddyfile, /X-Content-Type-Options "nosniff"/);
+    assert.match(caddyfile, /Referrer-Policy "no-referrer"/);
+    assert.match(caddyfile, /header_up X-Forwarded-For \{http\.request\.remote\.host\}/);
+    assert.match(caddyfile, /max_size 64KB/);
+    assert.match(caddyfile, /max_size 13MB/);
+    assert.match(caddySite, /Strict-Transport-Security "max-age=31536000; includeSubDomains"/);
+    assert.match(cfHeaders, /Strict-Transport-Security: max-age=31536000; includeSubDomains/);
 
     const bridge = await startBridge(makeConfig(), { log: () => {} });
     bridges.push(bridge);
@@ -739,5 +757,173 @@ describe("pwa-relay bridge", () => {
       await new Promise<void>((resolve) => proxy.close(() => resolve()));
       mac.ws.close();
     }
+  });
+
+  it("extracts rightmost sanitized X-Forwarded-For hop capped at 64 chars and rejects prototype-pollution header keys", async () => {
+    const bridge = await startBridge(makeConfig(), { log: () => {} });
+    bridges.push(bridge);
+
+    const mac = await connectMockMac(bridge.port);
+    await mac.waitForFrame((f) => f.type === "hello");
+
+    const longAddr = `${"a".repeat(70)}!@#`;
+    const req1 = fetch(`http://127.0.0.1:${bridge.port}/api/bots`, {
+      headers: { "x-forwarded-for": `198.51.100.1, ${longAddr}, ` },
+    });
+    const open1 = (await mac.waitForFrame((f) => f.type === "req.open")) as Extract<BridgeFrame, { type: "req.open" }>;
+    assert.equal(open1.remoteAddr, "a".repeat(64));
+    mac.sendFrame({ type: "res.head", streamId: open1.streamId, status: 200, headers: { "content-type": "application/json" } });
+    mac.sendFrame({ type: "res.body", streamId: open1.streamId, chunkB64: Buffer.from("{}").toString("base64"), eof: true });
+    assert.equal((await req1).status, 200);
+
+    for (const badKey of ["__proto__", "constructor", "prototype"]) {
+      const reqBad = fetch(`http://127.0.0.1:${bridge.port}/api/bots?k=${badKey}`);
+      const openBad = (await mac.waitForFrame((f) => f.type === "req.open" && f.path.includes(badKey))) as Extract<
+        BridgeFrame,
+        { type: "req.open" }
+      >;
+      mac.ws.send(`{"type":"res.head","streamId":"${openBad.streamId}","status":200,"headers":{"${badKey}":"bad"}}`);
+      const resBad = await reqBad;
+      assert.equal(resBad.status, 502);
+    }
+    mac.ws.close();
+  });
+
+  it("caps pending unauthenticated upgrades, pre-auth frame size, and throttles repeated auth failures", async () => {
+    const bridge = await startBridge(
+      makeConfig({ maxPendingAuth: 2, preAuthMaxFrameBytes: 4096, authMaxFailures: 2, authBlockMs: 5_000, authDeadlineMs: 5_000 }),
+      { log: () => {} },
+    );
+    bridges.push(bridge);
+
+    // 1. Pre-auth payload > 4096 bytes rejected with 4400.
+    const bigWs = new WebSocket(`ws://127.0.0.1:${bridge.port}/v1/bridge`, [BRIDGE_SUBPROTOCOL]);
+    await new Promise<void>((resolve) => bigWs.once("open", resolve));
+    const bigClosed = new Promise<number>((resolve) => bigWs.once("close", (c) => resolve(c)));
+    bigWs.send(JSON.stringify({ type: "hello", hostId: HOST_ID, token: "x".repeat(5000) }));
+    assert.equal(await bigClosed, CloseCode.Malformed);
+
+    // 2. Concurrent unauthenticated upgrades capped at maxPendingAuth (2).
+    const pending1 = new WebSocket(`ws://127.0.0.1:${bridge.port}/v1/bridge`, [BRIDGE_SUBPROTOCOL]);
+    const pending2 = new WebSocket(`ws://127.0.0.1:${bridge.port}/v1/bridge`, [BRIDGE_SUBPROTOCOL]);
+    await Promise.all([
+      new Promise<void>((resolve) => pending1.once("open", resolve)),
+      new Promise<void>((resolve) => pending2.once("open", resolve)),
+    ]);
+    const rejected3 = new WebSocket(`ws://127.0.0.1:${bridge.port}/v1/bridge`, [BRIDGE_SUBPROTOCOL]);
+    const rejErr = await new Promise<Error>((resolve) => rejected3.once("error", resolve));
+    assert.match(rejErr.message, /503/);
+    pending1.close();
+    pending2.close();
+    await new Promise((r) => setTimeout(r, 30));
+
+    // 3. Repeated 4401/4403 auth failures throttle subsequent upgrades from the same IP with 429.
+    const bad1 = await connectMockMac(bridge.port, { token: "wrong-1" });
+    assert.equal((await bad1.closePromise).code, CloseCode.Unauthorized);
+    const bad2 = await connectMockMac(bridge.port, { hostId: "wrong-host" });
+    assert.equal((await bad2.closePromise).code, CloseCode.ForbiddenHost);
+
+    const throttled = new WebSocket(`ws://127.0.0.1:${bridge.port}/v1/bridge`, [BRIDGE_SUBPROTOCOL]);
+    const throttledErr = await new Promise<Error>((resolve) => throttled.once("error", resolve));
+    assert.match(throttledErr.message, /429/);
+  });
+
+  it("handles ws.on('error') cleanly without RangeError on close(1006)", async () => {
+    const bridge = await startBridge(makeConfig({ upstreamHeaderTimeoutMs: 5_000 }), { log: () => {} });
+    bridges.push(bridge);
+
+    const mac = await connectMockMac(bridge.port);
+    await mac.waitForFrame((f) => f.type === "hello");
+    const pendingReq = fetch(`http://127.0.0.1:${bridge.port}/api/bots`);
+    await mac.waitForFrame((f) => f.type === "req.open");
+
+    // Abruptly destroy the underlying TCP socket with a RST-like error; bridge must not throw RangeError on 1006.
+    const rawSock = (mac.ws as unknown as { _socket?: { destroy: (err?: Error) => void } })._socket;
+    rawSock?.destroy(new Error("ECONNRESET"));
+    await mac.closePromise;
+
+    const res = await pendingReq;
+    assert.equal(res.status, 503);
+    assert.equal(bridge.hostConnected(), false);
+  });
+
+  it("times out stalled upload bodies (408 + req.cancel) and enforces relay-wide maxPendingBodyBytes (503 bridge_busy)", async () => {
+    const bridge = await startBridge(
+      makeConfig({
+        idleUploadTimeoutMs: 100,
+        uploadHeaderTimeoutMs: 5_000,
+        maxWsBufferedBytes: 1024,
+        maxFrameBytes: 16 * 1024,
+        maxPendingBodyBytes: 16 * 1024,
+      }),
+      { log: () => {} },
+    );
+    bridges.push(bridge);
+
+    const mac = await connectMockMac(bridge.port);
+    await mac.waitForFrame((f) => f.type === "hello");
+
+    // 1. Stalled upload stream triggers 408 request_timeout + req.cancel.
+    const stalledRes = await new Promise<{ status: number; body: Record<string, unknown> }>((resolve) => {
+      const req = httpRequest(
+        {
+          host: "127.0.0.1",
+          port: bridge.port,
+          method: "POST",
+          path: "/api/attachments?uploadId=stall-1",
+          headers: { "content-length": "1024" },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (c) => chunks.push(c));
+          res.on("end", () => {
+            clearTimeout(killTimer);
+            resolve({ status: res.statusCode ?? 0, body: JSON.parse(Buffer.concat(chunks).toString("utf8")) });
+          });
+        },
+      );
+      req.on("error", () => {});
+      req.write("partial");
+      const killTimer = setTimeout(() => req.destroy(), 1000);
+    });
+    assert.equal(stalledRes.status, 408);
+    assert.equal(stalledRes.body.code, "request_timeout");
+    await mac.waitForFrame((f) => f.type === "req.cancel");
+
+    // 2. Relay-wide maxPendingBodyBytes returns 503 bridge_busy when pending chunks exceed cap under backpressure.
+    const macSocket = (mac.ws as unknown as { _socket?: { pause: () => void; resume: () => void } })._socket;
+    assert.ok(macSocket);
+    macSocket.pause();
+
+    const overflowRes = await new Promise<{ status: number; retryAfter: string | undefined; body: Record<string, unknown> }>((resolve, reject) => {
+      const req = httpRequest(
+        {
+          host: "127.0.0.1",
+          port: bridge.port,
+          method: "POST",
+          path: "/api/attachments?uploadId=over-buf",
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (c) => chunks.push(c));
+          res.on("end", () =>
+            resolve({
+              status: res.statusCode ?? 0,
+              retryAfter: typeof res.headers["retry-after"] === "string" ? res.headers["retry-after"] : undefined,
+              body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+            }),
+          );
+        },
+      );
+      req.on("error", () => {});
+      req.end(Buffer.alloc(4 * 1024 * 1024, 0x65));
+      setTimeout(() => reject(new Error("Timed out waiting for 503 bridge_busy")), 3000).unref();
+    });
+    assert.equal(overflowRes.status, 503);
+    assert.equal(overflowRes.retryAfter, "1");
+    assert.equal(overflowRes.body.code, "bridge_busy");
+
+    macSocket.resume();
+    mac.ws.close();
   });
 });

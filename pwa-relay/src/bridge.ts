@@ -48,6 +48,8 @@ const HOP_BY_HOP_AND_MANAGED_RESPONSE_HEADERS = new Set([
   "access-control-max-age",
   "vary",
   "cache-control",
+  "set-cookie",
+  "x-content-type-options",
 ]);
 
 interface InFlightStream {
@@ -57,9 +59,12 @@ interface InFlightStream {
   headersSent: boolean;
   finished: boolean;
   hasRequestBody: boolean;
+  bodyEnded: boolean;
   uploadEofSent: boolean;
   headerTimer: NodeJS.Timeout | undefined;
+  bodyTimer: NodeJS.Timeout | undefined;
   bodyBytesReceived: number;
+  pendingBytes: number;
   isSse: boolean;
   pausedForBackpressure: boolean;
   pendingChunks: Buffer[];
@@ -88,14 +93,41 @@ function isLoopbackAddr(addr: string | undefined): boolean {
   return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
 }
 
+function sanitizeRemoteAddr(value: string): string {
+  const clean = value.replace(/[^\w.:%[\]-]/g, "");
+  return (clean || "0.0.0.0").slice(0, 64);
+}
+
 function resolveRemoteAddr(req: IncomingMessage): string {
   const peer = req.socket.remoteAddress ?? "";
   if (isLoopbackAddr(peer)) {
-    const xff = req.headers["x-forwarded-for"];
-    const first = typeof xff === "string" ? xff.split(",")[0]?.trim() : "";
-    if (first && !/[\r\n]/.test(first)) return first;
+    const raw = req.headers["x-forwarded-for"];
+    const xff = Array.isArray(raw) ? raw.join(",") : raw;
+    if (typeof xff === "string") {
+      const hops = xff.split(",").map((h) => h.trim()).filter(Boolean);
+      const last = hops.length > 0 ? hops[hops.length - 1] : "";
+      if (last) return sanitizeRemoteAddr(last);
+    }
   }
-  return peer || "0.0.0.0";
+  return sanitizeRemoteAddr(peer || "0.0.0.0");
+}
+
+function rawDataByteLength(raw: RawData): number {
+  if (Buffer.isBuffer(raw)) return raw.byteLength;
+  if (raw instanceof ArrayBuffer) return raw.byteLength;
+  if (Array.isArray(raw)) {
+    let total = 0;
+    for (const buf of raw) total += buf.byteLength;
+    return total;
+  }
+  return Buffer.byteLength(String(raw), "utf8");
+}
+
+function rawDataToUtf8(raw: RawData): string {
+  if (Buffer.isBuffer(raw)) return raw.toString("utf8");
+  if (Array.isArray(raw)) return Buffer.concat(raw).toString("utf8");
+  if (raw instanceof ArrayBuffer) return Buffer.from(raw).toString("utf8");
+  return String(raw);
 }
 
 function pathnameOf(urlText: string | undefined): string {
@@ -116,6 +148,22 @@ function applyCorsAndNoStore(res: ServerResponse, pwaOrigin: string): void {
   res.setHeader("Access-Control-Expose-Headers", "Retry-After");
   res.setHeader("Access-Control-Max-Age", "86400");
   res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+}
+
+function closeRequestAfterError(req: IncomingMessage, res: ServerResponse): void {
+  if (!req.readableEnded && !req.destroyed) {
+    req.resume();
+  }
+  const timer = setTimeout(() => {
+    if (!req.destroyed) req.destroy();
+  }, 500);
+  timer.unref();
+  req.once("end", () => {
+    clearTimeout(timer);
+    if (!req.destroyed) req.destroy();
+  });
+  res.socket?.once("close", () => clearTimeout(timer));
 }
 
 function sendJsonError(
@@ -145,7 +193,16 @@ function filterRequestHeaders(raw: IncomingMessage["headers"]): HeaderMap {
   const out: HeaderMap = {};
   for (const [k, v] of Object.entries(raw)) {
     const lower = k.toLowerCase();
-    if (HOP_BY_HOP_REQUEST_HEADERS.has(lower) || v === undefined) continue;
+    if (
+      v === undefined ||
+      HOP_BY_HOP_REQUEST_HEADERS.has(lower) ||
+      lower === "cookie" ||
+      lower === "host" ||
+      lower.startsWith("x-openmausbot-") ||
+      lower.startsWith("x-omb-")
+    ) {
+      continue;
+    }
     out[lower] = v;
   }
   return out;
@@ -197,11 +254,68 @@ export async function startBridge(
 ): Promise<BridgeServer> {
   const log = options.log ?? createJsonLogger();
   const maxRawChunk = maxRawChunkForFrame(config.maxFrameBytes);
+  const maxPendingBodyBytes = config.maxPendingBodyBytes ?? 32 * 1024 * 1024;
+  const idleUploadTimeoutMs = config.idleUploadTimeoutMs ?? 10_000;
+  const maxPendingAuth = config.maxPendingAuth ?? 16;
+  const preAuthMaxFrameBytes = config.preAuthMaxFrameBytes ?? 4096;
+  const authFailWindowMs = config.authFailWindowMs ?? 60_000;
+  const authMaxFailures = config.authMaxFailures ?? 5;
+  const authBlockMs = config.authBlockMs ?? 60_000;
 
   let activeHost: HostSession | null = null;
   let draining = false;
+  let pendingBodyBytes = 0;
+  let pendingAuthCount = 0;
+  const pendingAuthReleases = new WeakMap<WebSocket, () => void>();
+  const authFailures = new Map<string, { count: number; windowStart: number; blockedUntil: number }>();
+
+  const isAuthBlocked = (ip: string, now = Date.now()): boolean => {
+    const rec = authFailures.get(ip);
+    if (!rec) return false;
+    if (rec.blockedUntil > now) return true;
+    if (now - rec.windowStart > authFailWindowMs) {
+      authFailures.delete(ip);
+    }
+    return false;
+  };
+
+  const recordAuthFailure = (ip: string, now = Date.now()): void => {
+    let rec = authFailures.get(ip);
+    if (!rec || now - rec.windowStart > authFailWindowMs) {
+      if (!rec && authFailures.size >= 4096) {
+        for (const [k, v] of authFailures) {
+          if (v.blockedUntil <= now && now - v.windowStart > authFailWindowMs) {
+            authFailures.delete(k);
+          }
+        }
+        if (authFailures.size >= 4096) {
+          const oldest = authFailures.keys().next().value;
+          if (oldest !== undefined) authFailures.delete(oldest);
+        }
+      }
+      rec = { count: 1, windowStart: now, blockedUntil: 0 };
+      authFailures.set(ip, rec);
+    } else {
+      rec.count += 1;
+    }
+    if (rec.count >= authMaxFailures) {
+      rec.blockedUntil = now + authBlockMs;
+    }
+  };
+
+  const clearBodyTimer = (stream: InFlightStream) => {
+    if (stream.bodyTimer) {
+      clearTimeout(stream.bodyTimer);
+      stream.bodyTimer = undefined;
+    }
+  };
 
   const cleanupStreamUpload = (host: HostSession, stream: InFlightStream, cancelIfUnfinished: boolean) => {
+    clearBodyTimer(stream);
+    if (stream.pendingBytes > 0) {
+      pendingBodyBytes = Math.max(0, pendingBodyBytes - stream.pendingBytes);
+      stream.pendingBytes = 0;
+    }
     stream.pendingChunks.length = 0;
     stream.pendingEof = false;
     stream.pausedForBackpressure = false;
@@ -229,15 +343,18 @@ export async function startBridge(
     const closeReqAfterEnd = !stream.req.readableEnded && !stream.req.destroyed;
     if (!stream.headersSent && !stream.res.writableEnded) {
       log({ ev: "stream_error", status, reason: code });
+      const extraHeaders: Record<string, string> = {};
+      if (code === "bridge_busy") extraHeaders["Retry-After"] = "1";
+      if (closeReqAfterEnd) extraHeaders.Connection = "close";
       sendJsonError(
         stream.res,
         config.pwaOrigin,
         status,
         { error: message, code },
-        closeReqAfterEnd ? { Connection: "close" } : undefined,
+        Object.keys(extraHeaders).length > 0 ? extraHeaders : undefined,
         closeReqAfterEnd
           ? () => {
-              if (!stream.req.destroyed) stream.req.destroy();
+              closeRequestAfterError(stream.req, stream.res);
             }
           : undefined,
       );
@@ -247,12 +364,21 @@ export async function startBridge(
     }
   };
 
+  const armBodyTimer = (host: HostSession, stream: InFlightStream) => {
+    clearBodyTimer(stream);
+    if (stream.finished || stream.bodyEnded || stream.pausedForBackpressure || !stream.hasRequestBody) return;
+    stream.bodyTimer = setTimeout(() => {
+      failStream(host, stream, 408, "request_timeout", "Request body timed out", true);
+    }, idleUploadTimeoutMs);
+  };
+
   const flushStreamBody = (host: HostSession, stream: InFlightStream) => {
     if (stream.finished || !host.streams.has(stream.streamId) || host.ws.readyState !== WebSocket.OPEN) return;
     while (stream.pendingChunks.length > 0) {
       if (host.ws.bufferedAmount >= config.maxWsBufferedBytes) {
         if (!stream.pausedForBackpressure) {
           stream.pausedForBackpressure = true;
+          clearBodyTimer(stream);
           stream.req.pause();
         }
         host.drainWaiters.add(stream.onDrain);
@@ -262,6 +388,10 @@ export async function startBridge(
       const slice = head.length <= maxRawChunk ? stream.pendingChunks.shift()! : head.subarray(0, maxRawChunk);
       if (head.length > maxRawChunk) {
         stream.pendingChunks[0] = head.subarray(maxRawChunk);
+      }
+      if (stream.pendingBytes > 0) {
+        pendingBodyBytes = Math.max(0, pendingBodyBytes - slice.length);
+        stream.pendingBytes = Math.max(0, stream.pendingBytes - slice.length);
       }
       sendSessionPayload(
         host,
@@ -295,6 +425,7 @@ export async function startBridge(
     if (stream.pausedForBackpressure) {
       stream.pausedForBackpressure = false;
       stream.req.resume();
+      armBodyTimer(host, stream);
     }
   };
 
@@ -351,7 +482,11 @@ export async function startBridge(
     }
 
     const host = activeHost;
-    if (host.streams.size >= config.maxConcurrentStreams || host.ws.bufferedAmount >= config.maxWsBufferedBytes) {
+    if (
+      host.streams.size >= config.maxConcurrentStreams ||
+      host.ws.bufferedAmount >= config.maxWsBufferedBytes ||
+      pendingBodyBytes >= maxPendingBodyBytes
+    ) {
       sendJsonError(
         res,
         config.pwaOrigin,
@@ -375,7 +510,7 @@ export async function startBridge(
           closeAfter ? { Connection: "close" } : undefined,
           closeAfter
             ? () => {
-                if (!req.destroyed) req.destroy();
+                closeRequestAfterError(req, res);
               }
             : undefined,
         );
@@ -402,7 +537,7 @@ export async function startBridge(
         closeAfter ? { Connection: "close" } : undefined,
         closeAfter
           ? () => {
-              if (!req.destroyed) req.destroy();
+              closeRequestAfterError(req, res);
             }
           : undefined,
       );
@@ -421,9 +556,12 @@ export async function startBridge(
       headersSent: false,
       finished: false,
       hasRequestBody,
+      bodyEnded: false,
       uploadEofSent: false,
       headerTimer: undefined,
+      bodyTimer: undefined,
       bodyBytesReceived: 0,
+      pendingBytes: 0,
       isSse: false,
       pausedForBackpressure: false,
       pendingChunks: [],
@@ -444,12 +582,14 @@ export async function startBridge(
       return;
     }
 
+    if (stream.hasRequestBody) {
+      armBodyTimer(host, stream);
+    }
+
     const onClientAbort = () => {
       if (!stream.finished && host.streams.has(streamId)) {
         stream.finished = true;
-        stream.pendingChunks.length = 0;
-        stream.pendingEof = false;
-        host.drainWaiters.delete(stream.onDrain);
+        cleanupStreamUpload(host, stream, false);
         if (stream.headerTimer) clearTimeout(stream.headerTimer);
         host.streams.delete(streamId);
         sendFrame(host.ws, { type: "req.cancel", streamId });
@@ -471,13 +611,22 @@ export async function startBridge(
         failStream(host, stream, 413, "payload_too_large", "Request body too large", true);
         return;
       }
+      armBodyTimer(host, stream);
       stream.pendingChunks.push(chunk);
+      stream.pendingBytes += chunk.length;
+      pendingBodyBytes += chunk.length;
       flushStreamBody(host, stream);
+      if (!stream.finished && pendingBodyBytes > maxPendingBodyBytes) {
+        bodyExceeded = true;
+        failStream(host, stream, 503, "bridge_busy", "Relay request buffer full", true);
+      }
     });
 
     req.on("end", () => {
       if (bodyExceeded || bodyDone || stream.finished || !host.streams.has(streamId)) return;
       bodyDone = true;
+      stream.bodyEnded = true;
+      clearBodyTimer(stream);
       stream.pendingEof = true;
       flushStreamBody(host, stream);
     });
@@ -501,15 +650,57 @@ export async function startBridge(
       socket.destroy();
       return;
     }
+    const remoteIp = resolveRemoteAddr(req);
+    if (isAuthBlocked(remoteIp)) {
+      log({ ev: "host_reject", code: CloseCode.Unauthorized, reason: "auth_throttled" });
+      socket.write("HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\nRetry-After: 60\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    if (pendingAuthCount >= maxPendingAuth) {
+      log({ ev: "host_reject", code: CloseCode.Unavailable, reason: "too_many_pending_auth" });
+      socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    let promoted = false;
+    let pendingReleased = false;
+    const releasePendingAuth = () => {
+      if (pendingReleased) return;
+      pendingReleased = true;
+      pendingAuthCount = Math.max(0, pendingAuthCount - 1);
+    };
+    pendingAuthCount += 1;
+    socket.once("close", () => {
+      if (!promoted) releasePendingAuth();
+    });
     wss.handleUpgrade(req, socket, head, (ws) => {
+      promoted = true;
+      if (socket.destroyed) {
+        releasePendingAuth();
+        return;
+      }
+      pendingAuthReleases.set(ws, releasePendingAuth);
       wss.emit("connection", ws, req);
     });
   });
 
-  wss.on("connection", (ws) => {
+  wss.on("connection", (ws, req) => {
+    const releasePendingAuth = pendingAuthReleases.get(ws) ?? (() => {});
+    ws.once("close", releasePendingAuth);
+    const remoteIp = resolveRemoteAddr(req);
+
     if (ws.protocol !== BRIDGE_SUBPROTOCOL) {
+      releasePendingAuth();
       log({ ev: "host_reject", code: CloseCode.Malformed, reason: "subprotocol" });
       ws.close(CloseCode.Malformed, "missing subprotocol");
+      return;
+    }
+
+    if (isAuthBlocked(remoteIp)) {
+      releasePendingAuth();
+      log({ ev: "host_reject", code: CloseCode.Unauthorized, reason: "auth_throttled" });
+      ws.close(CloseCode.Unauthorized, "too many auth failures");
       return;
     }
 
@@ -530,8 +721,10 @@ export async function startBridge(
 
     ws.on("error", () => {
       clearTimeout(authTimer);
+      releasePendingAuth();
       if (authedSession) {
-        teardownHost(authedSession, 1006, true);
+        authedSession.ws.terminate();
+        teardownHost(authedSession, 1006, false);
       }
     });
 
@@ -546,8 +739,14 @@ export async function startBridge(
         return;
       }
 
-      const text = Buffer.isBuffer(raw) ? raw.toString("utf8") : String(raw);
-      const frame = parseBridgeFrame(text, config.maxFrameBytes);
+      if (!authedSession && rawDataByteLength(raw) > preAuthMaxFrameBytes) {
+        log({ ev: "host_reject", code: CloseCode.Malformed, reason: "pre_auth_payload_too_large" });
+        ws.close(CloseCode.Malformed, "pre-auth frame too large");
+        return;
+      }
+
+      const text = rawDataToUtf8(raw);
+      const frame = parseBridgeFrame(text, !authedSession ? preAuthMaxFrameBytes : config.maxFrameBytes);
       if (!frame) {
         if (!authedSession) {
           log({ ev: "host_reject", code: CloseCode.Malformed, reason: "malformed_frame" });
@@ -566,11 +765,13 @@ export async function startBridge(
           return;
         }
         if (frame.hostId !== config.pinnedHostId) {
+          recordAuthFailure(remoteIp);
           log({ ev: "host_reject", code: CloseCode.ForbiddenHost, reason: "wrong_host_id" });
           ws.close(CloseCode.ForbiddenHost, "forbidden host");
           return;
         }
         if (!frame.token || !verifyHostTokenHash(frame.hostId, sha256Hex(frame.token), config.hostTokenHashes)) {
+          recordAuthFailure(remoteIp);
           log({ ev: "host_reject", code: CloseCode.Unauthorized, reason: "invalid_token" });
           ws.close(CloseCode.Unauthorized, "unauthorized");
           return;
@@ -579,6 +780,9 @@ export async function startBridge(
           ws.close(CloseCode.Unavailable, "shutting down");
           return;
         }
+
+        authFailures.delete(remoteIp);
+        releasePendingAuth();
 
         if (activeHost) {
           const stale = activeHost;

@@ -54,6 +54,10 @@ async function chooseRoot(
     await pageLanguage;
     return <PairPage initialCode={null} reason={pwaBoot.error} />;
   }
+  if (pwaBoot.status === "confirm") {
+    await pageLanguage;
+    return <PairPage initialCode={null} pendingPwaReplace={{ existing: pwaBoot.existing, payload: pwaBoot.payload }} />;
+  }
   if (pwaBoot.status === "paired" && location.pathname === "/pair") {
     history.replaceState(null, "", pairedDestination(location.search));
   }
