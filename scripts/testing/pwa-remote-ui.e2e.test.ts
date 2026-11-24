@@ -396,19 +396,9 @@ describe("Remote PWA real-browser E2E via pwa-relay and Mac fixture", () => {
           await page2.dispose();
         }
 
-        // 3. Unpaired static-SPA root visit and invalid #pair= both show PairPage fallback instead of hanging on Connecting.
+        // 3. Unpaired static-SPA root visit, pasting a #pair= invite into PairPage (Home Screen PWA), and invalid #pair= all work without hanging or white-screening.
         const page3 = await openIsolatedPage();
         try {
-          await page3.req("Page.navigate", { url: `${spa.origin}/` });
-          await expect
-            .poll(
-              () =>
-                page3.evalJs(
-                  'Boolean(document.getElementById("root")?.innerHTML?.length) && !document.body.innerText.includes("Connecting to your bots") && document.body.innerText.trim().length > 0',
-                ),
-              { timeout: 15_000 },
-            )
-            .toBe(true);
           await page3.req("Page.navigate", { url: `${spa.origin}/#pair=not-valid-base64` });
           await expect
             .poll(
@@ -418,6 +408,37 @@ describe("Remote PWA real-browser E2E via pwa-relay and Mac fixture", () => {
                 ),
               { timeout: 15_000 },
             )
+            .toBe(true);
+
+          await page3.req("Page.navigate", { url: `${spa.origin}/` });
+          await expect
+            .poll(
+              () =>
+                page3.evalJs(
+                  'Boolean(document.querySelector("#pair-code")) && !document.body.innerText.includes("Connecting to your bots")',
+                ),
+              { timeout: 15_000 },
+            )
+            .toBe(true);
+
+          const hash3 = await createInviteHash();
+          const fullUrl3 = `${spa.origin}/${hash3}`;
+          await page3.evalJs(`(() => {
+            const inp = document.querySelector("#pair-code");
+            const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+            setter.call(inp, ${JSON.stringify(fullUrl3)});
+            inp.dispatchEvent(new Event("input", { bubbles: true }));
+          })()`);
+          await expect
+            .poll(() => page3.evalJs('document.querySelector(\'button[type="submit"]\')?.disabled === false'), {
+              timeout: 5_000,
+            })
+            .toBe(true);
+          await page3.evalJs('document.querySelector(\'button[type="submit"]\')?.click()');
+          await expect
+            .poll(() => page3.evalJs('document.querySelector(\'textarea[aria-label^="Message"]\') !== null'), {
+              timeout: 25_000,
+            })
             .toBe(true);
           expect(page3.exceptions).toEqual([]);
         } finally {

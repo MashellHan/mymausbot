@@ -364,10 +364,14 @@ describe("pwa-cache", () => {
       return res;
     });
 
+    const navigate = vi.fn(async () => null);
     const swGlobal = {
       location: { origin: "https://mausbot.mxhan.com" },
       skipWaiting: vi.fn(async () => {}),
-      clients: { claim: vi.fn(async () => {}) },
+      clients: {
+        claim: vi.fn(async () => {}),
+        matchAll: vi.fn(async () => [{ url: "https://mausbot.mxhan.com/", navigate }]),
+      },
       caches: {
         open: async (name: string) => ensureCache(name),
         keys: async () => Array.from(cacheEntries.keys()),
@@ -398,17 +402,17 @@ describe("pwa-cache", () => {
     const precachedPaths = mockFetch.mock.calls.map((call) => String(call[0]));
     expect(precachedPaths).toContain("/");
     expect(precachedPaths).not.toContain("/index.html");
-    expect(cacheEntries.has("omb-pwa-shell-v3")).toBe(true);
+    expect(cacheEntries.has("omb-pwa-shell-v4")).toBe(true);
 
     const activatePromises: Promise<unknown>[] = [];
     listeners.get("activate")!({ waitUntil: (p: Promise<unknown>) => activatePromises.push(p) });
     await Promise.all(activatePromises);
     expect(cacheEntries.has("omb-pwa-shell-v1")).toBe(false);
 
-    // Poison cache entry with a redirected Response to verify navigation strips `.redirected`.
+    // Online navigation serves fresh HTML within timeout (never stale cached "/") and strips `.redirected`.
     const poisoned = new Response("<html>poisoned</html>", { status: 200 });
     Object.defineProperty(poisoned, "redirected", { value: true });
-    cacheEntries.get("omb-pwa-shell-v3")!.set("/", poisoned);
+    cacheEntries.get("omb-pwa-shell-v4")!.set("/", poisoned);
 
     let navResponsePromise!: Promise<Response>;
     const bgPromises: Promise<unknown>[] = [];
@@ -419,23 +423,41 @@ describe("pwa-cache", () => {
     });
     const navResponse = await navResponsePromise;
     expect(navResponse.redirected).toBe(false);
-    expect(await navResponse.text()).toBe("<html>poisoned</html>");
+    expect(await navResponse.text()).toBe("<html>/</html>");
     await Promise.all(bgPromises);
 
-    // SPA HTML fallback for a stale /assets/*.js request must return 404, not be cached, and clear cached "/".
+    // Offline navigation falls back to cached "/" and still strips `.redirected`.
+    cacheEntries.get("omb-pwa-shell-v4")!.set("/", poisoned);
+    mockFetch.mockRejectedValueOnce(new Error("offline"));
+    let offlineNavPromise!: Promise<Response>;
+    const offlineBg: Promise<unknown>[] = [];
+    listeners.get("fetch")!({
+      request: { method: "GET", mode: "navigate", url: "https://mausbot.mxhan.com/" },
+      respondWith: (p: Promise<Response>) => { offlineNavPromise = p; },
+      waitUntil: (p: Promise<unknown>) => { offlineBg.push(p); },
+    });
+    const offlineNav = await offlineNavPromise;
+    expect(offlineNav.redirected).toBe(false);
+    expect(await offlineNav.text()).toBe("<html>poisoned</html>");
+    await Promise.all(offlineBg);
+
+    // SPA HTML fallback for a stale /assets/*.js request must return 404, not be cached, clear cached "/", and trigger one reload.
     let staleAssetPromise!: Promise<Response>;
+    const staleWait: Promise<unknown>[] = [];
     listeners.get("fetch")!({
       request: { method: "GET", mode: "cors", url: "https://mausbot.mxhan.com/assets/App-stale.js" },
       respondWith: (p: Promise<Response>) => { staleAssetPromise = p; },
-      waitUntil: () => {},
+      waitUntil: (p: Promise<unknown>) => { staleWait.push(p); },
     });
     const staleAsset = await staleAssetPromise;
+    await Promise.all(staleWait);
     expect(staleAsset.status).toBe(404);
-    expect(cacheEntries.get("omb-pwa-shell-v3")!.has("/assets/App-stale.js")).toBe(false);
-    expect(cacheEntries.get("omb-pwa-shell-v3")!.has("/")).toBe(false);
+    expect(cacheEntries.get("omb-pwa-shell-v4")!.has("/assets/App-stale.js")).toBe(false);
+    expect(cacheEntries.get("omb-pwa-shell-v4")!.has("/")).toBe(false);
+    expect(navigate).toHaveBeenCalledWith("https://mausbot.mxhan.com/");
 
     // Cold cache redirected navigation (e.g. /legacy/) must also resolve with redirected === false.
-    cacheEntries.get("omb-pwa-shell-v3")!.delete("/");
+    cacheEntries.get("omb-pwa-shell-v4")!.delete("/");
     let coldNavPromise!: Promise<Response>;
     listeners.get("fetch")!({
       request: { method: "GET", mode: "navigate", url: "https://mausbot.mxhan.com/legacy/" },
