@@ -284,27 +284,41 @@ available capacity and follow deferred recovery through adoption or an explicit
 resolution. Original dates remain diagnostic; reopening does not grant a test
 waiver or require extra checks merely to reset a clock.
 
+### Pull request handoffs
+
 Freeze a coherent candidate after focused contract checks. Send its immutable
 commit, available evidence and explicitly pending UI/package checks immediately;
 source review and CI can start while those checks finish. Do not wait for all
 screenshots or a package to begin source review. Pending acceptance still blocks
 the corresponding delivery. Batch corrections and review only their delta.
 
-Dev sends the ready head to the assigned Reviewer once (or to Lead when an
-explicit batch/merge-order boundary is active), with the existing handoff record
-and pending checks. When GitHub PR access is available (`mausbot-review`,
-`mausbot-review2`), the assigned Reviewer posts findings directly as GitHub PR
-review comments/threads on the reviewed SHA (using `COMMENT` on single-account
-PRs rather than `APPROVE`), resolves addressed threads after verifying
-correction deltas, and enables `gh pr merge --auto --merge` (or merges if `CI`
-is already green) as soon as all review threads are resolved and no explicit Lead
-hold applies; do not keep review conclusions only in local chat or wait on Lead
-for ordinary merges. When a read-only reviewer (`mausbot-review3`) returns its
-exact-SHA verdict, the PR owner or Lead records it on the PR review thread and
-enables auto-merge immediately. Lead steps in only for explicit merge-order
-holds, conflicts, QA holds, or missed handoffs caught at the 06:00/21:00 Beijing
-checkpoint. Do not add polling jobs, duplicate notifications, a second review
-owner for the same scope or a new approval gate.
+1. **Dev hands off ready source.** Send the PR, its current `QA-Handoff` SHA,
+   validation, and open review threads to the assigned Reviewer once. Lead
+   assigns the review owner and recovers failed handoffs. After a
+   requested correction, reply on the original threads and update `QA-Handoff`
+   to the pushed head. In the same turn, send that head directly to the assigned
+   Reviewer for delta review, including PRs held for merge order.
+2. **Reviewer hands off blocking findings.** Post one GitHub review on the
+   reviewed SHA (`COMMENT` for single-account PRs). Send the assigned Dev one
+   direct handoff with the blocking threads in the same turn. Verify each
+   correction before resolving its thread. For a read-only Reviewer, the
+   PR owner or Lead records the returned exact-SHA verdict and routes it.
+3. **Reviewer hands off accepted source.** Record source acceptance on the
+   reviewed SHA. Once all review threads are resolved, enable
+   `gh pr merge --auto --merge` (or merge if required `CI` is already green) for
+   an ordinary PR. For an explicit merge-order hold, send Lead the accepted SHA
+   and current check status once. The PR owner or Lead takes the corresponding
+   action for a read-only verdict. Lead records the actual merge and advances
+   the ordered batch.
+
+Record delivery and the recipient's observed start separately in the existing
+handoff. The sender may continue independent work after delivery. If delivery
+fails or the recipient is unavailable, keep the pending SHA, owner, and next
+action for Lead to recover or transfer at the next handoff or the 06:00/21:00
+Beijing checkpoint. Verify the recipient's actual state before retrying an
+uncertain delivery. Lead also handles conflicts and QA holds. Do not add
+polling jobs, duplicate notifications, a second review owner for the same scope
+or a new approval gate.
 
 Freeze operational callers before their focused review as well. A caller or
 fixture correction does not reopen unchanged product source or require another

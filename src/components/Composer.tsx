@@ -52,7 +52,6 @@ import {
   clipboardFilesToAttach,
   clipboardHasImages,
   clipboardImageFiles,
-  composeMessage,
   dataContextFor,
   discardUnsentUpload,
   composerShouldRefocus,
@@ -99,7 +98,7 @@ import {
   type ComposerSlashCommand,
 } from "@/lib/composer-commands";
 import { useSlashSkills } from "@/lib/use-slash-skills";
-import { randomUuid } from "@/lib/random-uuid";
+import { randomUuid } from "@/lib/random-uuid"; import { botSupportsImagesInComposer, isComposerLocked, isPwaOfflineDraftBlocked, prepareComposerSendPayload } from "@/lib/pwa-composer";
 
 type ComposerDraftSnapshot = ComposerSendSnapshot & { reply: Message | null };
 
@@ -129,8 +128,8 @@ export function Composer({
   needsInputStop?: boolean;
 }) {
   const bot = profile ? currentTaskBot(profile) : undefined;
-  const locked = setupLocked || Boolean(bot?.awaitingThreadSnapshot);
-  const state = useStoreSelector((s) => ({ instances: s.instances, config: s.config, queued: s.pendingQueued[group?.threadId ?? bot?.threadId ?? ""] }), sameFields), dispatch = useStoreDispatch(), store = useStoreRef(), bots = useStoreSelector((s) => s.bots, sameDrawnBots);
+  const state = useStoreSelector((s) => ({ instances: s.instances, config: s.config, connected: s.connected, cachedHydrated: s.cachedHydrated, queued: s.pendingQueued[group?.threadId ?? bot?.threadId ?? ""] }), sameFields), dispatch = useStoreDispatch(), store = useStoreRef(), bots = useStoreSelector((s) => s.bots, sameDrawnBots);
+  const locked = isComposerLocked({ setupLocked, awaitingThreadSnapshot: bot?.awaitingThreadSnapshot, cachedHydrated: state.cachedHydrated });
   const { threads, currentBotId } = useThreadRefs();
   const advanced = useAdvancedMode();
   const raw = useRawPresentation();
@@ -279,11 +278,7 @@ export function Composer({
   const mentionListRef = useRef<HTMLDivElement>(null);
   const commandListRef = useRef<HTMLDivElement>(null);
 
-  const botSupportsImages = (candidate?: Bot) =>
-    Boolean(
-      candidate &&
-        state.instances.find((i) => i.instanceId === candidate.modelSelection.instanceId)?.capabilities?.images,
-    );
+  const botSupportsImages = (candidate?: Bot) => botSupportsImagesInComposer(state, candidate);
   const imageTargetsSupport = (message: string, mode: "chat" | "goal") => {
     if (!group) return botSupportsImages(bot);
     if (mode === "goal") {
@@ -489,7 +484,7 @@ export function Composer({
   const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
   const modeBot = group ? undefined : bot;
   const { choice: approvalChoice, dialogs: approvalDialogs } = useThreadApproval(modeBot);
-  const uploadImage = useCallback((file: File) => uploadDraftImage(draftId, file), [draftId]);
+  const uploadImage = useCallback((file: File) => uploadDraftImage(draftId, file, { offline: !state.connected }), [draftId, state.connected]);
   const pickFiles = async (picked: FileList | readonly File[] | null) => {
     if (!picked?.length) return;
     changeDraftAttachmentPending(draftId, true);
@@ -544,7 +539,7 @@ export function Composer({
     }
   };
   const send = (followUp: FollowUp | undefined = followUpFor(false)) => {
-    if (locked || attachmentPending) return;
+    if (locked || attachmentPending || isPwaOfflineDraftBlocked({ ...state, attachments })) return;
     if (unresolvedReply) {
       dispatch({ type: "error", message: t("chat.reply.cancelToSend") });
       return;
@@ -556,10 +551,11 @@ export function Composer({
       dispatch({ type: "error", message: t("composer.error.noImages") });
       return;
     }
-    const composed = composeMessage(serializeThreadRefs(effectiveText, threads, currentBotId), attachments);
-    if (!composed) return;
+    const prepared = prepareComposerSendPayload(serializeThreadRefs(effectiveText, threads, currentBotId), attachments);
+    if (!prepared) return;
     stopDictation();
-    const body = restoredRequestText(draftId) ?? composed;
+    const body = restoredRequestText(draftId) ?? prepared.rawText;
+    const outboxAttachments = prepared.outboxAttachments;
     const dataContext = dataContextFor(body, store.state().computerOpen ? store.state().dataView : null, !group && bot ? { botId: bot.id, threadId } : undefined);
     const sentDraft: ComposerDraftSnapshot = {
       draftId,
@@ -580,6 +576,7 @@ export function Composer({
         type: "sendGroup",
         groupId: group.id,
         text: body,
+        ...(outboxAttachments.length ? { outboxAttachments } : {}),
         sendId: sentDraft.sendId,
         replyToId: replyToId ?? undefined,
         threadId,
@@ -593,7 +590,7 @@ export function Composer({
       const points = effectiveChannelMode === "goal" ? null : takePointedChips(threadId);
       const page = effectiveChannelMode === "goal" ? undefined : openPageFor(threadId);
       dispatch({
-        type: "send", botId: bot.id, text: body, sendId: sentDraft.sendId, replyToId: replyToId ?? undefined, threadId, dataContext, mode: effectiveChannelMode, mentions: sentDraft.mentions,
+        type: "send", botId: bot.id, text: body, ...(outboxAttachments.length ? { outboxAttachments } : {}), sendId: sentDraft.sendId, replyToId: replyToId ?? undefined, threadId, dataContext, mode: effectiveChannelMode, mentions: sentDraft.mentions,
         ...(points ? { pointed: points.pointed } : {}), ...(page ? { openPage: page } : {}), ...(followUp ? { followUp } : {}),
         onError: () => { points?.restore(); restoreDraft(sentDraft); },
       });

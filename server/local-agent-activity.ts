@@ -8,6 +8,8 @@ import { redactedAgentText as safeText, trackAgentToolCalls, visibleAgentMessage
 import { createActivityHistory, isToolActivity, MAX_ACTIVITY_EVENTS, MAX_ACTIVITY_HISTORY_EVENTS, MAX_ACTIVITY_TOOL_EVENTS,
   unavailableActivityHistory, type ActivityHistoryRead } from "./local-agent-activity-history.ts";
 import { codexSessionId, discoverCodexSessionFiles } from "./local-agent-session.ts";
+import { readOpenCodeMessages } from "./local-agent-opencode-message.ts";
+import { openCodeSessionId, openCodeUsageDatabase } from "./local-agent-opencode-usage.ts";
 import { createPiSessionReader } from "./local-agent-pi-message.ts";
 import { verifiedLocalAgentMembers } from "./local-agent-association.ts";
 import { localAgentOccupantId } from "./local-agent-occupant.ts";
@@ -154,7 +156,11 @@ export function createLocalAgentActivityProvider({ run = runHerdr, read = readSe
       if (!agent) return missing;
       let observed: ActivityHistoryRead | null | undefined;
       if (agent.agent === "pi") observed = (await piHistoryFor([agent])).get(agentId);
-      else if (agent.agent === "codex") {
+      else if (agent.agent === "opencode") {
+        const sessionId = openCodeSessionId(agent);
+        if (!sessionId) return missing;
+        observed = readOpenCodeMessages(openCodeUsageDatabase(home), [sessionId], "history").get(sessionId);
+      } else if (agent.agent === "codex") {
         const sessionId = codexSessionId(agent);
         if (!sessionId) return missing;
         const file = (await discoverCodexSessionFiles(codexHome, new Set([sessionId]))).get(sessionId);
@@ -186,6 +192,16 @@ export function createLocalAgentActivityProvider({ run = runHerdr, read = readSe
       if (!verified.includes(agent)) return unavailable(agentId);
       const observed = (await piSessionsFor(verified)).get(agentId);
       if (!current() || !observed) return unavailable(agentId);
+      return { agentId, status: "ready", updatedAt: now(), events: observed.events, truncated: observed.truncated };
+    }
+    if (agent.agent === "opencode") {
+      clear();
+      const sessionId = openCodeSessionId(agent);
+      if (!sessionId || !verifiedLocalAgentMembers(agents).includes(agent)) return unavailable(agentId);
+      const observed = readOpenCodeMessages(openCodeUsageDatabase(home), [sessionId], "recent").get(sessionId);
+      const occupant = localAgentOccupantId(agent, agentId);
+      const live = observed && occupant && await historyAgent(agentId, occupant).catch(() => undefined);
+      if (!current() || !observed || !live || live.cwd !== agent.cwd) return unavailable(agentId);
       return { agentId, status: "ready", updatedAt: now(), events: observed.events, truncated: observed.truncated };
     }
     if (agent.agent !== "codex") {

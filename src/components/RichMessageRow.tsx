@@ -1,4 +1,5 @@
-import { AppWindow, Crosshair } from "lucide-react";
+import { AppWindow, Crosshair, Loader2, RotateCw } from "lucide-react";
+import { discardOutboxSend, retryOutboxSend, useOutboxRecord } from "@/state/pwa-outbox";
 import type { Message } from "@/state/store";
 import { t } from "@/lib/i18n";
 import { AppMessage } from "./app/AppMessage";
@@ -47,28 +48,92 @@ export function RoomRichRow({ message, from, threadId }: { message: Message; fro
   );
 }
 
+function OutboxStatusNote({ sendId }: { sendId: string | undefined }) {
+  const record = useOutboxRecord(sendId);
+  if (!record) return null;
+  if (record.status === "queued") {
+    return (
+      <span data-outbox-status="queued" className="mt-1 inline-flex items-center gap-1 text-[11px] text-ink-tertiary">
+        {t("chat.outbox.queued")}
+      </span>
+    );
+  }
+  if (record.status === "sending" || record.status === "resending") {
+    return (
+      <span data-outbox-status={record.status} className="mt-1 inline-flex items-center gap-1 text-[11px] text-ink-tertiary">
+        <Loader2 aria-hidden="true" size={10} className="animate-spin" />
+        <span>{t(record.status === "sending" ? "chat.outbox.sending" : "chat.outbox.resending")}</span>
+      </span>
+    );
+  }
+  if (record.status === "failed") {
+    return (
+      <span data-outbox-status="failed" className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-danger" title={record.lastError}>
+        <button
+          type="button"
+          data-outbox-retry={record.sendId}
+          onClick={() => void retryOutboxSend(record.sendId)}
+          className="inline-flex items-center gap-1 underline underline-offset-2 hover:opacity-80"
+        >
+          <RotateCw aria-hidden="true" size={10} />
+          <span>{t("chat.outbox.failedRetry")}</span>
+        </button>
+        <button
+          type="button"
+          data-outbox-discard={record.sendId}
+          onClick={() => void discardOutboxSend(record.sendId)}
+          className="text-ink-tertiary underline underline-offset-2 hover:text-ink"
+        >
+          {t("chat.outbox.discard")}
+        </button>
+      </span>
+    );
+  }
+  return (
+    <span data-outbox-status="rejected" className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-danger">
+      <span>{record.lastError ? t("chat.outbox.rejectedWithError", { error: record.lastError }) : t("chat.outbox.rejected")}</span>
+      <button
+        type="button"
+        data-outbox-discard={record.sendId}
+        onClick={() => void discardOutboxSend(record.sendId)}
+        className="text-ink-tertiary underline underline-offset-2 hover:text-ink"
+      >
+        {t("chat.outbox.discard")}
+      </button>
+    </span>
+  );
+}
+
 export function UserLineNote({ message }: { message: Message }) {
+  const outboxSendId = message.id.startsWith("optimistic-") ? message.sendId : undefined;
+  const outboxNote = outboxSendId ? <OutboxStatusNote sendId={outboxSendId} /> : null;
   // A @devs message: its report's status ("Got it, we're looking", then "Fixed in 0.1.x").
-  if (message.bugReport) return <BugReportNote report={message.bugReport} />;
+  if (message.bugReport) return <>{outboxNote}<BugReportNote report={message.bugReport} /></>;
   if (message.pointed?.length) {
     const label = t("chat.preview.pointedAt", { parts: message.pointed.map((part) => part.label).join(", ") });
     return (
-      <span data-pointed-note className="mt-1 flex min-w-0 items-center gap-1 text-[11px] text-ink-tertiary" title={label}>
-        <Crosshair aria-hidden="true" size={11} className="shrink-0" />
-        <bdi dir="auto" className="min-w-0 truncate">{label}</bdi>
-      </span>
+      <>
+        {outboxNote}
+        <span data-pointed-note className="mt-1 flex min-w-0 items-center gap-1 text-[11px] text-ink-tertiary" title={label}>
+          <Crosshair aria-hidden="true" size={11} className="shrink-0" />
+          <bdi dir="auto" className="min-w-0 truncate">{label}</bdi>
+        </span>
+      </>
     );
   }
   if (message.fromApp?.title) {
     const label = t("app.sentFrom", { title: message.fromApp.title });
     return (
-      <span data-sent-from-app={message.fromApp.messageId} className="mt-1 flex items-center gap-1 text-[11px] text-ink-tertiary" title={label}>
-        <AppWindow aria-hidden="true" size={11} className="shrink-0" />
-        <bdi dir="auto" className="min-w-0 truncate">{label}</bdi>
-      </span>
+      <>
+        {outboxNote}
+        <span data-sent-from-app={message.fromApp.messageId} className="mt-1 flex items-center gap-1 text-[11px] text-ink-tertiary" title={label}>
+          <AppWindow aria-hidden="true" size={11} className="shrink-0" />
+          <bdi dir="auto" className="min-w-0 truncate">{label}</bdi>
+        </span>
+      </>
     );
   }
-  if (message.via === "api") return <span data-via-bot-api className="mt-1 text-[11px] text-ink-tertiary" title={t("chat.viaBotApi")}>{t("chat.viaBotApi")}</span>;
-  if (message.via !== "call") return null;
-  return <span className="mt-1 text-[11px] text-ink-tertiary" title={t("chat.viaCall")}>{t("chat.viaCall")}</span>;
+  if (message.via === "api") return <>{outboxNote}<span data-via-bot-api className="mt-1 text-[11px] text-ink-tertiary" title={t("chat.viaBotApi")}>{t("chat.viaBotApi")}</span></>;
+  if (message.via === "call") return <>{outboxNote}<span className="mt-1 text-[11px] text-ink-tertiary" title={t("chat.viaCall")}>{t("chat.viaCall")}</span></>;
+  return outboxNote;
 }

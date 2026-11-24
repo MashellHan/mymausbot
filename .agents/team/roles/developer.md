@@ -58,8 +58,9 @@ threads when fixing findings, keep correction deltas with the original reviewer,
 and enable `gh pr merge --auto --merge` right away when mirroring a clean
 read-only `mausbot-review3` verdict so ordinary PRs do not block on Lead.
 Retain normal hooks, protected CI, blocking findings and applicable QA holds; add
-no approval gate or time-based cancellation. Send one exact-head source handoff
-with the PR's current QA-Handoff; do not wait for an ACK.
+no approval gate or time-based cancellation. Use the [PR handoff loop](../playbook.md#pull-request-handoffs)
+to send one handoff for each ready head, including a tested correction. Continue
+independent work after delivery while the handoff records the recipient's start.
 Use the Herdr skill and `herdr --session default` with actual agent names.
 
 Front remains the sole App builder/installer; Root is the delivery operator.

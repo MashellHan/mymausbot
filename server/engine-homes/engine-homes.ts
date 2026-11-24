@@ -87,18 +87,24 @@ export class EngineHomes {
     return [env, ...audienceHomes(setup.dataDir).map((home) => homedSpawn(env, { dataDir: setup.dataDir, serverHome: setup.serverHome, home }).env)];
   }
 
-  /** On a Team Cloud, inside a conversation: the spawn with HOME and the engines' folders in its audience's home, the
-   * home made, and the team's sign-ins in it. Null otherwise. */
-  forSpawn(env: Record<string, string | undefined>): HomedSpawn | null {
+  /** The layout for this conversation's engine without preparing the home or touching sign-ins. */
+  spawnLayout(env: Record<string, string | undefined>): HomedSpawn | null {
     const setup = this.#setup;
     const threadId = setup ? this.#thread.getStore() : undefined;
     if (!setup || threadId === undefined) return null;
+    return homedSpawn(env, { dataDir: setup.dataDir, serverHome: setup.serverHome, home: audienceHome(setup.dataDir, setup.audienceOf(threadId)) });
+  }
+
+  /** On a Team Cloud, inside a conversation: the spawn with HOME and the engines' folders in its audience's home, the
+   * home made, and the team's sign-ins in it. Null otherwise. */
+  forSpawn(env: Record<string, string | undefined>): HomedSpawn | null {
+    const homed = this.spawnLayout(env);
+    if (!homed) return null;
     this.migrate();
-    const home = audienceHome(setup.dataDir, setup.audienceOf(threadId));
+    const home = homed.home;
     mkdirSync(home, { recursive: true, mode: 0o700 });
-    const homed = homedSpawn(env, { dataDir: setup.dataDir, serverHome: setup.serverHome, home });
     for (const folder of homed.folders) mkdirSync(folder, { recursive: true, mode: 0o700 });
-    const others = audienceHomes(setup.dataDir).filter((dir) => dir !== home);
+    const others = audienceHomes(this.#setup!.dataDir).filter((dir) => dir !== home);
     syncSignIns(homed.shared, (target) => others.map((dir) => join(dir, relative(home, target))));
     return homed;
   }

@@ -1,6 +1,7 @@
 """Private China-day model and agent totals from the existing activity collector's events."""
 
 from collections import defaultdict
+from contextlib import closing
 import datetime as dt
 import hashlib
 import json
@@ -9,8 +10,10 @@ from pathlib import Path
 import pwd
 import re
 import shutil
+import sqlite3
 import stat
 import subprocess
+import time
 import types
 
 FIELDS = ("input", "output", "cacheRead")
@@ -20,6 +23,9 @@ MAX_LABEL_LENGTH = 120
 MAX_CODEX_FILES = 4096
 MAX_CODEX_FILE_BYTES = 64 * 1024 * 1024
 MAX_CODEX_SCAN_BYTES = 256 * 1024 * 1024
+MAX_OPENCODE_ROWS = 100_000
+MAX_OPENCODE_MESSAGE_BYTES = 1024 * 1024
+MAX_OPENCODE_READ_SECONDS = 12
 MAX_HEADER_BYTES = 256 * 1024
 MAX_CONTINUITY_BYTES = 2 * 1024 * 1024
 MAX_CLOSED_INTERVALS = 2048
@@ -27,8 +33,13 @@ CONTINUITY_RETENTION_DAYS = 65
 WRITER_CADENCE_SECONDS = 300
 MAX_CONTINUITY_GAP_SECONDS = 450
 MAX_SAMPLE_SPAN_SECONDS = 450
-PROVIDERS = {"codex", "copilot", "hermes", "pi"}
+PROVIDERS = {"codex", "copilot", "hermes", "opencode", "pi"}
 MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.+-]*(?:/[A-Za-z0-9][A-Za-z0-9_.+-]*)?")
+TOKEN_LIKE_MODEL = re.compile(
+    r"(?i)\b(?:om[dg]_|sk[-_]|rk_(?:live|test)_|xai-|gsk_|csk-|hf_|gh[pousr]_|github_pat_|"
+    r"gl(?:pat|dt|rtr?)-|xox[abposr]-|xapp-|akia|asia|aiza|npm_|ntn_|pplx-|whsec_|bak_)[A-Za-z0-9_-]{16,}"
+    r"|\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
+)
 WORKSPACE_ID_RE = re.compile(r"^w\d+$")
 PANE_ID_RE = re.compile(r"^w\d+:p[0-9A-Za-z]+$")
 UUID_RE = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", re.I)
@@ -119,6 +130,128 @@ def _utc_instant(value):
 
 def _iso_utc(value):
     return _utc_instant(value).isoformat().replace("+00:00", "Z")
+
+
+def _opencode_event(message_id, session_id, started, payload, current, classify, start_ms, end_ms):
+    if not isinstance(payload, dict):
+        raise ValueError
+    if not current and payload.get("role") != "assistant":
+        return None
+    timing = payload.get("time")
+    if not isinstance(timing, dict):
+        raise ValueError
+    completed = timing.get("completed")
+    if completed is None:
+        return None
+    if type(completed) is not int:
+        raise ValueError
+    if not start_ms <= completed < end_ms:
+        return None
+    if type(started) is not int or started > completed or not _clean_label(message_id) or not _clean_label(session_id):
+        raise ValueError
+    tokens = payload.get("tokens")
+    if not isinstance(tokens, dict) or not isinstance(cache := tokens.get("cache"), dict):
+        raise ValueError
+    incoming, outgoing, reasoning, cached, cache_write = (
+        tokens.get("input"), tokens.get("output"), tokens.get("reasoning"), cache.get("read"), cache.get("write")
+    )
+    counts = (incoming, outgoing, reasoning, cached, cache_write)
+    if any(type(value) is not int or value < 0 for value in counts) or sum(counts) > MAX_COUNT:
+        raise ValueError
+    if not any(counts):
+        return None
+    model = payload.get("model")
+    model = (model.get("id") if isinstance(model, dict) else None) if current else payload.get("modelID")
+    path = payload.get("path")
+    cwd = path.get("cwd") if isinstance(path, dict) else None
+    if not isinstance(cwd, str) or not cwd.startswith("/") or len(cwd) > 4096 or "\0" in cwd:
+        cwd = None
+    category = classify(cwd)
+    key = hashlib.sha256(f"opencode\0{session_id}\0{message_id}".encode()).hexdigest()
+    return {
+        "key": key, "at": _iso_utc(dt.datetime.fromtimestamp(completed / 1000, dt.timezone.utc)),
+        "provider": "opencode", "category": category if category in ("personal", "work", "unclassified") else "unclassified",
+        "model": model if model_label("opencode", model) and not TOKEN_LIKE_MODEL.search(model) else "unknown",
+        "input": incoming + cache_write, "output": outgoing + reasoning,
+        "cacheRead": cached, "cacheWrite": cache_write, "reasoning": reasoning,
+    }
+
+
+def opencode_events(home, classify, start, end, *, env=None):
+    """Return sanitized machine events and a coverage error code, if any."""
+    env = os.environ if env is None else env
+    selected = env.get("OPENCODE_DB")
+    if selected == ":memory:":
+        return [], None
+    data_home = Path(env.get("XDG_DATA_HOME") or "")
+    if not data_home.is_absolute():
+        data_home = Path(home) / ".local/share"
+    file = data_home / "opencode" / (selected or "opencode.db")
+    try:
+        if not stat.S_ISREG(file.lstat().st_mode):
+            return [], "InvalidDatabase"
+    except FileNotFoundError:
+        return [], "MissingDatabase" if selected else None
+    except OSError:
+        return [], "DatabaseReadError"
+
+    start_ms, end_ms = start.timestamp() * 1000, end.timestamp() * 1000
+    deadline = time.monotonic() + MAX_OPENCODE_READ_SECONDS
+    events, seen, error, scanned = [], set(), None, 0
+    payload = "CASE WHEN typeof(msg.data) = 'text' AND length(CAST(msg.data AS BLOB)) <= :max_bytes THEN msg.data END"
+    try:
+        with closing(sqlite3.connect(file.resolve().as_uri() + "?mode=ro", uri=True, timeout=1)) as db:
+            db.execute("PRAGMA query_only = ON")
+            db.execute("PRAGMA trusted_schema = OFF")
+            db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 10_000)
+            db.execute("BEGIN")
+            tables = {name for name, in db.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('session_message', 'message')"
+            )}
+            if not tables:
+                return [], "UnsupportedSchema"
+            for table in ("session_message", "message"):
+                if table not in tables:
+                    continue
+                current = table == "session_message"
+                if current:
+                    predicate = "AND msg.type = 'assistant'"
+                elif "session_message" in tables:
+                    predicate = ("AND NOT EXISTS (SELECT 1 FROM session_message AS migrated "
+                                 "WHERE migrated.session_id = msg.session_id AND migrated.id = msg.id)")
+                else:
+                    predicate = ""
+                try:
+                    rows = db.execute(f"""
+                        SELECT msg.id, msg.session_id, msg.time_created, CAST({payload} AS BLOB)
+                        FROM {table} AS msg
+                        WHERE msg.time_created < :end {predicate}
+                          AND (msg.time_created >= :start OR CASE WHEN json_valid({payload})
+                               THEN json_extract({payload}, '$.time.completed') >= :start END)
+                        ORDER BY msg.time_created DESC, msg.id
+                        LIMIT :limit
+                    """, {"start": start_ms, "end": end_ms, "max_bytes": MAX_OPENCODE_MESSAGE_BYTES,
+                          "limit": MAX_OPENCODE_ROWS - scanned + 1})
+                    for message_id, session_id, started, data in rows:
+                        if scanned >= MAX_OPENCODE_ROWS or time.monotonic() >= deadline:
+                            return events, "ReadLimit"
+                        scanned += 1
+                        try:
+                            event = _opencode_event(message_id, session_id, started, json.loads(data),
+                                                    current, classify, start_ms, end_ms)
+                        except (TypeError, ValueError, RecursionError):
+                            error = error or "MalformedUsage"
+                            continue
+                        if event and event["key"] not in seen:
+                            seen.add(event["key"])
+                            events.append(event)
+                except sqlite3.Error:
+                    if time.monotonic() >= deadline:
+                        return events, "ReadLimit"
+                    error = "DatabaseReadError"
+    except (OSError, sqlite3.Error, ValueError):
+        return events, "DatabaseReadError"
+    return events, error
 
 
 def _occupant_id(pane_id, name, source, value):

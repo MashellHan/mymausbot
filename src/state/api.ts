@@ -3,18 +3,34 @@
 import { asleepAnswer, BACKGROUND_HEADER, cloudAsleep, markCloudAsleep, markCloudAwake, pageHidden, pageShown } from "../lib/cloud-power";
 import { lacksAdminScope } from "../lib/admin-scope";
 import { isBotLimitRefusal, isBotPausedRefusal, showBotLimit } from "../lib/bot-limit";
+import { remoteFetch } from "../lib/pwa-config";
 import { noteRefusedRequest } from "../lib/session-ended";
 import { serverErrorText } from "../lib/server-error";
 
 export class ApiError extends Error {
   readonly status: number;
   readonly body?: Record<string, unknown>;
-  constructor(message: string, status: number, body?: Record<string, unknown>) {
+  readonly retryAfterMs?: number;
+  constructor(message: string, status: number, body?: Record<string, unknown>, retryAfterMs?: number) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.body = body;
+    if (retryAfterMs !== undefined) this.retryAfterMs = retryAfterMs;
   }
+}
+
+export function parseRetryAfterMs(header: string | null | undefined, now: () => number = Date.now): number | undefined {
+  if (!header) return undefined;
+  const trimmed = header.trim();
+  if (!trimmed) return undefined;
+  if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    const seconds = Number(trimmed);
+    return Number.isFinite(seconds) ? Math.max(0, Math.round(seconds * 1000)) : undefined;
+  }
+  const timestamp = Date.parse(trimmed);
+  if (!Number.isFinite(timestamp)) return undefined;
+  return Math.max(0, timestamp - now());
 }
 
 type ApiInit = RequestInit & { timeoutMs?: number; background?: boolean };
@@ -34,7 +50,7 @@ export async function api<T = any>(path: string, init?: ApiInit): Promise<T> {
   }
   const sent = new Headers(headers ?? { "content-type": "application/json" });
   if (background) sent.set(BACKGROUND_HEADER, "1");
-  const res = await fetch(path, {
+  const res = await remoteFetch(path, {
     ...rest,
     headers: sent,
     signal: timeoutMs === undefined
@@ -48,7 +64,8 @@ export async function api<T = any>(path: string, init?: ApiInit): Promise<T> {
   if (!res.ok) {
     const error = body?.error;
     const message = typeof error === "string" ? error : typeof error?.message === "string" ? error.message : `${res.status} ${res.statusText}`;
-    const refused = new ApiError(serverErrorText(body, message), res.status, body);
+    const retryAfterMs = parseRetryAfterMs(res.headers?.get?.("Retry-After") ?? null);
+    const refused = new ApiError(serverErrorText(body, message), res.status, body, retryAfterMs);
     if (res.status === 401 || (res.status === 403 && !lacksAdminScope(refused))) noteRefusedRequest();
     if (res.status === 409 && isBotLimitRefusal(refused)) showBotLimit();
     if (res.status === 409 && isBotPausedRefusal(refused)) showBotLimit("paused");

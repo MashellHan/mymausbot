@@ -172,6 +172,11 @@ describe("CI path scope", () => {
       expect(selectCiScope([file])).toEqual({ areas: ["relay"], checks: ["relay"] });
     });
 
+  it.each([["pwa-relay/src/bridge.ts"], ["pwa-relay/pnpm-lock.yaml"], ["pwa-relay/deploy/Caddyfile"], ["pwa-relay/deploy/Dockerfile"]])(
+    "runs only the pwa-relay job for the pwa-relay's %j", (file) => {
+      expect(selectCiScope([file])).toEqual({ areas: ["pwa-relay"], checks: ["pwa-relay"] });
+    });
+
   it("runs the server's checks and the relay's for the shared E2E vectors, which the relay keeps a pinned copy of", () => {
     expect(selectCiScope(["companion/src/e2e/vectors/v1.json"])).toEqual({ areas: ["e2e-vectors"], checks: [...checks("server"), "relay"].sort() });
     expect(selectCiScope(["companion/src/e2e/noise.ts"])).toEqual({ areas: ["server"], checks: checks("server") });

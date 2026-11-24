@@ -72,8 +72,8 @@ export function RoutineList({ routines, runs, bots, pausedBots, heldBots, loadin
           {routine.lastSkippedAt != null && <> · {t("routines.lastSkipped", { date: routineDateTime(routine.lastSkippedAt) })}</>}
         </p>}
         </>}
-        {routine.enabled && pausedBots?.includes(routine.botId) && <p className="mt-2 text-[12px] leading-relaxed text-warning" data-routine-bot-paused="">
-          {t("routines.botPaused")}{" "}
+        {routine.enabled && pausedBots?.includes(routine.botId) && !heldBots?.includes(routine.botId) && <p className="mt-2 text-[12px] leading-relaxed text-warning" data-routine-bot-paused="">
+          {t("routines.botPausedRuns")}{" "}
           <button type="button" className="cursor-pointer text-accent hover:underline" onClick={() => showBotLimit("paused")}>{t("routines.botPausedSwap")}</button>
         </p>}
         {routine.enabled && heldBots?.includes(routine.botId) && <p className="mt-2 text-[12px] leading-relaxed text-warning" data-routine-bot-held="">{t("routines.botHeld")}</p>}

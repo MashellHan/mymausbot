@@ -5,8 +5,8 @@ import { readFileSync } from "node:fs";
 
 import { NEAR_LIMIT_PERCENT, type EngineLimit, type EngineLimitsReport, type LimitWindowName } from "../shared/limit-reset.ts";
 import { writeFileAtomic } from "./atomic.ts";
-import { LIMIT_POLL_MS, limitReadDue } from "./limit-poll.ts";
-import { claudeHasExtraUsageRoom, loadPlanUsage, type PlanAccount, type PlanProviderRow, type PlanUsageReport, type PlanWindow } from "./plan-usage.ts";
+import { LIMIT_IDLE_POLL_MS, LIMIT_POLL_MS, limitReadDue } from "./limit-poll.ts";
+import { claudeHasExtraUsageRoom, loadPlanUsage, planUsageAccountKey, type PlanAccount, type PlanProviderRow, type PlanUsageReport, type PlanWindow } from "./plan-usage.ts";
 import type { RuntimeEvent } from "../shared/runtime-events.ts";
 import { OPENCODE_GO_MODEL_PREFIX, typedOpenCodeModel } from "../shared/opencode-model-id.ts";
 
@@ -68,13 +68,14 @@ export function engineLabel(engine: string, instance?: { displayName?: string; d
 
 /** A line for the turn's text when its engine is nearly out of usage, so the bot can set up its own continuation. */
 export function nearLimitNote(limit: EngineLimit | undefined, name: string, timeZone: string): string {
-  if (!limit || limit.usedPercent === null || limit.usedPercent < NEAR_LIMIT_PERCENT) return "";
+  if (!limit || (limit.checkedAt !== undefined && !limit.held) || limit.usedPercent === null || limit.usedPercent < NEAR_LIMIT_PERCENT) return "";
   let resets = "";
   if (limit.resetsAt !== null) {
     try { resets = `; it resets ${new Date(limit.resetsAt).toLocaleString("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone })} (${timeZone})`; }
     catch { resets = `; it resets ${new Date(limit.resetsAt).toISOString()}`; }
   }
-  return ` ${name}'s ${limit.window === "weekly" ? "weekly" : "usage"} limit is ${Math.round(limit.usedPercent)}% used${resets}.`;
+  const window = limit.checkedAt === undefined && limit.window === "weekly" ? "weekly" : "usage";
+  return ` ${name}'s ${window} limit is ${Math.round(limit.usedPercent)}% used${resets}.`;
 }
 
 export interface LimitClockOptions {
@@ -104,10 +105,21 @@ function fixtureUsage(path: string, now: number): PlanUsageReport {
 /** With no reset time named, a usage limit holds its engine this long after its last refusal. */
 export const UNNAMED_LIMIT_MS = 60 * 60_000;
 
+interface UsageReading {
+  limit: EngineLimit;
+  readAt: number;
+  accountKey: string | undefined;
+}
+
+function displayReadingIsCurrent({ limit, readAt }: UsageReading, now: number): boolean {
+  return now - readAt <= LIMIT_IDLE_POLL_MS &&
+    !(limit.windows ?? []).some((window) => window.resetsAt !== null && window.resetsAt <= now);
+}
+
 export class LimitResetClock {
   private readonly options: LimitClockOptions;
   private readonly now: () => number;
-  private usage = new Map<string, EngineLimit>();
+  private usage = new Map<string, UsageReading>();
   private readonly refusals = new Map<string, number>();
   /** Engines held by a refusal that named no reset time: the hold is a guess, never shown as a reset. */
   private readonly guessed = new Set<string>();
@@ -152,6 +164,7 @@ export class LimitResetClock {
    * the Go subscription's and never covers Zen's free models. */
   private meterFor(engine: string, model?: string): EngineLimit | undefined {
     const usage = this.reading(engine);
+    if (usage?.checkedAt !== undefined) return undefined;
     return usage?.driver !== "opencode" || !model || (typedOpenCodeModel(model) ?? model).startsWith(OPENCODE_GO_MODEL_PREFIX) ? usage : undefined;
   }
 
@@ -160,12 +173,18 @@ export class LimitResetClock {
   }
 
   report(): EngineLimitsReport {
-    const engines = new Map([...this.usage].filter(([engine]) => this.reading(engine)));
+    const engines = new Map<string, EngineLimit>();
+    for (const engine of this.usage.keys()) {
+      const usage = this.reading(engine);
+      if (usage) engines.set(engine, usage);
+    }
     for (const engine of this.refusals.keys()) {
       const until = this.blockedUntil(engine);
       const known = engines.get(engine);
       if (until === null) continue;
-      const limit: EngineLimit = { ...(known ?? this.unnamed(engine)), blocked: true, usedPercent: 100, resetsAt: this.guessed.has(engine) ? known?.resetsAt ?? null : until };
+      const measuredReset = known?.checkedAt === undefined ? known?.resetsAt ?? null : null;
+      const resetsAt = this.guessed.has(engine) ? measuredReset : until;
+      const limit: EngineLimit = { ...(known ?? this.unnamed(engine)), blocked: true, usedPercent: 100, resetsAt };
       if (!known?.blocked) limit.held = true;
       engines.set(engine, limit);
     }
@@ -175,8 +194,14 @@ export class LimitResetClock {
   /** A usage reading counts only while its account's usage is read: one taken before its meter was turned off (or a
    * report fetched before that) says nothing now. A refusal's hold is kept apart and still counts. */
   private reading(engine: string): EngineLimit | undefined {
-    const usage = this.usage.get(engine);
-    return usage && !this.options.accounts().some((account) => account.id === engine && account.noUsage) ? usage : undefined;
+    const reading = this.usage.get(engine);
+    if (!reading) return undefined;
+    const account = this.options.accounts().find((candidate) => candidate.id === engine);
+    if (account?.noUsage) return undefined;
+    if (reading.accountKey !== undefined && (!account || planUsageAccountKey(account) !== reading.accountKey)) return undefined;
+    const { limit } = reading;
+    if (limit.checkedAt !== undefined && !displayReadingIsCurrent(reading, this.now())) return undefined;
+    return limit;
   }
 
   /** Every runtime event, with the engine its turn runs on when known: a refusal holds the engine, and a turn that
@@ -227,14 +252,26 @@ export class LimitResetClock {
     this.soon.unref?.();
   }
 
-  noteUsage(report: PlanUsageReport): void {
-    const next = new Map<string, EngineLimit>();
+  noteUsage(report: PlanUsageReport, readAccountKeys?: ReadonlyMap<string, string>): void {
+    const next = new Map<string, UsageReading>();
     const fetchedAt = Date.parse(report.fetchedAt);
+    const accounts = new Map(this.options.accounts().map((account) => [account.id, account]));
+    const now = this.now();
     let released = false;
     for (const row of report.providers) {
+      const account = accounts.get(row.id);
+      if (account?.noUsage) continue;
+      const accountKey = account && account.driver === row.driver ? planUsageAccountKey(account) : undefined;
+      if (readAccountKeys && (accountKey === undefined || readAccountKeys.get(row.id) !== accountKey)) continue;
       const limit = engineLimitFromUsage(row);
-      if (!limit) continue;
-      next.set(limit.engine, limit);
+      if (!limit) {
+        const previous = !row.ok && accountKey !== undefined ? this.usage.get(row.id) : undefined;
+        if (previous && previous.accountKey === accountKey && previous.limit.usedPercent !== null && displayReadingIsCurrent(previous, now)) {
+          next.set(row.id, { ...previous, limit: { ...previous.limit, blocked: false, checkedAt: previous.readAt } });
+        }
+        continue;
+      }
+      next.set(limit.engine, { limit, readAt: fetchedAt, accountKey });
       if (fetchedAt >= (this.heldAt.get(limit.engine) ?? 0) && holdGone(row, limit, this.refusals.get(limit.engine), this.guessed.has(limit.engine))) {
         this.refusals.delete(limit.engine);
         this.heldAt.delete(limit.engine);
@@ -243,7 +280,7 @@ export class LimitResetClock {
     }
     if (released) this.saveHolds();
     this.usage = next;
-    this.checkedAt = this.now();
+    this.checkedAt = now;
     this.options.onChange?.();
   }
 
@@ -270,10 +307,11 @@ export class LimitResetClock {
     this.loading = (async () => {
       try {
         if (!accounts.length) { this.checkedAt = this.now(); this.failures = 0; return; }
+        const readAccountKeys = new Map(accounts.map((account) => [account.id, planUsageAccountKey(account)]));
         const report = await this.load(accounts, force);
         // No account answered (offline, a laptop just woke): a quiet home tries again in minutes, not in an hour.
         this.failures = report.providers.length && report.providers.every((row) => !row.ok) ? this.failures + 1 : 0;
-        this.noteUsage(report);
+        this.noteUsage(report, readAccountKeys);
       } catch {
         this.checkedAt = this.now();
         this.failures += 1;
@@ -298,7 +336,9 @@ export class LimitResetClock {
   /** Every reset time known now: the holds' and each usage window's. */
   private knownResets(): number[] {
     const resets = [...this.refusals.values()];
-    for (const limit of this.usage.values()) for (const window of limit.windows ?? []) if (window.resetsAt !== null) resets.push(window.resetsAt);
+    for (const engine of this.usage.keys()) {
+      for (const window of this.meterFor(engine)?.windows ?? []) if (window.resetsAt !== null) resets.push(window.resetsAt);
+    }
     return resets;
   }
 

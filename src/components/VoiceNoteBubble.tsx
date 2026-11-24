@@ -5,6 +5,7 @@ import { ChevronRight, Pause, Play } from "lucide-react";
 import { attachmentAudioUrl } from "@/lib/composer-attachments";
 import { t } from "@/lib/i18n";
 import { isLiveCallRunning, useLiveMedia } from "@/lib/live-call-media";
+import { useRemoteMediaUrl } from "@/lib/use-remote-media";
 import { speaker } from "@/lib/tts";
 import { cn } from "@/lib/cn";
 
@@ -31,6 +32,7 @@ export function VoiceNoteBubble({
   className?: string;
 }) {
   const url = attachmentAudioUrl(attachment.path);
+  const remoteAudio = useRemoteMediaUrl(url);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const releaseRef = useRef<(() => void) | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -87,7 +89,7 @@ export function VoiceNoteBubble({
       <div className="flex w-full items-center gap-3">
         <audio
           ref={audioRef}
-          src={url}
+          src={remoteAudio.url ?? undefined}
           preload="metadata"
           onLoadedMetadata={(event) => {
             const loaded = event.currentTarget.duration;

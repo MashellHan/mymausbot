@@ -1,5 +1,8 @@
 import { t } from "./i18n";
+import { defaultDeviceLabel, isJsonResponse, isRemotePwaMode, remoteFetch } from "./pwa-config";
 import { serverErrorText } from "./server-error";
+
+export { defaultDeviceLabel };
 
 export interface EnvironmentDescriptor {
   environmentId: string;
@@ -44,16 +47,19 @@ export function rememberedTeamSignIn(): string | null {
 export async function readSessionState(fetchImpl: typeof fetch = fetch): Promise<SessionState> {
   let res: Response;
   try {
-    res = await fetchImpl("/api/auth/session", { credentials: "same-origin" });
+    res = await remoteFetch("/api/auth/session", { credentials: "same-origin" }, fetchImpl);
   } catch (error) {
     return { kind: "unreachable", error: error instanceof Error ? error.message : String(error) };
   }
-  const body: unknown = await res.json().catch(() => ({}));
-  const record = Object(body) as Record<string, unknown>;
+  const body: unknown = isJsonResponse(res) ? await res.json().catch(() => null) : null;
+  const record = (body && typeof body === "object" && !Array.isArray(body) ? body : {}) as Record<string, unknown>;
   if (res.status === 401 || res.status === 403) {
     return { kind: "unauthenticated", error: typeof record.error === "string" ? record.error : `${res.status}` };
   }
   if (!res.ok) return { kind: "unreachable", error: `${res.status} ${res.statusText}` };
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { kind: "unreachable", error: "Invalid session response" };
+  }
   if (record.kind === "session" && typeof record.id === "string") {
     return {
       kind: "session",
@@ -71,7 +77,13 @@ export async function readSessionState(fetchImpl: typeof fetch = fetch): Promise
       } : {}),
     };
   }
-  return record.trust === "service" ? { kind: "loopback", trust: "service" } : { kind: "loopback" };
+  if (record.kind === "loopback") {
+    if (isRemotePwaMode()) {
+      return { kind: "unreachable", error: "Remote session required" };
+    }
+    return record.trust === "service" ? { kind: "loopback", trust: "service" } : { kind: "loopback" };
+  }
+  return { kind: "unreachable", error: "Invalid session response" };
 }
 
 function teamSessionOf(value: unknown): TeamSession | null {
@@ -116,12 +128,6 @@ export function takeInvitedEmailFromLocation(): string | null {
   const search = params.toString();
   history.replaceState(null, "", location.pathname + (search ? `?${search}` : "") + location.hash);
   return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) ? email : null;
-}
-
-export function defaultDeviceLabel(userAgent: string = navigator.userAgent): string {
-  const browser = /Edg\//.test(userAgent) ? "Edge" : /OPR\//.test(userAgent) ? "Opera" : /Chrome\//.test(userAgent) ? "Chrome" : /Firefox\//.test(userAgent) ? "Firefox" : /Safari\//.test(userAgent) ? "Safari" : "Browser";
-  const os = /iPhone/.test(userAgent) ? "iPhone" : /iPad/.test(userAgent) ? "iPad" : /Android/.test(userAgent) ? "Android" : /Mac OS X/.test(userAgent) ? "Mac" : /Windows/.test(userAgent) ? "Windows" : /Linux/.test(userAgent) ? "Linux" : "";
-  return os ? `${browser} on ${os}` : browser;
 }
 
 /** A retry with the same id returns the same session, and nobody who merely shares this address can guess it. */
