@@ -176,6 +176,18 @@ linuxBox("the box plan", () => {
     expect(visibleInBox(plan, join(dataDir, "providers", "key"))).toBe("none");
   });
 
+  it("MausBot's own Pi agent folder (PI_CODING_AGENT_DIR) goes back read-write, and no other instance's", () => {
+    const own = join(dataDir, "providers", "pi-own", "a".repeat(64), "agent");
+    const plan = planBox(setup(), { command: "/usr/bin/pi", args: ["--mode", "rpc"], cwd, env: { HOME: home, PI_CODING_AGENT_DIR: own }, rw: [own] });
+    expect(visibleInBox(plan, join(own, "models.json"))).toBe("rw");
+    expect(visibleInBox(plan, join(dataDir, "providers", "pi-own", "b".repeat(64), "agent", "models.json"))).toBe("none");
+  });
+
+  it("does not grant a mount from an arbitrary Pi agent environment value", () => {
+    const plan = planBox(setup(), { command: "/usr/bin/pi", args: [], cwd, env: { HOME: home, PI_CODING_AGENT_DIR: dataDir } });
+    expect(visibleInBox(plan, join(dataDir, "messages.db"))).toBe("none");
+  });
+
   it("a cwd outside the data folder is the turn's folder; a bot named by the caller gets its own folder", () => {
     const plan = planBox(setup(), { command: "/usr/bin/codex", args: [], cwd: "/data/projects/site", env: { HOME: home }, botId: "bot-z" });
     expect(plan.botId).toBe("bot-z");

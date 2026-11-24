@@ -9,6 +9,7 @@ import {
   apiBase,
   canonicalToolkitSlug,
   forgetProjectAuthConfigs,
+  inputError,
   listConnectedAccounts,
   projectAuthConfigs,
   projectHeaders,
@@ -101,13 +102,17 @@ export function authConfigRefusal(id: string): string | undefined {
   return refusedAuthConfigs.get(id);
 }
 
+function sessionErrorStatus(status: number): number {
+  return status >= 400 && status < 500 ? status : 502;
+}
+
 async function getProjectSession(apiKey: string, sessionId: string): Promise<SessionResponse | null> {
   const res = await fetch(`${apiBase()}/tool_router/session/${encodeURIComponent(sessionId)}`, {
     headers: projectHeaders(apiKey),
     signal: AbortSignal.timeout(15_000),
   });
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error(await responseError(res, `Composio session: HTTP ${res.status}`));
+  if (!res.ok) throw inputError(await responseError(res, `Composio session: HTTP ${res.status}`), sessionErrorStatus(res.status));
   return parseSessionResponse(sessionResponseSchema.parse(await res.json()));
 }
 
@@ -155,7 +160,7 @@ async function createProjectSession(apiKey: string, userId: string, authConfigs:
     console.warn(`[composio] Composio refused a Session naming the project's auth configs (${said}); creating it without them`);
     res = await post(named);
   }
-  if (!res.ok) throw new Error(await responseError(res, `Composio rejected this key (HTTP ${res.status})`));
+  if (!res.ok) throw inputError(await responseError(res, `Composio rejected this key (HTTP ${res.status})`), sessionErrorStatus(res.status));
   const session = parseSessionResponse(sessionResponseSchema.parse(await res.json()));
   authConfigUpgradeAttempted.add(authConfigsKey(session.session_id, authConfigs));
   return session.session_id;

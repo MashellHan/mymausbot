@@ -141,7 +141,7 @@ export function pickSessionModel(
   const { session, requested, catalog } = input;
   let { turn, variant, reportedModel } = input;
   const offered = offeredModels(session.sessionConfigResult, input.configId);
-  const normalized = support.normalizeSessionSelection?.(turn, offered) ?? turn;
+  const normalized = support.normalizeSessionSelection?.(turn, offered, catalog) ?? turn;
   if (normalized !== turn) {
     turn = normalized;
     variant = turn.variant;

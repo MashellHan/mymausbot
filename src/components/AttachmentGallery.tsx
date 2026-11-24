@@ -3,15 +3,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { ChevronDown, ChevronUp, Download, Film, LoaderCircle, Music, Play, X } from "lucide-react";
-import { attachmentBasename, PREVIEW_MAX_BYTES, type TranscriptFileAttachment, type TranscriptImageAttachment } from "@/lib/composer-attachments";
+import { attachmentBasename, PREVIEW_MAX_BYTES, splitTranscriptAttachments, type TranscriptAttachments, type TranscriptFileAttachment, type TranscriptImageAttachment } from "@/lib/composer-attachments";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
+import { downloadRemoteUrl, isRelayMediaPath, isRemotePwaMode } from "@/lib/pwa-config";
+import { useRemoteMediaUrl } from "@/lib/use-remote-media";
+import { useOutboxRecord } from "@/state/pwa-outbox";
+import { mergeOutboxUserAttachments } from "@/state/pwa-outbox-attachments";
 import { windowsPathDestinations } from "../../shared/markdown-windows-paths";
 import { localFilePath } from "./ChatMarkdown";
 import {
   AttachedFileChip,
   AttachmentPreviewDialog,
   AttachmentThumbnail,
+  canonicalDownloadFilename,
   previewImage,
   requestMessageFile,
   safeDownloadFilename,
@@ -243,6 +248,7 @@ export function previewTooLarge(bytes: number): Error {
 
 function VideoAttachment({ file, message }: { file: GalleryFile; message: MessageAttachmentContext }) {
   const [preview, setPreview] = useState<string | null>(null);
+  const resolvedPreview = useRemoteMediaUrl(preview);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [tooLarge, setTooLarge] = useState(false);
@@ -288,19 +294,25 @@ function VideoAttachment({ file, message }: { file: GalleryFile; message: Messag
   return (
     <div className="min-w-0 overflow-hidden rounded-xl border border-hairline/40 bg-inset/40">
       <div className="relative flex aspect-[4/3] items-center justify-center bg-inset">
-        {preview && error ? (
+        {preview && (error || resolvedPreview.failed) ? (
           <div className="flex size-full flex-col items-center justify-center gap-2 p-3 text-center">
             <Film size={24} className="text-ink-tertiary" aria-hidden="true" />
-            <p role="alert" className="text-[12px] text-ink-secondary">{error}</p>
+            <p role="alert" className="text-[12px] text-ink-secondary">{error || t("attach.videoUnavailable")}</p>
             <a href={preview} download={file.name} aria-label={t("attach.downloadAria", { name: file.name })}
+              onClick={(event) => {
+                if (isRemotePwaMode() && isRelayMediaPath(preview)) {
+                  event.preventDefault();
+                  void downloadRemoteUrl(preview, file.name).catch(() => undefined);
+                }
+              }}
               className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] text-accent-text hover:bg-ink/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus">
               <Download size={14} aria-hidden="true" />{t("attach.download")}
             </a>
           </div>
-        ) : preview ? (
+        ) : resolvedPreview.url ? (
           <video
             ref={videoRef}
-            src={preview}
+            src={resolvedPreview.url}
             tabIndex={0}
             controls
             playsInline
@@ -313,14 +325,14 @@ function VideoAttachment({ file, message }: { file: GalleryFile; message: Messag
           <button
             ref={playButton}
             type="button"
-            disabled={loading || tooLarge}
+            disabled={loading || resolvedPreview.loading || tooLarge}
             onClick={() => void load()}
             aria-label={t("attach.previewVideo", { name: file.name })}
             className={`flex size-full flex-col items-center justify-center gap-2 p-3 text-center text-ink-secondary transition-colors hover:bg-raised/60 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60 ${tooLarge ? "disabled:cursor-default" : "disabled:cursor-wait"} disabled:hover:bg-transparent`}
           >
-            {loading ? <LoaderCircle size={24} className="animate-spin" /> : <Play size={24} />}
-            <span className="text-[12px]">{loading ? t("attach.videoLoading") : error && !tooLarge ? t("chat.retry") : t("attach.loadVideo")}</span>
-            {!error && !loading && <span className="text-[11px]">{t("attach.videoHintStreams")}</span>}
+            {loading || resolvedPreview.loading ? <LoaderCircle size={24} className="animate-spin" /> : <Play size={24} />}
+            <span className="text-[12px]">{loading || resolvedPreview.loading ? t("attach.videoLoading") : error && !tooLarge ? t("chat.retry") : t("attach.loadVideo")}</span>
+            {!error && !loading && !resolvedPreview.loading && <span className="text-[11px]">{t("attach.videoHintStreams")}</span>}
           </button>
         )}
         {(preview || loading || error) && (
@@ -392,6 +404,7 @@ async function readMessageAudio(
 
 function AudioAttachment({ file, message }: { file: GalleryFile; message: MessageAttachmentContext }) {
   const [src, setSrc] = useState<string | null>(null);
+  const resolvedSrc = useRemoteMediaUrl(src);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const request = useRef<AbortController | null>(null);
@@ -427,10 +440,16 @@ function AudioAttachment({ file, message }: { file: GalleryFile; message: Messag
           )}
         <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-ink" title={file.name}>{file.name}</span>
         {src && <a href={src} download={file.name} aria-label={t("attach.saveAria", { name: file.name })} title={t("attach.saveAria", { name: file.name })}
+          onClick={(event) => {
+            if (isRemotePwaMode() && isRelayMediaPath(src)) {
+              event.preventDefault();
+              void downloadRemoteUrl(src, file.name).catch(() => undefined);
+            }
+          }}
           className="shrink-0 rounded-lg p-1 text-ink-secondary hover:bg-raised hover:text-ink"><Download size={14} /></a>}
       </div>
-      {src && !error && <audio src={src} controls autoPlay preload="metadata" aria-label={t("attach.previewAudio", { name: file.name })} onError={() => { setSrc(null); setError(t("attach.audioUnavailable")); }} className="h-9 w-full" />}
-      {error && <p role="alert" className="text-[11px] text-danger">{error}</p>}
+      {resolvedSrc.url && !error && !resolvedSrc.failed && <audio src={resolvedSrc.url} controls autoPlay preload="metadata" aria-label={t("attach.previewAudio", { name: file.name })} onError={() => { setSrc(null); setError(t("attach.audioUnavailable")); }} className="h-9 w-full" />}
+      {(error || resolvedSrc.failed) && <p role="alert" className="text-[11px] text-danger">{error || t("attach.audioUnavailable")}</p>}
     </div>
   );
 }
@@ -441,6 +460,19 @@ type GalleryItem = { key: string; source?: string } & (
 );
 
 const BENEATH_LIMIT = 6;
+
+export function useUserMessageAttachments(
+  text: string | undefined,
+  sendId: string | undefined,
+  active: boolean,
+): TranscriptAttachments | null {
+  const outboxRecord = useOutboxRecord(active ? sendId : undefined);
+  return useMemo(() => {
+    if (!active) return null;
+    const base = splitTranscriptAttachments(text ?? "");
+    return mergeOutboxUserAttachments(base, outboxRecord);
+  }, [active, text, outboxRecord]);
+}
 
 export function AttachmentGallery({ images = [], files = [], originals, message, eager = false, beneath = false, className }: {
   images?: Array<string | TranscriptImageAttachment>;
@@ -461,9 +493,16 @@ export function AttachmentGallery({ images = [], files = [], originals, message,
       const key = fileIdentity(path);
       if (seen.has(key)) continue;
       seen.add(key);
-      const image = typeof reference === "string" || reference.private
-        ? previewImage(path, typeof reference === "string" ? undefined : reference.name)
-        : null;
+      const image = typeof reference !== "string" && reference.previewUrl?.startsWith("blob:")
+        ? {
+            src: reference.previewUrl,
+            name: reference.name,
+            downloadUrl: reference.previewUrl,
+            downloadName: canonicalDownloadFilename({ fallback: reference.name, source: path }),
+          }
+        : typeof reference === "string" || reference.private
+          ? previewImage(path, typeof reference === "string" ? undefined : reference.name)
+          : null;
       const source = originalOf(originals, path);
       if (image) result.push({ key, source, kind: "image", image });
       else result.push({ key, source, kind: "file", file: typeof reference === "string" ? { path, name: attachmentBasename(path) } : reference });

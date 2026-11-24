@@ -16,6 +16,7 @@ import {
   type SessionState,
 } from "../lib/session";
 import { pairedDestination } from "../lib/phone-pairing";
+import { remoteFetch } from "../lib/pwa-config";
 import { t } from "../lib/i18n";
 import { formatPairingCode, PAIRING_INPUT_PROBLEM_KEY, readPairingInput } from "../../shared/pairing-code";
 import { isPrivateHost } from "../../shared/private-host";
@@ -110,7 +111,7 @@ export function PairPage({ initialCode, initialEmail = null, reason }: { initial
   }, []);
 
   useEffect(() => {
-    void fetch("/.well-known/openmausbot/environment")
+    void remoteFetch("/.well-known/openmausbot/environment")
       .then((r) => (r.ok ? r.json() : null))
       .then((d: EnvironmentDescriptor | null) => {
         setEnvironment(d);

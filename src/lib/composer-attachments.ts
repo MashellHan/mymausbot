@@ -1,4 +1,5 @@
 import { isCitationAttachment, serializeCitation, type CitationAttachment } from "./citations.ts";
+import { remoteFetch } from "./pwa-transport.ts";
 import { randomUuid } from "./random-uuid.ts";
 import { FILE_MAX_BYTES } from "../../shared/upload-limits.ts";
 export { dataContextFor, type DataContext, type DataViewContext } from "../../shared/data-context.ts";
@@ -28,6 +29,8 @@ export type ImageAttachment = {
   mime: string;
   previewUrl?: string;
   uploading?: boolean;
+  uploadId?: string;
+  compressedBlob?: Blob;
 };
 
 export type Attachment = PasteAttachment | FileAttachment | ImageAttachment | CitationAttachment;
@@ -295,7 +298,7 @@ async function uploadWithRetry<T>(url: string, init: RequestInit): Promise<T> {
   for (let attempt = 0; attempt < UPLOAD_ATTEMPTS; attempt += 1) {
     let response: Response;
     try {
-      response = await fetch(url, init);
+      response = await remoteFetch(url, init);
     } catch (error) {
       const aborted = typeof error === "object" && error !== null && "name" in error && error.name === "AbortError";
       if (aborted || attempt === UPLOAD_ATTEMPTS - 1) throw error;
@@ -320,6 +323,15 @@ async function uploadWithRetry<T>(url: string, init: RequestInit): Promise<T> {
   throw new Error("upload failed");
 }
 
+export function canonicalImageNameForMime(originalName: string, mime: string): string {
+  const normalizedMime = mime.split(";", 1)[0]!.trim().toLowerCase();
+  const extension = IMAGE_EXTENSION_BY_MIME[normalizedMime] ?? ".png";
+  const original = attachmentBasename(originalName.trim());
+  const dot = original.lastIndexOf(".");
+  const stem = (dot > 0 ? original.slice(0, dot) : original).trim() || "pasted image";
+  return `${stem}${extension}`;
+}
+
 function canonicalImageName(originalName: string, path: string, mime: string): string {
   const normalizedMime = mime.split(";", 1)[0]!.trim().toLowerCase();
   const extension = IMAGE_EXTENSION_BY_MIME[normalizedMime];
@@ -327,15 +339,15 @@ function canonicalImageName(originalName: string, path: string, mime: string): s
   if (!extension || !pathName.toLowerCase().endsWith(extension)) {
     throw new Error("upload returned invalid image metadata");
   }
-  const original = attachmentBasename(originalName.trim());
-  const dot = original.lastIndexOf(".");
-  const stem = (dot > 0 ? original.slice(0, dot) : original).trim() || "pasted image";
-  return `${stem}${extension}`;
+  return canonicalImageNameForMime(originalName, normalizedMime);
 }
 
-export function optimisticImageAttachment(file: File): ImageAttachment | null {
+export function optimisticImageAttachment(
+  file: File,
+  options?: { allowOversize?: boolean },
+): ImageAttachment | null {
   if (!isImageFile(file)) return null;
-  if (file.size > IMAGE_MAX_BYTES) throw new AttachError(file.name, IMAGE_MAX_BYTES);
+  if (!options?.allowOversize && file.size > IMAGE_MAX_BYTES) throw new AttachError(file.name, IMAGE_MAX_BYTES);
   const mime = file.type.split(";", 1)[0]!.trim().toLowerCase();
   const previewUrl = typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : undefined;
   return {
@@ -493,6 +505,7 @@ export type TranscriptImageAttachment = {
   path: string;
   name: string;
   private?: boolean;
+  previewUrl?: string;
 };
 
 export type TranscriptAttachments = {
@@ -716,7 +729,7 @@ export function discardUnsentUpload(attachment: Attachment): void {
   if ((attachment.kind !== "image" && attachment.kind !== "file") || !attachment.path) return;
   const name = attachmentBasename(attachment.path);
   if (!/^[A-Za-z0-9-]+\.[A-Za-z0-9]{1,10}$/.test(name)) return;
-  void fetch(`/api/attachments/${encodeURIComponent(name)}`, { method: "DELETE" }).catch(() => undefined);
+  void remoteFetch(`/api/attachments/${encodeURIComponent(name)}`, { method: "DELETE" }).catch(() => undefined);
 }
 
 export function attachmentBasename(path: string): string {

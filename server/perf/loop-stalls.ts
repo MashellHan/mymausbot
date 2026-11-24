@@ -90,7 +90,8 @@ export function stallStats(minutes: readonly Minute[]): StallStats | null {
 const sum = (tallies: readonly Tally[]): Tally => tallies.reduce((all, tally) => ({ n: all.n + tally.n, ms: all.ms + tally.ms, maxMs: Math.max(all.maxMs, tally.maxMs) }), zero());
 const rounded = (tally: Tally): Tally => ({ n: tally.n, ms: Math.round(tally.ms), maxMs: Math.round(tally.maxMs * 10) / 10 });
 
-export const STALL_RESOLUTION_MS = 20;
+/** Node's histogram can report a stall up to one sampling interval shorter than it was. */
+export const STALL_RESOLUTION_MS = 100;
 export const MINUTE_MS = 60_000;
 const MINUTES_KEPT = 60;
 

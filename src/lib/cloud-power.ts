@@ -3,6 +3,8 @@
 // The next thing the person does (a click, a key, the window regaining focus) wakes it again, which takes about a second.
 // On every other Cloud, and on a computer's own server, nothing here ever changes state.
 
+import { remoteFetch } from "./pwa-config";
+
 /** Background requests (polls nobody asked for just now) carry this header, so the home doesn't count them as someone
  * using it (server/cloud-power.ts `countsAsActivity`). */
 export const BACKGROUND_HEADER = "x-omb-background";
@@ -34,7 +36,7 @@ function set(next: boolean) {
  * "asleep". */
 export function markCloudAwake(): void {
   if (!asleep) return;
-  void fetch(WAKE_PATH).catch(() => {});
+  void remoteFetch(WAKE_PATH).catch(() => {});
   detach?.();
   detach = null;
   set(false);

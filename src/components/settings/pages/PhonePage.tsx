@@ -9,6 +9,7 @@ import { PlaceBadge } from "../SettingsNav";
 import { ServerPairingCard } from "../../ServerPairingCard";
 import { SettingsGroup, SettingsLinkRow, SettingsRows } from "../../SettingsPrimitives";
 import { useCloudPhoneDestination } from "../../SidebarProfileMenu";
+import { PwaBridgeCard } from "../PwaBridgeCard";
 import { useOtherPlaces } from "../settings-context";
 import { useSettingsShell } from "../settings-shell";
 
@@ -68,12 +69,17 @@ export function PhonePage() {
   const funnel = useTailscaleFunnel(!ctx.client && !ctx.cloud);
   const funnelPairs = funnel?.state?.status === "ready" || funnel?.state?.status === "unavailable" && funnel.state.reason === "unverified";
   const showLocalFunnel = ctx.here && Boolean(funnel?.checking || funnelPairs);
+  const showPwaBridge = !ctx.cloud && !ctx.client && !ctx.team && (ctx.here || ctx.admin);
+  const remoteBlocked = state.config?.managedPolicy?.remoteAccess === false
+    ? t("policy.remoteBlocked", { organization: state.config.managedPolicy.organizationName })
+    : null;
   return <>
     {ctx.here
       ? <PhoneDevicesSection profileEmail={state.config?.profile?.email} focusRequest={!funnel?.checking && !funnelPairs ? focus : 0} simple={!ctx.advanced} placeName={place.name} top={<PairWithCloud />} />
       : <ServerPairingCard funnel={funnel} cloudHome={ctx.cloud} focusRequest={focus} team={state.config?.team?.name} placeName={place.name} simple={!ctx.advanced}
         teamPhoneBlocked={state.config?.managedPolicy?.remoteAccess === false ? t("policy.teamRemoteBlocked", { organization: state.config.managedPolicy.organizationName }) : null} />}
     {showLocalFunnel && <ServerPairingCard focusRequest={funnelPairs ? focus : 0} funnel={funnel} placeName={place.name} simple={!ctx.advanced} />}
+    {showPwaBridge && <PwaBridgeCard remoteBlocked={remoteBlocked} />}
     <OtherPlaces />
   </>;
 }

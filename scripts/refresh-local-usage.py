@@ -34,6 +34,7 @@ import local_usage_models
 ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"
 LOCAL_COLLECT_TIMEOUT = 120
 REPOSITORY_TIMEOUT = 15
+LEGACY_PUBLISH_RESERVE = 45
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
@@ -49,6 +50,10 @@ def child_environment():
         "GIT_NO_LAZY_FETCH": "1", "GIT_ALLOW_PROTOCOL": "file", "GIT_TERMINAL_PROMPT": "0",
         "GIT_ASKPASS": "/usr/bin/false", "SSH_ASKPASS": "/usr/bin/false",
         "SSH_ASKPASS_REQUIRE": "never", "GCM_INTERACTIVE": "never"}
+
+
+def _opencode_environment():
+    return {name: os.environ[name] for name in ("XDG_DATA_HOME", "OPENCODE_DB") if name in os.environ}
 
 
 class LocalGitOnly:
@@ -278,9 +283,17 @@ def _collect_worker():
                 return original_classify(self, cwd, context)
 
             collector.Classifier.classify = classify
-            result = collector.collect(request["config"], request["device"],
-                                       at=collector.instant(request["at"]),
-                                       history_days=request["history_days"])
+            if request["stage"] == "opencode":
+                classifier = collector.Classifier(request["repositories"], request["config"])
+                result = local_usage_models.opencode_events(
+                    Path(request["config"]["home"]).expanduser(), classifier.classify,
+                    collector.instant(request["start"]), collector.instant(request["at"]),
+                    env=request["opencodeEnvironment"],
+                )
+            else:
+                result = collector.collect(request["config"], request["device"],
+                                           at=collector.instant(request["at"]),
+                                           history_days=request["history_days"])
         json.dump(result, sys.stdout)
     except Exception as error:
         print(f"usage stage=local-collect failed type={type(error).__name__}", file=sys.stderr, flush=True)
@@ -314,11 +327,16 @@ def _run_worker(request, timeout):
     return json.loads(output)
 
 
-def collect_local(collector_path, config, device, at=None, history_days=30):
+def _is_opencode_error(error):
+    return isinstance(error, dict) and error.get("source") == "opencode"
+
+
+def collect_local(collector_path, config, device, at=None, history_days=30, *, cycle_deadline=None):
     deadline = time.monotonic() + LOCAL_COLLECT_TIMEOUT
     fields = ("home", "repoRoots", "authorEmails", "workGithubOrgs", "personalGithubOwners", "m365Repos")
     request = {"collector": str(collector_path), "config": {k: config[k] for k in fields if k in config},
-               "device": device, "at": at.isoformat() if at else None, "history_days": history_days}
+               "device": device, "at": at.isoformat() if at else None, "history_days": history_days,
+               "opencodeEnvironment": _opencode_environment()}
     repositories, failed_roots, errors = [], [], []
     for index, root in enumerate(config["repoRoots"], 1):
         print(f"usage stage=repository root={index} begin", file=sys.stderr, flush=True)
@@ -344,6 +362,27 @@ def collect_local(collector_path, config, device, at=None, history_days=30):
             os._exit(1)
         print("usage stage=local-collect timeout lock-retained", file=sys.stderr, flush=True)
         raise RuntimeError("Local activity worker cleanup is unverified") from None
+    tokens, opencode_error = [], "ReadLimit"
+    if cycle_deadline is not None:
+        deadline = min(deadline, cycle_deadline - LEGACY_PUBLISH_RESERVE)
+    remaining = deadline - time.monotonic()
+    if remaining > 0:
+        try:
+            tokens, opencode_error = _run_worker({**request, "stage": "opencode", "repositories": repositories,
+                "failedRoots": failed_roots, "start": result["start"], "at": result["capturedAt"]},
+                min(remaining, local_usage_models.MAX_OPENCODE_READ_SECONDS + 2))
+        except subprocess.TimeoutExpired:
+            pass
+        except (OSError, ValueError):
+            opencode_error = "DatabaseReadError"
+    if tokens:
+        result["tokens"].extend(tokens)
+        result["errors"] = [failure for failure in result["errors"]
+                            if failure != {"source": "tokens", "code": "NoRetainedLogs"}]
+    if opencode_error:
+        result["errors"].append({"source": "opencode", "code": opencode_error})
+    if tokens or opencode_error:
+        result["status"] = "partial" if result["errors"] else "ok"
     if errors or result.get("errors"):
         collector = load_collector(collector_path)
         previous = collector.read_json(Path(config["storageDir"]).expanduser() / "machines" / (device + ".json"), {})
@@ -357,13 +396,14 @@ def collect_local(collector_path, config, device, at=None, history_days=30):
                 if record.get("category") == "unclassified" and previous_category in ("work", "personal"):
                     record["category"] = previous_category
         combined_errors = list(result.get("errors") or []) + list(errors)
-        fetch_disabled_only = bool(combined_errors) and all(
+        non_opencode_errors = [error for error in combined_errors if not _is_opencode_error(error)]
+        skip_retained_commits = all(
             isinstance(error, dict)
             and error.get("source") == "git-fetch"
             and error.get("code") == "DisabledByAuthBoundary"
-            for error in combined_errors
+            for error in non_opencode_errors
         )
-        retain_fields = ("tokens",) if fetch_disabled_only else ("tokens", "commits")
+        retain_fields = ("tokens",) if skip_retained_commits else ("tokens", "commits")
         for field in retain_fields:
             def key(record):
                 return record["key"] if field == "tokens" else (record["key"], (record.get("repository") or {}).get("id"))
@@ -799,6 +839,191 @@ def finalized_day(current, at, focus_start, previous_finalized):
     return yesterday
 
 
+def stale_ado_repositories(source, project_state, org, project, repository_names, cutoff):
+    reasons = source["coverage"]["reasons"]
+    if (source["status"] != "stale"
+            or not any(re.fullmatch(r"authenticated-read-interrupted-http-5\d{2}", reason) for reason in reasons)
+            or any(re.search(r"-http-(401|403)$", reason) for reason in reasons)):
+        return []
+    cache = project_state.get("cache")
+    expected = project_state.get("expectedRepositoryIds")
+    if not isinstance(cache, dict) or not isinstance(expected, list):
+        return []
+    raw_ids = {local_usage_ado.digest("ado-repo", org.casefold(), repo_id): repo_id
+               for repo_id in expected if isinstance(repo_id, str) and repo_id in cache}
+    scope = f"{org}/{project}".casefold()
+    repositories = {}
+    for day in source["days"]:
+        if day["status"] != "stale":
+            continue
+        observed_at = local_usage_ado.instant(day["capturedAt"])
+        if observed_at > cutoff:
+            continue
+        for row in day["repositories"]:
+            repo_id = raw_ids.get(row["id"])
+            repository_scope, _, name = row["name"].rpartition("/")
+            if repo_id is None or row["status"] != "ready" or repository_scope.casefold() != scope:
+                continue
+            proof = cache[repo_id]
+            branch = proof.get("branch") if isinstance(proof, dict) else None
+            if (name.casefold() not in repository_names or not isinstance(branch, str)
+                    or not branch.startswith("refs/heads/") or local_usage_ado.instant(proof.get("pinnedAt")) > observed_at):
+                continue
+            record = {"id": repo_id, "name": name, "defaultBranch": branch, "isDisabled": False}
+            if repo_id in repositories and repositories[repo_id]["name"].casefold() != name.casefold():
+                raise ValueError("ADO stale repository binding mismatch")
+            repositories[repo_id] = record
+    return list(repositories.values())
+
+
+def legacy_ado_commits(config, repository_identity, repository_category, *, at, snapshot=None, file=None):
+    if not config.get("mergedAdoProjects") and not config.get("adoRemotes"):
+        return {"records": [], "complete": True}
+    if isinstance(at, str):
+        aggregate_at = local_usage_contributions.instant(at)
+    elif isinstance(at, dt.datetime) and at.tzinfo is not None:
+        aggregate_at = at.astimezone(dt.timezone.utc)
+    else:
+        raise ValueError("ADO aggregate cutoff requires an offset")
+    if snapshot is None:
+        target = Path(file or Path.home() / ".local/share/mymausbot/usage/contributions-v2.json")
+        snapshot = local_usage_contributions.load_previous(target)
+    if snapshot is None:
+        return {"records": [], "complete": False}
+    local_usage_contributions.validate_seed_bindings(snapshot, config)
+    ado = snapshot["ado"]
+    configured = local_usage_ado.projects(config)
+    if len(configured) != len(ado["sources"]):
+        raise ValueError("ADO raw source count mismatch")
+    state = ado["state"]
+    sources = {source["id"]: source for source in ado["sources"]}
+    records, complete = [], True
+    email_hash = local_usage_ado.digest("ado-author-aliases", sorted(local_usage_ado.author_aliases(config)))
+    for org, project, repository_names in configured:
+        account = local_usage_ado.principal(config, org)
+        scope = org.casefold() + "/" + project.casefold()
+        source_id = local_usage_ado.digest("ado", "dev.azure.com", scope, account["stableId"])
+        source = sources.get(source_id)
+        project_state = state["projects"].get(scope)
+        if (source is None or source["account"] != account or not isinstance(project_state, dict)
+                or project_state.get("account") != account or project_state.get("emailHash") != email_hash
+                or project_state.get("remoteScopeHash") != local_usage_ado.digest(
+                    "ado-remotes", scope, repository_names)):
+            raise ValueError("ADO raw project binding mismatch")
+        verified = source["coverage"]["identityVerified"] is True
+        provenance = source.get("provenance", {})
+        cutoff = local_usage_contributions.instant(provenance.get("sourceCutoffAt", ado["asOfAt"]))
+        captured = local_usage_contributions.instant(provenance.get("sourceCapturedAt", ado["capturedAt"]))
+        if cutoff > captured or captured > local_usage_contributions.instant(ado["capturedAt"]):
+            raise ValueError("ADO raw capture is out of order")
+        raw_complete = (source["status"] == "ready" and verified
+                        and source["coverage"]["paginationComplete"] is True
+                        and source["coverage"]["visibilityComplete"] is True)
+        source_complete = raw_complete and cutoff >= aggregate_at
+        complete = complete and source_complete
+        retained_repositories = []
+        if not verified:
+            retained_repositories = stale_ado_repositories(source, project_state, org, project, repository_names, cutoff)
+            if not retained_repositories:
+                continue
+        work = project_state.get("work")
+        prior_cache = project_state.get("cache")
+        if (not isinstance(work, dict) or not isinstance(prior_cache, dict)
+                or work.get("cutoff") != local_usage_ado.stamp(cutoff)
+                or work.get("firstDay") != ado["operationWindow"]["startDay"]
+                or work.get("lastDay") != ado["operationWindow"]["endDay"]):
+            raise ValueError("ADO raw work binding mismatch")
+        repositories = work.get("inventory") if verified else retained_repositories
+        if not isinstance(repositories, list):
+            raise ValueError("ADO raw repository inventory is invalid")
+        inventory = {repo.get("id"): repo for repo in repositories
+                     if isinstance(repo, dict) and isinstance(repo.get("id"), str)}
+        if len(inventory) != len(repositories):
+            raise ValueError("ADO raw repository inventory is invalid")
+        selected = work.get("selectedRepoIds") if verified else list(inventory)
+        if (not isinstance(selected, list) or len(selected) != len(set(selected))
+                or any(repo_id not in inventory for repo_id in selected)):
+            raise ValueError("ADO raw selected repositories are invalid")
+        selected_repos = [inventory[repo_id] for repo_id in selected]
+        if verified and {repo["name"].casefold() for repo in selected_repos} != set(repository_names):
+            raise ValueError("ADO raw repository scope mismatch")
+        completed = work.get("repoDone") if verified else {}
+        progress = work.get("progress") if verified else {}
+        if not isinstance(completed, dict) or not isinstance(progress, dict):
+            raise ValueError("ADO raw repository proofs are invalid")
+        if not source_complete and work.get("scanComplete") is True:
+            complete = False
+        proofs = {}
+        for repo_id, active in progress.items():
+            if not isinstance(active, dict):
+                raise ValueError("ADO raw repository progress is invalid")
+            prior = prior_cache.get(repo_id)
+            proofs[repo_id] = prior if isinstance(prior, dict) \
+                and prior.get("head") == active.get("head") else active
+        proofs.update(completed)
+        if not raw_complete:
+            for repo_id in selected:
+                if repo_id in proofs:
+                    continue
+                repository = inventory[repo_id]
+                prior = prior_cache.get(repo_id)
+                branch = repository.get("defaultBranch")
+                if (isinstance(prior, dict) and repository.get("isDisabled") is False
+                        and isinstance(branch, str) and prior.get("branch") == branch):
+                    proofs[repo_id] = prior
+        pinned = provenance.get("pinnedHeads", {})
+        if not isinstance(pinned, dict):
+            raise ValueError("ADO raw pinned heads are invalid")
+        if raw_complete and (set(completed) != set(selected) or any(
+                pinned.get(repo_id) != completed[repo_id].get("head") for repo_id in selected)):
+            raise ValueError("ADO raw completed repository binding mismatch")
+        for repo_id, proof in proofs.items():
+            if repo_id not in selected or not isinstance(proof, dict):
+                continue
+            repo = inventory[repo_id]
+            head, branch, pinned_at = proof.get("head"), proof.get("branch"), proof.get("pinnedAt")
+            coverage_start = (local_usage_ado.instant(proof.get("coverageStartAt")) if proof.get("coverageStartAt")
+                              else local_usage_ado.window_start(ado["operationWindow"]["startDay"]))
+            if (repo.get("isDisabled") is not False or repo.get("defaultBranch") != branch
+                    or not isinstance(head, str) or not local_usage_ado.SHA.fullmatch(head)
+                    or local_usage_ado.instant(pinned_at) > captured
+                    or coverage_start > local_usage_ado.window_start(ado["operationWindow"]["startDay"])
+                    or repo_id in completed and pinned.get(repo_id) != head):
+                raise ValueError("ADO raw repository proof mismatch")
+            items, checked = proof.get("items"), proof.get("checked", [])
+            if (not isinstance(items, list) or not isinstance(checked, list)
+                    or len(checked) != len(set(checked))
+                    or any(not isinstance(oid, str) or not local_usage_ado.SHA.fullmatch(oid) for oid in checked)):
+                raise ValueError("ADO raw commit proof is invalid")
+            remote = "https://dev.azure.com/" + "/".join(urllib.parse.quote(value, safe="")
+                for value in (org, project, "_git", repo["name"]))
+            identity = repository_identity(remote)
+            if (not isinstance(identity, dict) or not isinstance(identity.get("id"), str) or not identity["id"]
+                    or not isinstance(identity.get("name"), str) or not identity["name"]):
+                raise ValueError("ADO raw repository identity is invalid")
+            category = repository_category(remote, config)
+            if category not in ("work", "personal", "unclassified"):
+                raise ValueError("ADO raw repository category is invalid")
+            family = repo["name"].casefold() in {name.casefold() for name in config.get("m365Repos", [])}
+            seen = set()
+            for item in items:
+                if not isinstance(item, dict):
+                    raise ValueError("ADO raw commit is invalid")
+                oid = item.get("id")
+                authored = local_usage_ado.instant(item.get("authoredAt"))
+                if (not isinstance(oid, str) or not local_usage_ado.SHA.fullmatch(oid) or oid in seen
+                        or oid not in checked or item.get("day") != local_usage_ado.china_day(authored)
+                        or authored < coverage_start or authored > local_usage_ado.instant(pinned_at)
+                        or type(item.get("merge")) is not bool or type(item.get("coauthor")) is not bool):
+                    raise ValueError("ADO raw commit proof is invalid")
+                seen.add(oid)
+                if (ado["operationWindow"]["startDay"] <= item["day"] <= ado["operationWindow"]["endDay"]
+                        and authored <= cutoff and not item["merge"] and not item["coauthor"]):
+                    records.append({"key": oid, "at": item["authoredAt"], "category": category,
+                                    "m365": family, "repository": identity})
+    return {"records": records, "complete": complete}
+
+
 def _primary_worker():
     try:
         request = json.load(sys.stdin)
@@ -807,9 +1032,13 @@ def _primary_worker():
         collector_path = Path(request["collector"])
         azure_dir = Path(request["azureDir"])
         if stage == "legacy":
+            primary_at = dt.datetime.fromisoformat(request["at"])
+            if primary_at.tzinfo is None:
+                raise ValueError("ADO legacy cutoff requires an offset")
             refresh(collector_path, config, azure_dir, publish=request["publish"],
                     skip_api=request["skipApi"], reuse_sources=request["reuseSources"], force_legacy=True,
-                    legacy_diagnostics=False)
+                    legacy_diagnostics=False, primary_snapshot=request.get("primary"), primary_at=primary_at,
+                    cycle_deadline=request["cycleDeadline"])
             return
         if stage not in ("github", "ado"):
             raise ValueError("Unknown contribution worker")
@@ -879,19 +1108,27 @@ def refresh_primary(collector_path, config, azure_config_dir, *, publish=False, 
         processes = {}
         with tempfile.TemporaryDirectory(prefix="contributions-capture-", dir=target.parent) as temporary:
             try:
-                for stage in (("github", "ado", "legacy") if include_legacy else ("github", "ado")):
+                def start(stage, primary=None):
                     request = {"stage": stage, "collector": str(collector_path), "config": config,
                                "azureDir": str(azure_config_dir), "at": at.isoformat(),
                                "focusStart": focus_start.isoformat() if include_legacy else None,
                                "previous": previous.get(stage) if previous and stage != "legacy" else None,
                                "output": str(Path(temporary) / (stage + ".json")),
-                               "publish": publish, "skipApi": False, "reuseSources": reuse_sources}
+                               "publish": publish, "skipApi": False, "reuseSources": reuse_sources,
+                               "primary": primary}
+                    environment = child_environment()
+                    if stage == "legacy":
+                        request["cycleDeadline"] = deadline
+                        environment.update(_opencode_environment())
                     process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--worker"],
                         stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                        start_new_session=True, env=child_environment())
+                        start_new_session=True, env=environment)
                     processes[stage] = process
                     process.stdin.write(json.dumps(request).encode())
                     process.stdin.close()
+
+                for stage in ("github", "ado"):
+                    start(stage)
                 results, captured = {}, {}
                 for stage in ("github", "ado"):
                     process = processes[stage]
@@ -912,15 +1149,20 @@ def refresh_primary(collector_path, config, azure_config_dir, *, publish=False, 
                 for stage, status in results.items():
                     if status != "ready":
                         print(f"usage stage={stage} status={status} generation=retained", file=sys.stderr, flush=True)
-                if results["github"] != "ready" or results["ado"] != "ready":
+                complete = results["github"] == "ready" and results["ado"] == "ready"
+                current = None
+                if complete:
+                    current = {"version": 2, **captured}
+                    local_usage_contributions.validate_bindings(current, config)
+                    local_usage_contributions.preserve_incomplete_github(previous, current)
+                    current["refreshState"] = {"version": 1, "scopeHash": scope_hash,
+                        "finalizedThroughDay": finalized_day(current, at, focus_start, previous_finalized).isoformat()}
+                    local_usage_contributions.validate_bindings(current, config)
+                    local_usage_contributions.write_private(target, current)
+                if include_legacy:
+                    start("legacy", current if complete else previous)
+                if not complete:
                     raise ValueError("Remote contribution capture is incomplete; previous generation retained")
-                current = {"version": 2, **captured}
-                local_usage_contributions.validate_bindings(current, config)
-                local_usage_contributions.preserve_incomplete_github(previous, current)
-                current["refreshState"] = {"version": 1, "scopeHash": scope_hash,
-                    "finalizedThroughDay": finalized_day(current, at, focus_start, previous_finalized).isoformat()}
-                local_usage_contributions.validate_bindings(current, config)
-                local_usage_contributions.write_private(target, current)
                 print(json.dumps({"primary": "published", "legacy": "pending" if include_legacy else "not-run",
                     "asOfAt": current["github"]["asOfAt"], "sources": len(current["github"]["sources"]) + len(current["ado"]["sources"]),
                     "staleSources": sum(source["status"] == "stale" for stage in ("github", "ado")
@@ -946,7 +1188,8 @@ def refresh_primary(collector_path, config, azure_config_dir, *, publish=False, 
 
 
 def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api=False, reuse_sources=False,
-            force_legacy=False, legacy_diagnostics=True, herdr_runner=None):
+            force_legacy=False, legacy_diagnostics=True, herdr_runner=None, primary_snapshot=None, primary_at=None,
+            cycle_deadline=None):
     if publish:
         raise ValueError("Scheduled Usage publication requires a separately reviewed transport")
     if config.get("primaryContributionSource") == "contributions-v2" and not force_legacy:
@@ -957,6 +1200,11 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
         return refresh_primary(collector_path, config, azure_config_dir, publish=publish, reuse_sources=reuse_sources)
     collector = load_collector(collector_path)
     original_run = collector.run
+    original_now = getattr(collector, "now", None)
+    if primary_at is not None:
+        if not isinstance(primary_at, dt.datetime) or primary_at.tzinfo is None or not callable(original_now):
+            raise ValueError("ADO legacy cutoff cannot bind the collector clock")
+        collector.now = lambda: primary_at
     projects = ado_project_scopes(config)
     azure = AzureMemorySession(azure_config_dir, config["authorEmails"], projects=projects or None)
     github = GitHubFileSession(config)
@@ -1009,6 +1257,22 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
     if original_aggregate is not None:
         def aggregate(machines, prs, at, *args, **kwargs):
             machines = local_usage_models.eligible_machines(collector, machines, at)
+            if config.get("mergedAdoProjects") or config.get("adoRemotes"):
+                try:
+                    ado = legacy_ado_commits(config, collector.repository_identity, collector.remote_category,
+                                             at=at, snapshot=primary_snapshot)
+                except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                    ado = {"records": [], "complete": False}
+            else:
+                ado = {"records": [], "complete": True}
+            if ado["records"]:
+                machines = [dict(machine) for machine in machines]
+                target_machine = next((machine for machine in machines if machine.get("status") != "missing"), None)
+                if target_machine is not None:
+                    local_records = target_machine.get("commits", [])
+                    if not isinstance(local_records, list):
+                        raise ValueError("Invalid retained local commit events")
+                    target_machine["commits"] = [*local_records, *ado["records"]]
             snapshot = original_aggregate(machines, prs, at, *args, **kwargs)
             if len(snapshot["sources"]) != len(machines):
                 raise ValueError("Activity source coverage does not match the collected machines")
@@ -1020,21 +1284,27 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
                 git_fetch_only = isinstance(errors, list) and bool(errors) and all(
                     isinstance(error, dict) and error.get("source") == "git-fetch" for error in errors
                 )
-                fetch_disabled_only = isinstance(errors, list) and bool(errors) and all(
+                commit_errors = [error for error in errors if not _is_opencode_error(error)] if isinstance(errors, list) else None
+                fetch_disabled_only = bool(commit_errors) and all(
                     isinstance(error, dict)
                     and error.get("source") == "git-fetch"
                     and error.get("code") == "DisabledByAuthBoundary"
-                    for error in errors
+                    for error in commit_errors
                 )
                 source["tokenStatus"] = "ready" if machine.get("status") == "ok" or (
                     machine.get("status") == "partial" and git_fetch_only
                 ) else "partial" if machine.get("status") in ("partial", "stale") else "unavailable"
-                source["commitStatus"] = "ready" if machine.get("status") == "ok" else (
+                commit_ready = machine.get("status") == "ok" or (
+                    machine.get("status") == "partial" and bool(errors) and commit_errors == []
+                )
+                source["commitStatus"] = "ready" if commit_ready else (
                     "local-ref-ready" if machine.get("status") == "partial" and fetch_disabled_only
                     and not machine.get("retainedCapturedAt")
                     and not machine.get("retainedCommits")
                     else "partial" if machine.get("status") in ("partial", "stale") else "unavailable"
                 )
+                if not ado["complete"] and source["commitStatus"] in ("ready", "local-ref-ready"):
+                    source["commitStatus"] = "partial"
                 if machine.get("status") != "missing":
                     commit_statuses.append(source["commitStatus"])
             day_commit_status = None
@@ -1111,7 +1381,7 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
 
     collector.run = run
     collector.collect = lambda config, device, at=None, history_days=30: collect_local(
-        collector_path, config, device, at, history_days
+        collector_path, config, device, at, history_days, cycle_deadline=cycle_deadline
     )
     options = {"upload": publish, "skip_api": skip_api, "reuse_sources": reuse_sources}
     if "history_days" in inspect.signature(collector.refresh).parameters:
@@ -1119,6 +1389,8 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
     try:
         collector.refresh(config, **options)
     finally:
+        if primary_at is not None:
+            collector.now = original_now
         if legacy_diagnostics and (config.get("githubProfiles") or config.get("mergedAdoProjects") or config.get("adoRemotes")):
             try:
                 local_usage_merged.refresh(config, collector, collector.run, ado_request=azure.request, skip_api=skip_api)

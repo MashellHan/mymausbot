@@ -96,7 +96,7 @@ function nextWindow(window: HeldWindow, messages: readonly { id: string; role?: 
   return { start: Math.max(bounds.start, messages.length - TRANSCRIPT_WINDOW_MAX), end: null, added };
 }
 
-export function useTranscriptViewport<T extends { id: string; role?: string }>({
+export function useTranscriptViewport<T extends { id: string; role?: string; liveSendNonce?: number; outboxRestored?: boolean }>({
   ownerId,
   threadId,
   messages,
@@ -260,11 +260,17 @@ export function useTranscriptViewport<T extends { id: string; role?: string }>({
   useBottomFollowResize(scrollRef, transcriptRef, transcriptShown ? transcriptKey : null, onTranscriptResize);
 
   // The person sent a message: whatever they were reading, the conversation follows its end again.
-  const newestId = messages.at(-1)?.id;
-  const sentLast = Boolean(newestId?.startsWith("optimistic-"));
+  // Persisted outbox rows restored on boot/rehydrate carry `outboxRestored: true` without `liveSendNonce` so they do not hijack scroll.
+  const newest = messages.at(-1);
+  const newestId = newest?.id;
+  const newestSendNonce = newest?.liveSendNonce;
+  const sentLast = Boolean(
+    newestId?.startsWith("optimistic-") &&
+    (newestSendNonce !== undefined || !newest?.outboxRestored),
+  );
   useLayoutEffect(() => {
     if (sentLast) setBottomFollow(true);
-  }, [newestId, sentLast, setBottomFollow]);
+  }, [newestId, newestSendNonce, sentLast, setBottomFollow]);
 
   // A remembered row is put back before the first paint and held while late layout settles; any move of the reader's
   // own stops that.

@@ -1502,6 +1502,30 @@ describe("a connector tools/list that fails", () => {
       setManagedBrokerAccess(null);
     }
   });
+
+  it.each([401, 403])("preserves HTTP %i authorization refusals from project-session lookup and creation", async (status) => {
+    const realFetch = globalThis.fetch;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = typeof input === "string" || input instanceof URL ? String(input) : input.url;
+      if (url.includes("/api/v3.1/tool_router/session")) {
+        return new Response(JSON.stringify({ error: { message: `revoked (${status})` } }), {
+          status,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return realFetch(input, init);
+    });
+    try {
+      await expect(
+        relayMcp({ composio: { apiKey: "ak_test", userId: "openmausbot_existing", sessionId: "trs_test" } }, { jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      ).rejects.toMatchObject({ status });
+      await expect(
+        relayMcp({ composio: { apiKey: "ak_test", userId: "openmausbot_existing" } }, { jsonrpc: "2.0", id: 2, method: "tools/list" }),
+      ).rejects.toMatchObject({ status });
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
 });
 
 describe("connector tool inventory", () => {

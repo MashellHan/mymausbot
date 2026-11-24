@@ -62,6 +62,7 @@ import { shortcutLabel } from "./ShortcutHint";
 import { useAnnouncements } from "./announcements/use-announcements";
 import { useOtherServerName } from "@/lib/other-server";
 import { isOwnerOrAdmin, profileForSession, readSessionState, type SessionState } from "@/lib/session";
+import { clearPwaAuth } from "@/lib/pwa-config";
 import {
   cloudPhoneDestination,
   phonePairingSettingsAction,
@@ -713,7 +714,7 @@ export function SidebarProfileMenu({ iconOnly = false, rail = false, circle = fa
       {signingOut && <SignOutConfirm browser={signingOut === "browser"} here={signingOut === "browser" ? place.name : t("rail.thisComputer")}
         cloud={signingOut === "desktop" && summary.plan ? t("cloudSetup.myCloud") : null} onClose={() => setSigningOut(null)}
         onConfirm={() => signingOut === "browser"
-          ? api("/api/auth/logout", { method: "POST" }).finally(() => location.reload())
+          ? api("/api/auth/logout", { method: "POST" }).catch(() => undefined).finally(() => clearPwaAuth().finally(() => location.reload()))
           : window.ogb?.cloudAccount?.signOut()} />}
       {accounts.sheet && <AccountsSheet adding={accounts.sheet.email} note={accounts.sheet.note} onClose={accounts.closeSheet} />}
     </>

@@ -90,14 +90,14 @@ import { SecretRequestCard } from "./SecretRequestCard";
 import { SignInRequestCard } from "./SignInRequestCard";
 import { AutomationCaption, RoutineRunRow } from "./RoutineRunCard"; import { InboxAnswers, InboxCaption, RelayLabel } from "./InboxLine"; import { InboxCardSlot } from "./inbox/InboxCard";
 import { CallRecordRow } from "./CallRecordRow";
-import { AttachmentGallery, collectMessageFiles, replyAttachmentGroup, splitMessageAttachments } from "./AttachmentGallery";
+import { AttachmentGallery, collectMessageFiles, replyAttachmentGroup, splitMessageAttachments, useUserMessageAttachments } from "./AttachmentGallery";
 import { ScreenFrame } from "./ScreenFrame";
 import { CompactionChip, DigestChip } from "./DigestChip";
 import { RenameTitle } from "./RenameTitle"; import { ChatHeadRole, chiefOfStaffBadge } from "./BotRole";
 import { BotActivityPicker } from "./TaskPicker"; import { ChatHeadPill } from "./ChatHeadPill"; import { HeaderShare } from "./bot-access/HeaderShare"; import { ThreadPresenceFaces } from "./TeamPresence"; import { useStoreRef } from "@/state/store-ref"; import { sameFields, useStoreDispatch, useStoreSelector } from "@/state/store-select"; import { sameDrawnBots } from "@/lib/drawn-bots";
 import { ELEVATED_FLOAT, ELEVATED_HOVER } from "./elevated";
 import { ChatComputerButton } from "./ChatComputerButton";
-import { ChatStopButton } from "./ChatStopButton";
+import { ChatStopButton } from "./ChatStopButton"; import { PwaPinBotButton } from "./PwaPinBotButton";
 import { ModelPicker } from "./ModelPicker";
 import { useFailedTurnFix } from "./FailedTurnFix";
 import { ChatHeaderMenu, ChatMoreMenu } from "./ChatMoreMenu"; import { TeamOwnHelperHeader, TeamPrivateFirstLine, TeamPrivateHeader, TeamSharedHeader } from "./TeamPrivateChatsLine"; import { ownChatStarted } from "@/state/team-chats";
@@ -381,7 +381,7 @@ const Bubble = memo(function Bubble({
   const formatted = !simple && !user && !split && isFormattedReply(text);
   const webhookView = user ? webhookMessageView(text) : null;
   const cited = user && !webhookView ? splitTranscriptCitations(text) : null;
-  const attachments = user && !webhookView ? splitTranscriptAttachments(cited?.display ?? text) : null;
+  const attachments = useUserMessageAttachments(cited?.display ?? text, message.sendId, user && !webhookView);
   const visibleText = webhookView?.task ?? attachments?.display ?? text;
   const hasAttachments = Boolean(cited?.citations.length || (attachments && (attachments.images.length || attachments.files.length)));
   const attachmentsOnly = !webhookView && !replyTarget && !visibleText.trim() &&
@@ -470,10 +470,10 @@ const Bubble = memo(function Bubble({
           {message.replyToId && (
             <div className="mb-2">
               <ReplyQuote
-                message={replyTarget && canReplyToMessage(replyTarget) ? replyTarget : null}
+                message={replyTarget && (replyTarget.waitContinuation || canReplyToMessage(replyTarget)) ? replyTarget : null}
                 fallbackName={botName}
                 compact
-                onJump={replyTarget ? () =>
+                onJump={replyTarget && !replyTarget.waitContinuation ? () =>
                   dispatch({ type: "focusMessage", threadId, messageId: replyTarget.id })
                 : undefined}
               />
@@ -677,7 +677,7 @@ const MessagesList = memo(function MessagesList({
   const newestMessageId = messages.at(-1)?.id;
   let newestUserMessageId: string | undefined;
   for (let i = messages.length - 1; i >= 0 && !newestUserMessageId; i--) {
-    if (messages[i]!.role === "user") newestUserMessageId = messages[i]!.id;
+    if (messages[i]!.role === "user" && !messages[i]!.waitContinuation) newestUserMessageId = messages[i]!.id;
   }
   const focusedId = focus && !focus.consumed ? focus.messageId : null;
   const unreadIds = useMemo(() => unreadMessageIds(messages, unreadDividerId), [messages, unreadDividerId]);
@@ -914,7 +914,7 @@ export const ChatView = memo(function ChatView({ bot: profile, inForkPanel = fal
   );
   const [lastUserMessage, lastTypedMessage] = useMemo(() => {
     const said = messages.filter((m) => m.role === "user" && m.kind === "text" && !peerLine(m));
-    return [said.at(-1), said.findLast((m) => !m.reaction)];
+    return [said.at(-1), said.findLast((m) => !m.reaction && !m.waitContinuation)];
   }, [messages]);
   const lastTypedMessageHasAttachments = useMemo(() => {
     if (!lastTypedMessage?.text) return false;
@@ -1106,7 +1106,7 @@ export const ChatView = memo(function ChatView({ bot: profile, inForkPanel = fal
             onUnpin={remoteClient ? undefined : () => dispatch({ type: "updateTask", botId: bot.id, threadId: bot.threadId, patch: { pinnedMessageId: "" } })}
           />
           {computerButton}
-          <HeaderShare bot={bot} />{phoneMenu ? <ChatMoreMenu bot={bot} phoneHeader /> : (advanced || remoteClient) && <ChatHeaderMenu key={`menu:${bot.threadId}`} bot={bot} />}
+          <PwaPinBotButton botId={bot.id} /><HeaderShare bot={bot} />{phoneMenu ? <ChatMoreMenu bot={bot} phoneHeader /> : (advanced || remoteClient) && <ChatHeaderMenu key={`menu:${bot.threadId}`} bot={bot} />}
         </div>
         </div>
       </div>
@@ -1164,7 +1164,7 @@ export const ChatView = memo(function ChatView({ bot: profile, inForkPanel = fal
               editingId={editingId}
               lastBotTextId={lastBotTextId}
               emergingId={popping}
-              canRetryLast={!bot.busy && Boolean(lastUserMessage) && sharedRun.mayAct(lastUserMessage?.sender)}
+              canRetryLast={!bot.busy && Boolean(lastUserMessage && !lastUserMessage.waitContinuation) && sharedRun.mayAct(lastUserMessage?.sender)}
               engine={state.instances.find((i) => i.instanceId === bot.modelSelection.instanceId)}
               unreadDividerId={unreadDivider.messageId}
               unreadDividerFading={unreadDivider.fading}

@@ -32,6 +32,8 @@ import {
 } from "@/lib/composer-attachments";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
+import { downloadRemoteUrl, isRelayMediaPath, isRemotePwaMode, remoteFetch } from "@/lib/pwa-config";
+import { useRemoteMediaUrl } from "@/lib/use-remote-media";
 import { serverErrorText } from "@/lib/server-error";
 import { CopyImageButton } from "./CopyImageButton";
 import { chipNameAction, useFilePreview } from "./FilePreviewButton";
@@ -80,106 +82,8 @@ export function imageGalleryLayout(count: number): string {
   return "w-[min(38rem,70vw)] grid-cols-2 sm:grid-cols-3";
 }
 
-const IMAGE_EXTENSION_BY_MIME: Readonly<Record<string, string>> = {
-  "image/avif": "avif",
-  "image/bmp": "bmp",
-  "image/gif": "gif",
-  "image/heic": "heic",
-  "image/heif": "heif",
-  "image/jpeg": "jpg",
-  "image/png": "png",
-  "image/tiff": "tiff",
-  "image/webp": "webp",
-};
-
-const IMAGE_EXTENSIONS = new Set([
-  "avif",
-  "bmp",
-  "gif",
-  "heic",
-  "heif",
-  "jpeg",
-  "jpg",
-  "png",
-  "tif",
-  "tiff",
-  "webp",
-]);
-
-export function safeDownloadFilename(value: string | null | undefined): string {
-  const basename = (value ?? "").split(/[\\/]/).at(-1) ?? "";
-  const cleaned = basename
-    .normalize("NFC")
-    // oxlint-disable-next-line no-control-regex -- strips control and bidi characters from a filename
-    .replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, "")
-    .replace(/[<>:"|?*]/g, "_")
-    .trim()
-    .replace(/[. ]+$/g, "");
-  const bounded = Array.from(cleaned)
-    .filter((character) => {
-      const code = character.charCodeAt(0);
-      return character.length > 1 || code < 0xd800 || code > 0xdfff;
-    })
-    .slice(0, 180)
-    .join("");
-  if (!bounded) return "download";
-  const stem = bounded.split(".", 1)[0]!.toUpperCase();
-  return /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/.test(stem) ? `_${bounded}` : bounded;
-}
-
-/** Prefers RFC 5987's UTF-8 filename* form. */
-export function contentDispositionFilename(header: string | null): string | null {
-  if (!header) return null;
-  const encoded = /(?:^|;)\s*filename\*\s*=\s*(?:UTF-8'[^']*')?([^;]*)/i.exec(header)?.[1]?.trim();
-  if (encoded) {
-    const unquoted = encoded.replace(/^"|"$/g, "");
-    try {
-      return safeDownloadFilename(decodeURIComponent(unquoted));
-    } catch {
-    }
-  }
-  const quoted = /(?:^|;)\s*filename\s*=\s*"((?:\\.|[^"\\])*)"/i.exec(header)?.[1];
-  if (quoted !== undefined) return safeDownloadFilename(quoted.replace(/\\(.)/g, "$1"));
-  const plain = /(?:^|;)\s*filename\s*=\s*([^;]*)/i.exec(header)?.[1]?.trim();
-  return plain ? safeDownloadFilename(plain) : null;
-}
-
-function sourceImageExtension(source: string | undefined): string | null {
-  if (!source) return null;
-  let pathname = source;
-  try {
-    pathname = decodeURIComponent(new URL(source, "https://openmausbot.invalid").pathname);
-  } catch {
-    pathname = source.split(/[?#]/, 1)[0] ?? source;
-  }
-  const extension = /\.([a-z0-9]+)$/i.exec(pathname)?.[1]?.toLowerCase();
-  return extension && IMAGE_EXTENSIONS.has(extension) ? extension : null;
-}
-
-function replaceExtension(name: string, extension: string): string {
-  const suffix = `.${extension}`;
-  const stem = name.replace(/\.[^.]*$/, "") || "image";
-  const available = Math.max(1, 180 - Array.from(suffix).length);
-  return `${Array.from(stem).slice(0, available).join("")}${suffix}`;
-}
-
-export function canonicalDownloadFilename({
-  contentDisposition,
-  fallback,
-  source,
-  mime,
-}: {
-  contentDisposition?: string | null;
-  fallback?: string;
-  source?: string;
-  mime?: string | null;
-}): string {
-  const selected = contentDispositionFilename(contentDisposition ?? null)
-    ?? safeDownloadFilename(fallback);
-  const mediaType = mime?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-  const imageExtension = IMAGE_EXTENSION_BY_MIME[mediaType] ?? sourceImageExtension(source);
-  return imageExtension ? replaceExtension(selected, imageExtension) : selected;
-}
+import { canonicalDownloadFilename, contentDispositionFilename, safeDownloadFilename } from "@/lib/attachment-filename";
+export { canonicalDownloadFilename, contentDispositionFilename, safeDownloadFilename };
 
 export function isExternalImageSource(src: string): boolean {
   const value = src.trim();
@@ -203,7 +107,7 @@ export function messageImagePreviewUrl(
 
 export async function messageImageOutsideWorkspace(src: string): Promise<boolean> {
   try {
-    const response = await fetch(src, { cache: "no-store" });
+    const response = await remoteFetch(src, { cache: "no-store" });
     if (response.ok) {
       await response.body?.cancel();
       return false;
@@ -226,7 +130,7 @@ export async function requestMessageFile(
   signal: AbortSignal,
   options?: { entry?: string; list?: boolean; mediaLink?: boolean },
 ): Promise<Response> {
-  const response = await fetch(`/api/threads/${encodeURIComponent(message.threadId)}/messages/${encodeURIComponent(message.messageId)}/file`, {
+  const response = await remoteFetch(`/api/threads/${encodeURIComponent(message.threadId)}/messages/${encodeURIComponent(message.messageId)}/file`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -529,6 +433,9 @@ export function AttachmentPreviewDialog({
 
   const loaded = loadedSources.has(current.src);
   const failed = failedSource === current.src;
+  const remoteImage = useRemoteMediaUrl(current.src, attempt);
+  const effectiveFailed = failed || remoteImage.failed;
+  const downloadName = current.downloadName ?? (current.downloadUrl ? canonicalDownloadFilename({ fallback: current.name, source: current.downloadUrl }) : current.name);
   const retry = () => {
     setFailedSource(null);
     setLoadedSources((sources) => {
@@ -566,7 +473,13 @@ export function AttachmentPreviewDialog({
             {current.downloadUrl && (
               <a
                 href={current.downloadUrl}
-                download={current.downloadName ?? canonicalDownloadFilename({ fallback: current.name, source: current.downloadUrl })}
+                download={downloadName}
+                onClick={(event) => {
+                  if (isRemotePwaMode() && isRelayMediaPath(current.downloadUrl)) {
+                    event.preventDefault();
+                    void downloadRemoteUrl(current.downloadUrl!, downloadName).catch(() => undefined);
+                  }
+                }}
                 className="flex size-9 items-center justify-center rounded-lg text-white/65 hover:bg-white/10 hover:text-white"
                 aria-label={t("attach.downloadAria", { name: current.name })}
                 title={t("attach.download")}
@@ -596,14 +509,14 @@ export function AttachmentPreviewDialog({
           </div>
         </header>
         <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4 sm:p-8">
-          {!loaded && !failed && (
+          {!loaded && !effectiveFailed && (
             <div className="absolute inset-4 flex animate-pulse items-center justify-center rounded-xl bg-white/[0.055] sm:inset-8" role="status">
               <span className="flex items-center gap-2 text-[13px] text-white/55">
                 <LoaderCircle size={17} className="animate-spin" /> {t("attach.imageLoading")}
               </span>
             </div>
           )}
-          {failed ? (
+          {effectiveFailed ? (
             <div className="flex flex-col items-center gap-3 text-white/60" role="alert">
               <ImageOff size={34} />
               <span className="text-[13px]">{t("attach.imageFailed")}</span>
@@ -615,10 +528,10 @@ export function AttachmentPreviewDialog({
                 <RotateCcw size={13} /> {t("chat.retry")}
               </button>
             </div>
-          ) : (
+          ) : remoteImage.url ? (
             <img
-              key={`${current.src}:${attempt}`}
-              src={current.src}
+              key={`${remoteImage.url}:${attempt}`}
+              src={remoteImage.url}
               alt={current.name}
               onLoad={() => setLoadedSources((sources) => new Set(sources).add(current.src))}
               onError={() => setFailedSource(current.src)}
@@ -627,7 +540,7 @@ export function AttachmentPreviewDialog({
                 loaded ? "opacity-100" : "opacity-0",
               )}
             />
-          )}
+          ) : null}
           {items.length > 1 && (
             <>
               <button
@@ -674,6 +587,13 @@ export function AttachmentThumbnail({
   const [attempt, setAttempt] = useState(0);
   const [outsideWorkspace, setOutsideWorkspace] = useState(false);
   const [ratio, setRatio] = useState<number | null>(null);
+  const remoteImage = useRemoteMediaUrl(image.src, attempt);
+
+  useEffect(() => {
+    if (!remoteImage.failed) return;
+    setState("failed");
+    if (explainRefusal) void messageImageOutsideWorkspace(image.src).then(setOutsideWorkspace);
+  }, [remoteImage.failed, explainRefusal, image.src]);
 
   return (
     <span
@@ -731,9 +651,9 @@ export function AttachmentThumbnail({
           aria-label={t("attach.previewImageAria", { name: image.name })}
           title={t("attach.previewAria", { name: image.name })}
         >
-          <img
-            key={`${image.src}:${attempt}`}
-            src={image.src}
+          {remoteImage.url && <img
+            key={`${remoteImage.url}:${attempt}`}
+            src={remoteImage.url}
             alt={image.name}
             loading={eager ? "eager" : "lazy"}
             fetchPriority={eager ? "high" : undefined}
@@ -750,7 +670,7 @@ export function AttachmentThumbnail({
               "block size-full object-cover transition duration-200 group-hover/image:scale-[1.015]",
               state === "ready" ? "opacity-100" : "opacity-0",
             )}
-          />
+          />}
           <span className="absolute right-2 top-2 flex size-7 items-center justify-center rounded-full bg-black/55 text-white opacity-0 backdrop-blur-sm transition-opacity group-hover/image:opacity-100 group-focus-within/image:opacity-100">
             <Maximize2 size={13} />
           </span>

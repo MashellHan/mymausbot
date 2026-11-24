@@ -10,6 +10,7 @@ const REPO_SEGMENT = /^[a-z0-9_.-]{1,100}$/;
 const STRICT_DEMO_BINDINGS = new Map<string, { readonly editionKey: string; readonly repo: string }>([
   ["/github/demo/sqlglot-query-lab/", { editionKey: "2026-11-22", repo: "tobymao/sqlglot" }],
   ["/github/demo/hypothesis-orders/", { editionKey: "2026-11-23", repo: "hypothesisworks/hypothesis" }],
+  ["/github/demo/jsonschema-agent-contract/", { editionKey: "2026-11-24", repo: "python-jsonschema/jsonschema" }],
 ]);
 
 export interface GithubActivitySelection {

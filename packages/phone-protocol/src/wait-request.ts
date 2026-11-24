@@ -7,6 +7,8 @@ export interface WaitLine {
 /** `WireMessage.wait`: set on the line a wait posted when it ended. */
 export interface WaitLineField {
   wait?: WaitLine;
+  /** An internal model input from a completed wait. Conversation responses keep its lineage without its text. */
+  waitContinuation?: true;
 }
 
 /** A wait with a follow-up a bot set up from chat (wait_until, `OptionCardData.waitRequest`); its Cancel stops it until it settles. */
