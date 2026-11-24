@@ -367,11 +367,14 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
         <Menu size={18} className="max-md:hidden" />
         <ChevronLeft size={20} aria-hidden="true" className="hidden max-md:block" />
       </button>}
-      {drawerOpen && !calendarFocus && (
+      {!calendarFocus && (
         <div
           aria-hidden
           onMouseDown={(e) => e.target === e.currentTarget && hideDrawer()}
-          className="absolute inset-0 z-30 bg-black/50 md:hidden"
+          className={cn(
+            "absolute inset-0 z-30 bg-black/50 transition-opacity duration-[220ms] ease-out motion-reduce:transition-none md:hidden",
+            drawerOpen ? "opacity-100" : "pointer-events-none opacity-0",
+          )}
         />
       )}
       {!calendarFocus && interfaceMode !== "raw" && <PlacesRail />}
@@ -388,6 +391,10 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
         open={drawerOpen}
         onClose={closeDrawer}
       />}
+      <div
+        key={state.activeView !== "chat" ? state.activeView : !remoteClient && localVmWorkspaceBotId ? `vm:${localVmWorkspaceBotId}` : teamWelcomeOn && team ? "team-welcome" : firstRun ? `first-run:${firstRun}` : chiefStep ? "chief-step" : group ? `group:${group.id}` : bot ? `bot:${bot.id}` : noEngines ? "no-engines" : "loading"}
+        className="flex h-full min-h-0 min-w-0 flex-1 animate-view-enter"
+      >
       {state.activeView === "team-map" ? (
         <TeamMapPage />
       ) : state.activeView === "files" ? (
@@ -440,6 +447,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
           )}
         </main>
       )}
+      </div>
       {/* Sibling panels need distinct keys: two keyed `bot.id` collide in React's keyed reconciliation. */}
       {state.settingsOpen && bot && (
         remoteClient
