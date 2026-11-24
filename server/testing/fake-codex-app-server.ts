@@ -18,6 +18,7 @@
 //   FAKE_CODEX_ASYNC_QUESTIONS  async-question mode: JSON replacing the message's `questions`
 //   FAKE_CODEX_ASYNC_QUESTION_GATE  async-question mode: the turn keeps running until this file exists (default 300 ms)
 //   FAKE_CODEX_DUMP  path for {pid, argv, env, calls, decision}
+//   FAKE_CODEX_CALL_LOG  append {pid, method, params} per request, across every process launched
 //   FAKE_CODEX_ACTION_LOG  early-tool-timeout/error: append an action before turn/start times out or fails
 //   FAKE_CODEX_ECHO_INPUT  "1": echo turn/start's input back as a userMessage item, as codex-cli 0.164.0 does
 //   FAKE_CODEX_COMMAND  the happy turn's one call, this command (default: "ls -la" and a web search);
@@ -536,6 +537,11 @@ process.stdin.on("data", (chunk) => {
     }
 
     if (msg.method) calls.push({ method: msg.method, params: msg.params ?? null });
+    if (msg.method && process.env.FAKE_CODEX_CALL_LOG) {
+      const entry = `${JSON.stringify({ pid: process.pid, method: msg.method, params: msg.params ?? null })}\n`;
+      const log = () => appendFileSync(process.env.FAKE_CODEX_CALL_LOG!, entry);
+      if (msg.method === "config/read") setImmediate(log); else log();
+    }
 
     const faultFile = process.env.FAKE_CODEX_FAULT_FILE;
     if (msg.method && faultFile && existsSync(faultFile)) {

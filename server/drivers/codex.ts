@@ -664,7 +664,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           active.delete(threadId);
           emit({ ...base(threadId, turnId), type: "turn.completed", ok, stopReason, cost: null, ...(state.usage ? { usage: state.usage } : {}) });
         };
-        if (ok && contract && keepable && codexThreadId && !stopRequested && !abandoned && !disposed && !mcpFailed
+        if (ok && contract && keepable && codexThreadId && !turn.ephemeral && !stopRequested && !abandoned && !disposed && !mcpFailed
           && warm.keep(threadId, { connection, contract, nativeThreadId: codexThreadId, ...keepable })) return complete();
         completeStoppedTurn = complete;
         if (await stop()) return;
@@ -1309,7 +1309,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
               ...(selection.modelProvider ? { modelProvider: selection.modelProvider } : {}),
               ...approvalParams.thread,
               ...(turn.guestConfined ? { environments: [] } : {}),
-              ephemeral: false,
+              ephemeral: turn.ephemeral === true,
             });
           let started;
           try {
