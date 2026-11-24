@@ -33,6 +33,10 @@
 //   FAKE_CODEX_ACCOUNT_MODE  chatgpt (default) | api-key | none | unsupported | error | hang
 //   FAKE_CODEX_RESUME_ERROR  JSON-RPC error rejecting thread/resume
 //   FAKE_CODEX_ARCHIVED  "1": thread/resume says the session is archived until thread/unarchive; "unarchive-fails": unarchive is refused too
+//   FAKE_CODEX_INSTRUCTIONS_FILE  while this file exists, config/read reports its text as developer_instructions: the
+//     person's configuration changed while the process ran (codex-cli 0.160.1 reads the files on every config/read)
+//   FAKE_CODEX_DIE_ON_TURN  this process is killed as its Nth turn/start arrives, before any reply
+//   FAKE_CODEX_FAULT_FILE  JSON { method, signal?, exitCode?, stderr?, hang?, error?, turnError? } injected once when `method` arrives
 //   FAKE_CODEX_STARTUP_DELAY_MS  hold the initialize reply this long, like a loaded host
 //   FAKE_CODEX_INITIALIZE_GATE  hold the initialize reply until this fixture file exists
 //   FAKE_CODEX_STARTUP_LOG  append {pid, at, event: "initialize" | "turn/start"} per launch
@@ -219,7 +223,9 @@ let experimentalApi = false;
 
 const out = (obj: unknown) => process.stdout.write(JSON.stringify(obj) + "\n");
 let nativeThreadId = "codex-thread-1";
-const nativeTurnId = "turn-1";
+let nativeTurnId = "turn-1";
+let turnsStarted = 0;
+let turnsFinished = 0;
 const notify = (method: string, params: any) => out({
   jsonrpc: "2.0", method,
   params: {
@@ -410,7 +416,7 @@ const finishTurn = () => {
   notify("item/completed", { item: { id: "m1", type: "agentMessage", text: "done from fake codex" } });
   const carried = process.env.FAKE_CODEX_RESTORED_USAGE ? { inputTokens: 100, cachedInputTokens: 50, outputTokens: 10 } : { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
   notify("thread/tokenUsage/updated", { tokenUsage: {
-    total: { inputTokens: carried.inputTokens + 7, cachedInputTokens: carried.cachedInputTokens + 4, outputTokens: carried.outputTokens + 3 },
+    total: { inputTokens: carried.inputTokens + 7 * ++turnsFinished, cachedInputTokens: carried.cachedInputTokens + 4 * turnsFinished, outputTokens: carried.outputTokens + 3 * turnsFinished },
     last: { inputTokens: 7, cachedInputTokens: 4, outputTokens: 3 },
     modelContextWindow: 272000,
   } });
@@ -493,7 +499,8 @@ const playRoomPlanTurn = (msg: any, planPath: string) => {
   if (!early) ack();
   // Loaded only in this mode: other tests run a copy of this file on its own.
   void import("./room-handoff-agent.ts").then(({ runRoomHandoffAgent }) => runRoomHandoffAgent(process.argv.slice(2), planPath, { message: { content: text } },
-    { integration, system: developerInstructions, evidence: { resumedThread } }))
+    // A later turn of one process carries on the thread it has loaded, with no thread/resume.
+    { integration, system: developerInstructions, evidence: { resumedThread: resumedThread ?? (turnsStarted > 1 ? nativeThreadId : null) } }))
     .then((reply) => {
       notify("item/completed", { item: { id: "m1", type: "agentMessage", text: reply } });
       notify("turn/completed", { turn: { status: "completed" } });
@@ -529,6 +536,34 @@ process.stdin.on("data", (chunk) => {
     }
 
     if (msg.method) calls.push({ method: msg.method, params: msg.params ?? null });
+
+    const faultFile = process.env.FAKE_CODEX_FAULT_FILE;
+    if (msg.method && faultFile && existsSync(faultFile)) {
+      let fault: { method?: string; signal?: NodeJS.Signals; exitCode?: number; stderr?: string; hang?: boolean; error?: { code: number; message: string }; turnError?: { message: string; codexErrorInfo?: unknown; additionalDetails?: unknown } } | null = null;
+      try {
+        fault = JSON.parse(readFileSync(faultFile, "utf8"));
+      } catch {}
+      if (fault && fault.method === msg.method) {
+        try { unlinkSync(faultFile); } catch {}
+        dump();
+        if (fault.stderr) console.error(fault.stderr);
+        if (fault.signal) process.kill(process.pid, fault.signal);
+        if (typeof fault.exitCode === "number") process.exit(fault.exitCode);
+        if (fault.hang) continue;
+        if (fault.error) {
+          out({ jsonrpc: "2.0", id: msg.id, error: fault.error });
+          continue;
+        }
+        if (fault.turnError && msg.method === "turn/start") {
+          nativeTurnId = `turn-${++turnsStarted}`;
+          dump();
+          out({ jsonrpc: "2.0", id: msg.id, result: { turn: { id: nativeTurnId } } });
+          notify("error", { willRetry: false, error: fault.turnError });
+          notify("turn/completed", { turn: { status: "failed", error: fault.turnError } });
+          continue;
+        }
+      }
+    }
 
     switch (msg.method) {
       case "initialize": {
@@ -607,6 +642,7 @@ process.stdin.on("data", (chunk) => {
         }
         break;
       case "config/read":
+        logStartup("config/read");
         if (mode === "config-read-error") {
           dump();
           out({ jsonrpc: "2.0", id: msg.id, error: { code: -32000, message: "config unavailable" } });
@@ -636,7 +672,8 @@ process.stdin.on("data", (chunk) => {
                     harmless_name: { env: { DISPLAY_LABEL: "innocuous-config-secret-7a9c" } },
                   },
                 }),
-              developer_instructions: process.env.FAKE_CODEX_INSTRUCTIONS ?? null,
+              developer_instructions: process.env.FAKE_CODEX_INSTRUCTIONS_FILE && existsSync(process.env.FAKE_CODEX_INSTRUCTIONS_FILE)
+                ? readFileSync(process.env.FAKE_CODEX_INSTRUCTIONS_FILE, "utf8") : process.env.FAKE_CODEX_INSTRUCTIONS ?? null,
               shell_environment_policy: shellEnvironmentPolicy(),
               features: Object.fromEntries(process.argv.flatMap((arg, index) => {
                 const match = process.argv[index - 1] === "-c" ? /^features\.(\w+)=(true|false)$/.exec(arg) : null;
@@ -723,7 +760,9 @@ process.stdin.on("data", (chunk) => {
         break;
       case "turn/start": {
         if (process.env.FAKE_CODEX_MCP_READY_MS) mcpReadyAtTurnStart = mcpPending.length === 0;
+        nativeTurnId = `turn-${++turnsStarted}`;
         dump();
+        if (Number(process.env.FAKE_CODEX_DIE_ON_TURN) === turnsStarted) process.kill(process.pid, "SIGKILL");
         logStartup("turn/start");
         nativeThreadId = msg.params?.threadId ?? nativeThreadId;
         if (mode === "early-tool-timeout" || mode === "early-tool-error") {
@@ -1144,5 +1183,6 @@ process.stdin.on("data", (chunk) => {
   }
 });
 
-// match the real app-server: stay alive until killed
+// codex-cli 0.160.1 stays up between turns and exits once its stdin closes.
+process.stdin.on("end", () => setTimeout(() => process.exit(0), 200));
 setInterval(() => {}, 1_000);
