@@ -561,6 +561,25 @@ describe("PwaBridgeCard", () => {
     expect(host.textContent).not.toContain("4401");
   });
 
+  it("aligns Relay settings form fields and secret row inside SettingsRows", async () => {
+    mocks.api.mockResolvedValue(makeState());
+    await renderCard();
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[data-settings-disclosure="pwa-bridge-settings"] button')!.click();
+    });
+
+    const rows = host.querySelector('[data-settings-block="pwa-bridge"] [data-settings-rows]')!;
+    const form = rows.querySelector<HTMLFormElement>(":scope > form[data-pwa-bridge-form]")!;
+    const secretRow = rows.querySelector<HTMLElement>(":scope > [data-pwa-secret-row]")!;
+    expect(form).not.toBeNull();
+    expect(secretRow).not.toBeNull();
+    expect(form.firstElementChild?.className).toContain("px-4");
+    expect(form.querySelector("[data-settings-form-foot]")).not.toBeNull();
+    expect(secretRow.className).toContain("px-4");
+    expect(secretRow.className).not.toContain("border-t");
+  });
+
   it("renders on PhonePage for this computer and stays hidden on MausBot Cloud", async () => {
     mocks.api.mockResolvedValue(makeState());
     await act(async () => {
