@@ -2233,6 +2233,7 @@
   "pwaBridge.secret.rotate": "Renouveler le secret",
   "pwaBridge.secret.title": "Secret du relais",
   "pwaBridge.secret.valueLabel": "Secret du pont",
+  "pwaBridge.sectionTitle": "Application web mobile via relais",
   "pwaBridge.settings.notSet": "Non défini",
   "pwaBridge.settings.saved": "Enregistré",
   "pwaBridge.settings.saving": "Enregistrement…",

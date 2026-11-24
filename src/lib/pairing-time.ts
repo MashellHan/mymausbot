@@ -14,8 +14,13 @@ export function lastSeen(lastSeenAt: number, now = Date.now()): string {
   return t("remote.serverPairing.daysAgo", { days: Math.round(minutes / 1440) });
 }
 
-export function serverDeviceTag(device: { pwa?: boolean; browser?: boolean }): string {
+export function isComputerSession(device: { pwa?: boolean; browser?: boolean; scopes?: readonly string[] }): boolean {
+  return !device.pwa && !device.browser && Boolean(device.scopes?.includes("admin"));
+}
+
+export function serverDeviceTag(device: { pwa?: boolean; browser?: boolean; scopes?: readonly string[] }): string {
   if (device.pwa) return "PWA";
   if (device.browser) return t("place.browser");
+  if (device.scopes?.includes("admin")) return t("activity.app.computer");
   return "Native";
 }

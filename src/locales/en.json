@@ -7530,6 +7530,7 @@
   "pwaBridge.secret.rotate": "Rotate secret",
   "pwaBridge.secret.title": "Relay secret",
   "pwaBridge.secret.valueLabel": "Bridge secret",
+  "pwaBridge.sectionTitle": "Mobile web app via relay",
   "pwaBridge.settings.notSet": "Not set",
   "pwaBridge.settings.saved": "Saved",
   "pwaBridge.settings.saving": "Saving…",

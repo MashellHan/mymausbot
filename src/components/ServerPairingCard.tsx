@@ -6,12 +6,12 @@ import { copyText, type CopyFeedback } from "@/lib/copy-text";
 import { api } from "@/state/store";
 import { isOwnerOrAdmin, readSessionState, type SessionState } from "../lib/session";
 import { readMembership } from "../lib/membership";
-import { codeUntil, lastSeen, serverDeviceTag } from "../lib/pairing-time";
+import { codeUntil, isComputerSession, lastSeen, serverDeviceTag } from "../lib/pairing-time";
 import { revealPhonePairing, takePairOnOpen } from "../lib/phone-pairing";
 import { SettingRow, SettingsGroup, SettingsRows, SettingsTag } from "./SettingsPrimitives";
 import { Layer } from "./Layer";
 import { DialogTitle, PairRow } from "./PhoneDevicesSection";
-import { Smartphone } from "lucide-react";
+import { Monitor, Smartphone } from "lucide-react";
 import { productName } from "@/lib/brand";
 import { Select } from "./Select";
 import { cn } from "@/lib/cn";
@@ -325,7 +325,15 @@ export function ServerPairingCard({ initialSession = null, initialPairingCodes =
     <div ref={root} tabIndex={-1} data-phone-pairing="server" className="flex scroll-mt-4 flex-col gap-6 focus:outline-none">
       {offerPanel}
       {funnelRow}
-      {hidePairedList ? null : listed.length === 0 ? (
+      {hidePairedList ? (
+        forComputer ? (
+          <SettingsGroup label={t("devices.computers.title")} block="computers-pair">
+            <SettingsRows>{pairRow}</SettingsRows>
+            {nameRow}
+            {!pairingCodes && <p data-server-pairing-portal className="px-4 text-[12px] leading-4 text-ink-secondary">{t("remote.serverPairing.portal")}</p>}
+          </SettingsGroup>
+        ) : null
+      ) : listed.length === 0 ? (
         <SettingsGroup block="pair">
           <SettingsRows>{pairRow}</SettingsRows>
           {nameRow}
@@ -336,7 +344,9 @@ export function ServerPairingCard({ initialSession = null, initialPairingCodes =
             <SettingsRows icons>
               {listed.map((device) => (
                 <div key={device.id} className="flex min-h-16 items-center gap-3 px-4 py-3" data-paired-device={device.id}>
-                  <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-ink/[0.05] text-ink-secondary"><Smartphone size={18} strokeWidth={1.75} aria-hidden="true" /></span>
+                  <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-ink/[0.05] text-ink-secondary">
+                    {isComputerSession(device) ? <Monitor size={18} strokeWidth={1.75} aria-hidden="true" /> : <Smartphone size={18} strokeWidth={1.75} aria-hidden="true" />}
+                  </span>
                   <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                     <span className="flex min-w-0 items-center gap-1.5">
                       <span className="truncate text-[14px] leading-5 text-ink">{device.person ?? device.label}</span>
