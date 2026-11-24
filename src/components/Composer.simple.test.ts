@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-// Simple mode's composer: one pill with a round + (attach, Work until done or Finish together, Teach a task), a chip for a
-// mode only while this conversation turns it on, and one round button in the bot's tone that calls, sends or stops.
+// Simple mode's composer: one pill with unfolded toolbar icon buttons (attach files, optional attach photo,
+// Teach a task, Work until done or Finish together with aria-pressed), the field, and one round button in the bot's tone.
 // Advanced keeps its row of buttons.
 import { createElement } from "react";
 import { flushSync } from "react-dom";
@@ -18,6 +18,7 @@ const fixture = vi.hoisted(() => ({
   raw: false,
   admin: true,
   agentsMcp: true,
+  images: false,
   dispatch: vi.fn(),
   call: null as Record<string, unknown> | null,
   groupCall: null as Record<string, unknown> | null,
@@ -29,7 +30,7 @@ vi.mock("@/state/store", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/state/store")>();
   return { ...original, useStore: () => ({
     state: { ...original.initialState, config: fixture.config ?? original.initialState.config, bots: [bot, peer], liveCall: fixture.liveCall, instances: [{
-      instanceId: ENGINE, driverKind: "claudeAgent", displayName: "Claude", capabilities: { agentsMcp: fixture.agentsMcp },
+      instanceId: ENGINE, driverKind: "claudeAgent", displayName: "Claude", capabilities: { agentsMcp: fixture.agentsMcp, images: fixture.images },
     }] },
     dispatch: fixture.dispatch,
   }) };
@@ -65,9 +66,7 @@ let root: Root;
 let container: HTMLDivElement;
 const render = (props: Parameters<typeof Composer>[0]) => flushSync(() => root.render(createElement(RawPresentation.Provider, { value: fixture.raw }, createElement(Composer, props))));
 const plus = () => container.querySelector<HTMLElement>("[data-composer-plus]")?.closest("button") ?? null;
-const menu = () => document.body.querySelector<HTMLElement>("[data-composer-menu]");
 const popover = () => document.body.querySelector<HTMLElement>('[data-sidebar-popover-menu="anchored"]');
-const item = (key: string) => document.body.querySelector<HTMLButtonElement>(`[data-menu-key="${key}"]`);
 const click = (element: Element | null) => {
   if (!element) throw new Error("nothing to click");
   flushSync(() => (element as HTMLElement).click());
@@ -83,16 +82,12 @@ function expectBotButton(button: HTMLElement | null, color: Bot["color"]) {
 }
 const sendButton = () => container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]');
 
-function openPlus() {
-  click(plus());
-  expect(menu()).not.toBeNull();
-}
-
 beforeEach(() => {
   fixture.advanced = false;
   fixture.raw = false;
   fixture.admin = true;
   fixture.agentsMcp = true;
+  fixture.images = false;
   fixture.liveCall = null;
   fixture.config = undefined;
   setCallMode("turns");
@@ -150,46 +145,44 @@ describe("the Simple composer in a bot chat", () => {
     expect(onConsumeReply).toHaveBeenCalledOnce();
   });
 
-  it("is one pill: a round + with three rows, the field, and one round button in the bot's tone", () => {
+  it("is one pill: unfolded icon buttons directly on the bar, the field, and one round button in the bot's tone", () => {
     render({ bot });
-    expect(plus()?.getAttribute("aria-label")).toBe("Add");
+    expect(plus()).toBeNull();
     const pill = container.querySelector('[data-tour="composer"]')!.className.split(" ");
     expect(pill).toEqual(expect.arrayContaining(["rounded-[22px]", "bg-composer", "p-2", "ring-[0.5px]", "hover:ring-ink/[0.22]", "focus-within:ring-ink/[0.22]",
       "[transition:border-radius_300ms,box-shadow_150ms]"]));
     expect(pill.filter((name) => name.startsWith("shadow"))).toEqual(["shadow-[0_2px_8px_-1px_rgb(0_0_0/0.05),0_1px_2px_rgb(0_0_0/0.03),0_0_0_1px_rgb(228_228_228/0.04)]"]);
     expect(container.querySelector("[data-composer-row]")!.className).not.toContain("flex-wrap");
     expect(container.querySelector("[data-composer-actions]")!.className.split(" ")).toContain("gap-2");
-    expect(container.querySelector("[data-composer-plus]")!.className.split(" ")).toEqual(expect.arrayContaining(["size-7", "bg-ink/[0.05]", "ring-inset", "text-ink-tertiary"]));
-    expect(container.querySelector('button[aria-label="Attach a file"]')).toBeNull();
-    expect(container.querySelector("[data-goal-chip]")).toBeNull();
+    const attach = container.querySelector<HTMLButtonElement>('button[aria-label="Attach files"]')!;
+    const goal = container.querySelector<HTMLButtonElement>('button[aria-label="Work until done"]')!;
+    const teach = container.querySelector<HTMLButtonElement>('button[aria-label="Teach a task"]')!;
+    expect(attach.className.split(" ")).toEqual(expect.arrayContaining(["size-7", "bg-ink/[0.05]", "ring-inset", "text-ink-tertiary"]));
+    expect(goal.getAttribute("aria-pressed")).toBe("false");
+    expect(teach.getAttribute("title")).toBe("Teach a task");
     expect(container.querySelector("[data-approval-chip]")).toBeNull();
     const tone = userBubbleTone("purple");
     expect(fixture.call).toMatchObject({ bot: { id: "atlas" }, placement: "composer", fill: tone.background, ink: tone.ink });
-    openPlus();
-    expect([...menu()!.querySelectorAll("[data-menu-key]")].map((row) => row.getAttribute("data-menu-key"))).toEqual(["attach", "goal", "teach"]);
-    expect([...menu()!.querySelectorAll("[data-menu-key]")].map((row) => row.textContent)).toEqual(["Attach files", "Work until done", "Teach a task"]);
-    const row = menu()!.querySelector("[data-menu-key='attach']")!.className.split(" ");
-    expect(row).toEqual(expect.arrayContaining(["h-[34px]", "gap-2", "px-3", "text-[15px]"]));
-    expect(menu()!.className.split(" ")).toEqual(expect.arrayContaining(["popover-surface", "rounded-[12px]", "w-max", "min-w-[200px]", "max-w-[280px]"]));
   });
 
-  it("starts a /learn draft from Teach a task, ahead of anything already typed", () => {
+  it("starts a /learn draft from the unfolded Teach a task button, ahead of anything already typed", () => {
     restoreComposerDraft(`bot:${bot.id}:${bot.threadId}`, { text: "how I file expenses", attachments: [] });
     render({ bot });
-    openPlus();
-    click(item("teach"));
+    click(container.querySelector('button[aria-label="Teach a task"]'));
     expect(container.querySelector("textarea")!.value).toBe("/learn how I file expenses");
   });
 
-  it("opens the file picker straight from the + when attaching is its only row", () => {
+  it("keeps only Attach files on a DM when skill authoring is off, and opens the file picker straight away", () => {
     fixture.config = { features: { skillAuthoring: false } };
     const picker = vi.spyOn(HTMLInputElement.prototype, "click").mockImplementation(() => {});
     render({ group: { ...room, dm: true }, members: [bot, peer] });
     const attach = container.querySelector<HTMLButtonElement>('button[aria-label="Attach files"]')!;
     expect(attach.getAttribute("aria-haspopup")).toBeNull();
+    expect(container.querySelector('button[aria-label="Teach a task"]')).toBeNull();
+    expect(container.querySelector("[data-composer-goal]")).toBeNull();
     click(attach);
     expect(picker).toHaveBeenCalledOnce();
-    expect(menu()).toBeNull();
+    expect(plus()).toBeNull();
   });
 
   it("keeps the plain placeholder while the bot works and says what Send does in the bot's terms", () => {
@@ -224,13 +217,18 @@ describe("the Simple composer in a bot chat", () => {
     expect(backdrop).not.toContain("-left-5");
   });
 
-  it("attaches through the same file picker as the paperclip", () => {
-    const picker = vi.spyOn(HTMLInputElement.prototype, "click").mockImplementation(() => {});
+  it("attaches files and photos from the unfolded toolbar buttons", () => {
+    fixture.images = true;
+    const clicked: HTMLInputElement[] = [];
+    vi.spyOn(HTMLInputElement.prototype, "click").mockImplementation(function (this: HTMLInputElement) {
+      clicked.push(this);
+    });
     render({ bot });
-    openPlus();
-    click(item("attach"));
-    expect(picker).toHaveBeenCalledOnce();
-    expect(plus()?.getAttribute("aria-expanded")).toBe("false");
+    click(container.querySelector('button[aria-label="Attach files"]'));
+    click(container.querySelector('button[aria-label="Attach photo"]'));
+    expect(clicked).toHaveLength(2);
+    expect(clicked[0]!.accept).toBe("");
+    expect(clicked[1]!.accept).toBe("image/*");
   });
 
   it("turns its round button into Send while there is text, in the bot's colour", () => {
@@ -290,17 +288,14 @@ describe("the Simple composer in a bot chat", () => {
     expect(fixture.dispatch).toHaveBeenCalledWith({ type: "updateTask", botId: "atlas", threadId: "atlas-thread", patch: { approvalMode: "ask" } });
   });
 
-  it("shows Work until done as a chip with a × only while it is on, and turns it off from there", () => {
+  it("shows Work until done as an unfolded toggle button with aria-pressed and turns it off on click", () => {
     restoreComposerDraft(`bot:${bot.id}:${bot.threadId}`, { text: "", attachments: [], channelMode: "goal" });
     render({ bot });
-    const chip = container.querySelector<HTMLButtonElement>("[data-goal-chip]")!;
-    expect(chip.textContent).toBe("Work until done");
-    expect(chip.querySelector(".lucide-x")).not.toBeNull();
-    expect(chip.getAttribute("aria-label")).toBe("Turn off Work until done");
-    expect(chip.hasAttribute("aria-pressed")).toBe(false);
-    expect(chip.className.split(" ")).toEqual(expect.arrayContaining(["h-7", "gap-1", "px-2.5", "text-[13px]"]));
-    click(chip);
-    expect(container.querySelector("[data-goal-chip]")).toBeNull();
+    const button = container.querySelector<HTMLButtonElement>('button[aria-label="Work until done"]')!;
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    expect(button.className.split(" ")).toEqual(expect.arrayContaining(["size-7", "bg-accent/15", "text-accent"]));
+    click(button);
+    expect(container.querySelector('button[aria-label="Work until done"]')?.getAttribute("aria-pressed")).toBe("false");
   });
 });
 
@@ -317,9 +312,10 @@ describe("the composer after Set me up", () => {
 });
 
 describe("the Simple composer in a group chat", () => {
-  it("offers Finish together in the + menu and keeps its chip in view while it is on", () => {
+  it("unfolds Finish together directly on the bar with aria-pressed", () => {
     render({ group: room, members: [bot, peer] });
-    expect(container.querySelector("[data-goal-chip]")).toBeNull();
+    const goal = container.querySelector<HTMLButtonElement>('button[aria-label="Finish together"]')!;
+    expect(goal.getAttribute("aria-pressed")).toBe("false");
     expect(container.querySelector("textarea")!.getAttribute("placeholder")).toBe("Message Launch planning");
     expect(fixture.groupCall).toMatchObject({ group: { id: "room" }, placement: "composer", fill: "var(--color-accent)", ink: "var(--color-accent-ink)" });
     restoreComposerDraft(`group:${room.id}:${room.threadId}`, { text: "hello room", attachments: [] });
@@ -330,16 +326,11 @@ describe("the Simple composer in a group chat", () => {
     expect(send.style.color).toBe("var(--color-accent-ink)");
     restoreComposerDraft(`group:${room.id}:${room.threadId}`, { text: "", attachments: [] });
     render({ group: room, members: [bot, peer] });
-    openPlus();
-    expect([...menu()!.querySelectorAll("[data-menu-key]")].map((row) => row.getAttribute("data-menu-key"))).toEqual(["attach", "goal", "teach"]);
-    click(item("goal"));
-    const chip = container.querySelector("[data-goal-chip]");
-    expect(chip?.getAttribute("aria-label")).toBe("Turn off Finish together");
+    click(container.querySelector('button[aria-label="Finish together"]'));
+    expect(container.querySelector('button[aria-label="Finish together"]')?.getAttribute("aria-pressed")).toBe("true");
     expect(container.querySelector("textarea")!.getAttribute("placeholder")).toContain("finish together");
-    openPlus();
-    expect(item("goal")!.querySelector(".lucide-check")).not.toBeNull();
-    click(chip);
-    expect(container.querySelector("[data-goal-chip]")).toBeNull();
+    click(container.querySelector('button[aria-label="Finish together"]'));
+    expect(container.querySelector('button[aria-label="Finish together"]')?.getAttribute("aria-pressed")).toBe("false");
   });
 
   it("keeps the room's @ hint only when the room answers to mentions", () => {
