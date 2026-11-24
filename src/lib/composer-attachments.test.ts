@@ -11,10 +11,12 @@ import {
   composeMessage,
   documentMime,
   FILE_MAX_BYTES,
+  IMAGE_MAX_BYTES,
   fileAttachment,
   fileAttachmentFromFile,
   handoffAttachmentImagePreview,
   imageAttachmentFromFile,
+  intakeFiles,
   isImageFile,
   optimisticImageAttachment,
   PREVIEW_MAX_BYTES,
@@ -27,6 +29,10 @@ import {
   dataContextFor,
   discardUnsentUpload,
 } from "./composer-attachments";
+import { uploadDraftImage } from "./composer-uploads";
+import { getDraftAttachments, restoreComposerDraft } from "./drafts";
+import { makePwaOwnerKey } from "./pwa-config";
+import { setActivePwaAuth } from "./pwa-transport";
 
 describe("discardUnsentUpload", () => {
   it("asks the server to drop an uploaded file taken off the message, and nothing else", () => {
@@ -402,6 +408,134 @@ describe("isImageFile", () => {
     expect(isImageFile({ type: "image/webp", size: 10 })).toBe(true);
     expect(isImageFile({ type: "image/svg+xml", size: 10 })).toBe(false);
     expect(isImageFile({ type: "text/plain", size: 10 })).toBe(false);
+  });
+
+  it("recognizes HEIC and HEIF in browser/PWA mode including missing browser MIME", () => {
+    expect(isImageFile({ type: "image/heic", name: "photo.heic", size: 10 })).toBe(true);
+    expect(isImageFile({ type: "image/heif", name: "photo.heif", size: 10 })).toBe(true);
+    expect(isImageFile({ type: "", name: "IMG_1024.HEIC", size: 10 })).toBe(true);
+    expect(isImageFile({ type: "application/octet-stream", name: "IMG_1025.heif", size: 10 })).toBe(true);
+    expect(isImageFile({ type: "", name: "notes.txt", size: 10 })).toBe(false);
+
+    vi.stubGlobal("window", { ogb: { platform: "darwin" } });
+    try {
+      expect(isImageFile({ type: "image/heic", name: "photo.heic", size: 10 })).toBe(false);
+      expect(isImageFile({ type: "", name: "IMG_1024.HEIC", size: 10 })).toBe(false);
+      expect(isImageFile({ type: "image/png", name: "photo.png", size: 10 })).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("remote PWA oversized & HEIC image uploads", () => {
+  const enableRemotePwa = () => {
+    const ownerKey = makePwaOwnerKey("https://relay.mxhan.com", "env-1", "ses-1");
+    setActivePwaAuth({
+      relayUrl: "https://relay.mxhan.com",
+      sessionId: "ses-1",
+      deviceId: "dev-1",
+      token: "tok-pwa",
+      environmentId: "env-1",
+      ownerKey,
+      serverName: "Mac mini",
+      scopes: ["admin"],
+      pairedAt: 100,
+    });
+  };
+
+  const mockBrowserCompression = () => {
+    vi.stubGlobal("createImageBitmap", vi.fn(async () => ({
+      width: 4032,
+      height: 3024,
+      close: vi.fn(),
+    })));
+    vi.stubGlobal("OffscreenCanvas", class {
+      width: number;
+      height: number;
+      constructor(width: number, height: number) {
+        this.width = width;
+        this.height = height;
+      }
+      getContext() {
+        return { drawImage: vi.fn() };
+      }
+      async convertToBlob(opts?: { type?: string }) {
+        const mime = opts?.type || "image/webp";
+        return new Blob([new Uint8Array(1024)], { type: mime });
+      }
+    });
+  };
+
+  it("does not reject oversized raw camera photos or HEIC in intakeFiles before uploadDraftImage compresses them", async () => {
+    enableRemotePwa();
+    mockBrowserCompression();
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({
+      path: "/private/attachments/compressed.webp",
+      mime: "image/webp",
+      bytes: 1024,
+    }), { status: 201, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const draftId = "bot:test:oversized-pwa";
+    restoreComposerDraft(draftId, { text: "", attachments: [] });
+    try {
+      const hugeCameraPhoto = new File([new Uint8Array(32)], "IMG_5000.jpg", { type: "image/jpeg" });
+      Object.defineProperty(hugeCameraPhoto, "size", { value: IMAGE_MAX_BYTES + 2 * 1024 * 1024 });
+      const heicPhoto = new File([new Uint8Array(32)], "IMG_5001.HEIC", { type: "" });
+      const out = await intakeFiles([hugeCameraPhoto, heicPhoto], {
+        allowImages: true,
+        getPath: () => "",
+        uploadImage: (file) => uploadDraftImage(draftId, file),
+        imageSlots: 10,
+        imageBytes: IMAGE_MAX_BYTES,
+      });
+      expect(out.problems).toEqual([]);
+      expect(out.notice).toBeNull();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      for (const [, init] of fetchMock.mock.calls) {
+        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer tok-pwa");
+        expect(new Headers(init?.headers).get("content-type")).toBe("image/webp");
+      }
+      const saved = getDraftAttachments(undefined, draftId);
+      expect(saved).toHaveLength(2);
+      expect(saved[0]).toMatchObject({ kind: "image", mime: "image/webp", name: "IMG_5000.webp" });
+      expect(saved[1]).toMatchObject({ kind: "image", mime: "image/webp", name: "IMG_5001.webp" });
+    } finally {
+      restoreComposerDraft(draftId, { text: "", attachments: [] });
+      setActivePwaAuth(null);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("falls back cleanly to compressed outbox queue when online upload fails transiently", async () => {
+    enableRemotePwa();
+    mockBrowserCompression();
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: "offline", code: "mac_offline" }), {
+      status: 503,
+      headers: { "content-type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const draftId = "bot:test:transient-fallback";
+    restoreComposerDraft(draftId, { text: "", attachments: [] });
+    try {
+      const mobilePhoto = new File([new Uint8Array(32)], "IMG_6000.jpg", { type: "image/jpeg" });
+      Object.defineProperty(mobilePhoto, "size", { value: 3 * 1024 * 1024 });
+      await uploadDraftImage(draftId, mobilePhoto);
+      const saved = getDraftAttachments(undefined, draftId);
+      expect(saved).toHaveLength(1);
+      expect(saved[0]).toMatchObject({
+        kind: "image",
+        path: "",
+        mime: "image/webp",
+        name: "IMG_6000.webp",
+        uploadId: expect.any(String),
+        compressedBlob: expect.any(Blob),
+      });
+    } finally {
+      restoreComposerDraft(draftId, { text: "", attachments: [] });
+      setActivePwaAuth(null);
+      vi.unstubAllGlobals();
+    }
   });
 });
 
