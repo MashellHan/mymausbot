@@ -514,7 +514,7 @@ function compareWindows(current: LocalUsageWindow, previous: LocalUsageWindow,
     const scope = currentScope === previousScope ? currentScope : "unknown";
     const historyQualified = scope === "exact" || (scope === "local-ref" &&
       (current.days === 1 || current.days === 7 && comparisonDailyIsHistory));
-    const comparable = complete && historyQualified && scope !== "unknown";
+    const comparable = complete && historyQualified;
     comparableCategoryScopes[key] = comparable ? scope : "unknown";
     categories[key] = {
       prs: complete ? weekChange(current.categories[key].prs, previous.categories[key].prs) : null,
