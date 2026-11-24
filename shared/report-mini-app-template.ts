@@ -8,7 +8,7 @@ const HTML = String.raw`<!DOCTYPE html>
   <title>Report</title>
   <meta name="description" content="Selected report updates with recorded sources and coverage.">
   <style>
-    /* Hallmark · v2.0.0 · shape: app screen · genre: editorial · direction: user reference blue · redesign: full */
+    /* Hallmark · v3.0.0 · shape: app screen · genre: editorial · direction: user reference blue · redesign: full */
     /* Hallmark · pre-emit critique: P4 H4 E4 S4 R5 V4 · weakest: execution; keep source URLs usable without a host link grant */
     :root {
       color-scheme: light dark;
@@ -32,10 +32,10 @@ const HTML = String.raw`<!DOCTYPE html>
     * { box-sizing: border-box; }
     html, body { overflow-x: clip; }
     body { margin: 0; }
-    button, select { font: inherit; color: inherit; }
+    button, input, select { font: inherit; color: inherit; }
     button { cursor: pointer; }
     button:disabled { cursor: default; color: var(--report-muted); background: var(--report-surface); border-color: var(--report-line); }
-    button:focus-visible, select:focus-visible { outline: 2px solid var(--report-ring); outline-offset: 2px; }
+    button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--report-ring); outline-offset: 2px; }
     #report:focus-visible { outline: 2px solid var(--report-ring); outline-offset: 2px; }
     ::selection { background: var(--report-blue-soft); color: var(--report-ink); }
     main { max-width: 980px; min-height: 100%; margin: 0 auto; padding: 20px 24px 40px; }
@@ -51,11 +51,15 @@ const HTML = String.raw`<!DOCTYPE html>
     .purpose { margin-top: 4px; max-width: 70ch; color: var(--report-muted); }
     .controls { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 8px 16px; margin-top: 16px; }
     .selector { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
-    .selector label { display: grid; gap: 4px; min-width: 0; color: var(--report-muted); font-size: 12px; }
+    .selector label, .filter-field { display: grid; gap: 4px; min-width: 0; color: var(--report-muted); font-size: 12px; }
     .selector select { min-width: 138px; max-width: 100%; border: 1px solid var(--report-line); border-radius: 8px; background: var(--report-paper); padding: 4px 8px; font-size: 13px; }
+    .filter-field { flex: 1 1 220px; max-width: 340px; }
+    .filter-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .filter-row input { min-width: 0; width: 100%; min-height: 33px; border: 1px solid var(--report-line); border-radius: 8px; background: var(--report-paper); padding: 4px 10px; font-size: 13px; color: var(--report-ink); }
+    .filter-row input::placeholder { color: var(--report-muted); }
     .button { min-height: 33px; border: 1px solid var(--report-line); border-radius: 8px; background: var(--report-surface); padding: 4px 8px; }
     .button:hover:not(:disabled), .button:active:not(:disabled) { background: var(--report-blue-soft); }
-    .selector .button { background: transparent; }
+    .selector .button, .filter-row .button { background: transparent; }
     .notice { margin-top: 12px; border-radius: 8px; background: var(--report-warn-surface); padding: 8px 12px; color: var(--report-warn); }
     .notice[data-kind="error"] { background: var(--report-error-surface); color: var(--report-error); }
     .overview { padding: 20px 0 20px; border-bottom: 1px solid var(--report-line); }
@@ -69,6 +73,8 @@ const HTML = String.raw`<!DOCTYPE html>
     .coverage-note { max-width: 72ch; margin-top: 4px; color: var(--report-muted); font-size: 12px; }
     .reading-layout { display: grid; grid-template-columns: minmax(0, 290px) minmax(0, 1fr); align-items: start; gap: 24px; margin-top: 24px; }
     .index { position: sticky; top: 12px; min-width: 0; max-height: calc(100vh - 24px); overflow-y: auto; padding-right: 16px; border-right: 1px solid var(--report-line); }
+    .index-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+    .index-count { color: var(--report-muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
     .index ol { list-style: none; margin: 12px 0 0; padding: 0; }
     .index li + li { border-top: 1px solid var(--report-line); }
     .index-button { display: grid; grid-template-columns: 31px minmax(0, 1fr); align-items: start; gap: 8px; width: 100%; border: 0; border-radius: 8px; background: transparent; padding: 8px 8px; text-align: left; }
@@ -97,6 +103,7 @@ const HTML = String.raw`<!DOCTYPE html>
     .source-action:disabled { background: transparent; color: var(--report-muted); text-decoration: none; }
     .source-date { margin-top: 4px; color: var(--report-muted); font-size: 12px; }
     .empty { margin-top: 20px; border-radius: 10px; background: var(--report-surface); padding: 12px 16px; color: var(--report-muted); }
+    .empty-filter { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-top: 20px; border-radius: 10px; background: var(--report-surface); padding: 12px 16px; color: var(--report-muted); }
     .overview + section { margin-top: 24px; }
     @media (max-width: 720px) {
       .reading-layout { grid-template-columns: minmax(0, 1fr); gap: 20px; }
@@ -107,10 +114,11 @@ const HTML = String.raw`<!DOCTYPE html>
     @media (max-width: 490px) {
       main { padding: 16px 16px 28px; }
       h1 { font-size: 20px; }
-      .controls { flex-wrap: nowrap; align-items: end; }
-      .selector { flex: 1; min-width: 0; }
+      .controls { flex-wrap: wrap; align-items: end; }
+      .selector { flex: 1 1 100%; min-width: 0; }
       .selector label { flex: 1; }
       .selector select { width: 100%; }
+      .filter-field { flex: 1 1 auto; max-width: none; }
       .controls > #refresh { flex: 0 0 auto; }
       .index ol { grid-template-columns: minmax(0, 1fr); }
       .edition-facts { grid-template-columns: minmax(0, 1fr); }
@@ -128,6 +136,8 @@ const HTML = String.raw`<!DOCTYPE html>
         <div id="selector" class="selector" hidden><label><span id="edition-label">Earlier editions</span><select id="edition"></select></label>
           <button id="return-current" class="button" type="button" hidden>Return to current</button>
           <button id="more" class="button" type="button" hidden>More editions</button></div>
+        <label id="filter-box" class="filter-field" hidden><span id="filter-label">Filter edition</span>
+          <span class="filter-row"><input id="filter" type="text" autocomplete="off" spellcheck="false" placeholder="Filter title, summary or source"><button id="filter-clear" class="button" type="button" hidden>Clear</button></span></label>
         <button id="refresh" class="button" type="button">Refresh</button>
       </div>
       <p id="notice" class="notice" role="status" hidden></p>
@@ -140,11 +150,12 @@ const HTML = String.raw`<!DOCTYPE html>
       const kind = "__REPORT_KIND__";
       const $ = (id) => document.getElementById(id);
       const sdk = window.mausApp;
-      const state = { selected: "current", committedSelection: "current", selectedItemIndex: null, current: null, edition: null, history: [], items: [], nextCursor: null, revision: null, loaded: false, busy: false, pending: false, run: 0 };
+      const state = { selected: "current", committedSelection: "current", selectedItemIndex: null, filterQuery: "", current: null, edition: null, history: [], items: [], nextCursor: null, revision: null, loaded: false, busy: false, pending: false, run: 0 };
       const labels = {
         en: {
           xTitle: "Daily X AI digest", xPurpose: "Selected X AI updates with source and coverage notes.", githubTitle: "Github Rending", githubPurpose: "Selected open-source projects and observed activity signals.",
           refresh: "Refresh", current: "Current", earlier: "Earlier editions", returnCurrent: "Return to current", more: "More editions", loading: "Loading report…", checking: "Checking for new editions…",
+          filterLabel: "Filter edition", filterPlaceholder: "Filter title, summary or source", filterClear: "Clear", noFilterMatch: "No matching items in this edition.", resetFilter: "Clear filter",
           noEdition: "No report published yet. The first edition will appear after this Automation publishes one.", selectedUnavailable: "This edition is unavailable. Return to current or choose another edition.", noItems: "No noteworthy items in this verified edition.", noVerifiedItems: "No verified items in this partial edition.", noVerifiedUnknown: "No verified items are available for this edition.",
           unavailable: "Report unavailable. Try Refresh.", stale: "Showing the last loaded edition. Data could not be refreshed; try Refresh.", changed: "Data changed while this report was being read. Try Refresh.",
           issueDate: "Issue date", coverage: "Coverage window", coverageUnavailable: "Coverage window unavailable", sourcesAsOf: "Sources as of (report)", published: "Report published", dateUnavailable: "Date unavailable",
@@ -156,6 +167,7 @@ const HTML = String.raw`<!DOCTYPE html>
         zh: {
           xTitle: "每日 X AI 摘要", xPurpose: "精选 X AI 动态，并标明来源与覆盖限制。", githubTitle: "Github Rending", githubPurpose: "精选开源项目及已记录的活跃信号。",
           refresh: "刷新", current: "当前版本", earlier: "过往版本", returnCurrent: "返回当前版本", more: "更多版本", loading: "正在读取报告…", checking: "正在检查新版本…",
+          filterLabel: "筛选本期条目", filterPlaceholder: "搜索标题、摘要或来源", filterClear: "清除", noFilterMatch: "此版本中没有符合筛选条件的条目。", resetFilter: "清除筛选",
           noEdition: "尚无已发布的报告。该自动化首次发布后，版本才会出现在这里。", selectedUnavailable: "此版本暂不可用。请返回当前版本或选择其他版本。", noItems: "此已核实版本没有值得报告的条目。", noVerifiedItems: "此部分覆盖版本没有已核实的条目。", noVerifiedUnknown: "此版本暂无可确认的条目。",
           unavailable: "报告暂不可用，请重试刷新。", stale: "正在显示上次读取的版本；数据刷新失败，请重试。", changed: "读取时 Data 已变化，请重试刷新。",
           issueDate: "期次日期", coverage: "覆盖时间", coverageUnavailable: "覆盖时间范围未知", sourcesAsOf: "来源截至时间（整期）", published: "报告发布时间", dateUnavailable: "日期未知",
@@ -265,8 +277,16 @@ const HTML = String.raw`<!DOCTYPE html>
         if (source.children.length > 1) content.append(source);
         return content;
       }
-      function updateSelectedItem() {
-        const item = state.items.find((entry) => String(entry.itemIndex) === state.selectedItemIndex) || state.items[0];
+      function normalizedFilter() { return state.filterQuery.trim().toLowerCase(); }
+      function matchingItems() {
+        const needle = normalizedFilter();
+        if (!needle) return state.items;
+        return state.items.filter((entry) => [entry.title, entry.summary, entry.sourceLabel, entry.sourceUrl, entry.repoFullName]
+          .some((field) => field && String(field).toLowerCase().includes(needle)));
+      }
+      function updateSelectedItem(visible) {
+        const items = visible || matchingItems();
+        const item = items.find((entry) => String(entry.itemIndex) === state.selectedItemIndex) || items[0];
         if (!item) return;
         state.selectedItemIndex = String(item.itemIndex);
         for (const button of $("report").querySelectorAll("[data-report-index]"))
@@ -280,7 +300,14 @@ const HTML = String.raw`<!DOCTYPE html>
         const action = focused.action && state.selectedItemIndex === focused.itemIndex
           ? [...area.querySelectorAll("[data-report-action]")].find((button) => button.dataset.reportAction === focused.action) : null;
         (action || sameItem || index.find((button) => button.getAttribute("aria-pressed") === "true")
+          || (!$("filter-box").hidden ? $("filter") : null)
           || (!$("selector").hidden ? $("edition") : area))?.focus({ preventScroll: true });
+      }
+      function clearFilter(focusInput) {
+        state.filterQuery = "";
+        if ($("filter").value) $("filter").value = "";
+        render();
+        if (focusInput && !$("filter-box").hidden) $("filter").focus({ preventScroll: true });
       }
       function render() {
         $("title").textContent = word(kind === "x_ai_digest" ? "xTitle" : "githubTitle");
@@ -290,11 +317,18 @@ const HTML = String.raw`<!DOCTYPE html>
         $("edition-label").textContent = word("earlier");
         $("return-current").textContent = word("returnCurrent");
         $("more").textContent = word("more");
+        $("filter-label").textContent = word("filterLabel");
+        $("filter").placeholder = word("filterPlaceholder");
+        $("filter-clear").textContent = word("filterClear");
         const current = state.current;
         const selected = state.edition;
+        const ready = state.selected === state.committedSelection && Boolean(selected);
         $("selector").hidden = !current;
         $("return-current").hidden = state.selected === "current";
         $("more").hidden = !state.nextCursor;
+        $("filter-box").hidden = !ready || state.items.length === 0;
+        if ($("filter").value !== state.filterQuery) $("filter").value = state.filterQuery;
+        $("filter-clear").hidden = state.filterQuery.length === 0;
         const menu = $("edition");
         const option = (label, value) => { const result = node("option", "", label); result.value = value; return result; };
         const options = [option(word("current"), "current")];
@@ -309,7 +343,7 @@ const HTML = String.raw`<!DOCTYPE html>
         const focused = area.contains(active) ? { itemIndex: active.dataset?.reportItemIndex || active.dataset?.reportIndex || state.selectedItemIndex,
           action: active.dataset?.reportAction || null } : null;
         const scroll = document.scrollingElement?.scrollTop ?? 0;
-        if (state.selected !== state.committedSelection || !selected) {
+        if (!ready) {
           $("issue-day").textContent = "";
           const message = state.selected !== state.committedSelection || !state.loaded ? "loading" : state.selected === "current" ? "noEdition" : "selectedUnavailable";
           area.replaceChildren(node("p", "empty", word(message)));
@@ -330,18 +364,34 @@ const HTML = String.raw`<!DOCTYPE html>
         coverage.dataset.status = status;
         overview.append(coverage);
         if (selected.coverageNote) overview.append(node("p", "coverage-note", selected.coverageNote));
+        const visible = matchingItems();
+        const heading = word(kind === "x_ai_digest" ? "selected" : "projects");
         if (state.items.length === 0) {
           const emptySection = node("section");
-          emptySection.append(node("h2", "", word(kind === "x_ai_digest" ? "selected" : "projects")),
+          emptySection.append(node("h2", "", heading),
             node("p", "empty", word(status === "complete" ? "noItems" : status === "partial" ? "noVerifiedItems" : "noVerifiedUnknown")));
+          area.replaceChildren(overview, emptySection);
+        } else if (visible.length === 0) {
+          const emptySection = node("section");
+          emptySection.append(node("h2", "", heading));
+          const box = node("div", "empty-filter");
+          const reset = node("button", "button", word("resetFilter"));
+          reset.type = "button";
+          reset.dataset.reportAction = "reset-filter";
+          reset.addEventListener("click", () => clearFilter(true));
+          box.append(node("p", "", word("noFilterMatch")), reset);
+          emptySection.append(box);
           area.replaceChildren(overview, emptySection);
         } else {
           const layout = node("div", "reading-layout");
           const index = node("nav", "index");
-          index.setAttribute("aria-label", word(kind === "x_ai_digest" ? "selected" : "projects"));
-          index.append(node("h2", "", word(kind === "x_ai_digest" ? "selected" : "projects")));
+          index.setAttribute("aria-label", heading);
+          const indexHead = node("div", "index-head");
+          indexHead.append(node("h2", "", heading));
+          if (normalizedFilter()) indexHead.append(node("span", "index-count", visible.length + " / " + state.items.length));
+          index.append(indexHead);
           const list = node("ol");
-          for (const item of state.items) {
+          for (const item of visible) {
             const entry = node("li");
             const button = node("button", "index-button");
             button.type = "button";
@@ -357,7 +407,7 @@ const HTML = String.raw`<!DOCTYPE html>
             button.append(node("span", "index-number", String(item.itemIndex).padStart(2, "0")), copy);
             button.addEventListener("click", (event) => {
               state.selectedItemIndex = String(item.itemIndex);
-              updateSelectedItem();
+              updateSelectedItem(visible);
               if (event.detail > 0 && matchMedia("(max-width: 720px)").matches)
                 $("selected-detail").scrollIntoView?.({ block: "start" });
             });
@@ -369,7 +419,7 @@ const HTML = String.raw`<!DOCTYPE html>
           detail.id = "selected-detail";
           layout.append(index, detail);
           area.replaceChildren(overview, layout);
-          updateSelectedItem();
+          updateSelectedItem(visible);
         }
         restoreReportFocus(focused, area);
         if (document.scrollingElement) document.scrollingElement.scrollTop = scroll;
@@ -399,6 +449,7 @@ const HTML = String.raw`<!DOCTYPE html>
           if (run !== state.run || !result) return;
           const previousKey = state.edition?.editionKey;
           Object.assign(state, result, { loaded: true, committedSelection: state.selected });
+          if (previousKey !== result.edition?.editionKey) state.filterQuery = "";
           if (previousKey !== result.edition?.editionKey || !result.items.some((item) => String(item.itemIndex) === state.selectedItemIndex))
             state.selectedItemIndex = result.items[0] ? String(result.items[0].itemIndex) : null;
           render();
@@ -419,6 +470,9 @@ const HTML = String.raw`<!DOCTYPE html>
       }
       $("edition").addEventListener("change", (event) => { state.selected = event.target.value; if (document.scrollingElement) document.scrollingElement.scrollTop = 0; render(); void refresh(); });
       $("return-current").addEventListener("click", () => { state.selected = "current"; if (document.scrollingElement) document.scrollingElement.scrollTop = 0; render(); void refresh(); });
+      $("filter").addEventListener("input", (event) => { state.filterQuery = event.target.value; render(); });
+      $("filter").addEventListener("keydown", (event) => { if (event.key === "Escape" && state.filterQuery) { event.preventDefault(); clearFilter(true); } });
+      $("filter-clear").addEventListener("click", () => clearFilter(true));
       $("refresh").addEventListener("click", () => { void refresh(); });
       $("more").addEventListener("click", async () => {
         if (!state.nextCursor || state.busy || state.revision === null) return;

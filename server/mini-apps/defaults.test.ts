@@ -273,10 +273,10 @@ it("preserves custom pages and query edits, and only updates a removed app when 
 
 it("upgrades bundled report pages without changing their retained editions or publisher grants", async () => {
   const hashes = {
-    x_ai_digest: { previous: "01072481dd6d85afb991ca835c153f401f1a59a5844eb502dd4bd9ee69194523",
-      current: "c13dd3fa12979df58d3b6679f6a6496628c643a30a02b7119d376804324e5651" },
-    github_activity: { previous: "8d80cef615e76ccb5a8a65861c5f966a69ff430a1ad5718924aa03d1712f8cc7",
-      current: "963f24b2e95a62e725e605365ca081cb4b19a8dad6a126d137d2871cdc53d0f7" },
+    x_ai_digest: { previous: "c13dd3fa12979df58d3b6679f6a6496628c643a30a02b7119d376804324e5651",
+      current: "f8775735bfcb4db359a3e5cd0727f740cd304311131bc54428d9a4a58dac063b" },
+    github_activity: { previous: "963f24b2e95a62e725e605365ca081cb4b19a8dad6a126d137d2871cdc53d0f7",
+      current: "c9a2dd8c9f954e3191089ee4f76876dc387a29c1bbb84bd38c6fccbc53b77199" },
   };
   for (const kind of ["x_ai_digest", "github_activity"] as const) {
     expect(SHIPPED_TEMPLATE_SHA256[kind]).toContain(hashes[kind].previous);

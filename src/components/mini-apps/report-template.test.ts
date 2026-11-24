@@ -313,3 +313,108 @@ it("keeps a known coverage bound and does not call an unknown empty edition part
   expect(app.text()).toContain("No verified items are available for this edition.");
   expect(app.text()).not.toContain("this partial edition");
 });
+
+it("filters items in the selected edition by title, summary and source while keeping selection, history and focus intact", async () => {
+  const current = header("2026-11-06");
+  const older = header("2026-11-05");
+  const app = fixture("x_ai_digest", {
+    current,
+    editions: [
+      {
+        header: current,
+        items: [
+          item({ itemIndex: 1, title: "Alpha launch", summary: "First release note", sourceLabel: "Official Blog", sourceUrl: "https://blog.example.org/alpha" }),
+          item({ itemIndex: 2, title: "Beta update", summary: "Model benchmark details", sourceLabel: "Research Lab", sourceUrl: "https://lab.example.org/beta" }),
+          item({ itemIndex: 3, title: "Gamma note", summary: "Community roundup", sourceLabel: "Daily Digest", sourceUrl: "https://digest.example.org/gamma" }),
+        ],
+      },
+      {
+        header: older,
+        items: [item({ itemIndex: 1, title: "Older edition item", summary: "Kept in history", sourceLabel: "Archive" })],
+      },
+    ],
+  });
+  opened.push(app.view);
+  await app.view.happyDOM.whenAsyncComplete();
+
+  const filter = app.view.document.getElementById("filter") as unknown as HTMLInputElement;
+  const clear = app.view.document.getElementById("filter-clear") as unknown as HTMLButtonElement;
+  expect(clear.hidden).toBe(true);
+
+  const type = (value: string) => {
+    filter.value = value;
+    filter.dispatchEvent(new app.view.Event("input") as unknown as Event);
+  };
+
+  filter.focus();
+  type("benchmark");
+  expect(clear.hidden).toBe(false);
+  expect(app.view.document.activeElement).toBe(filter);
+  expect([...app.view.document.querySelectorAll("[data-report-index]")].map((node) => node.getAttribute("data-report-index"))).toEqual(["2"]);
+  expect(app.view.document.querySelector(".index-count")?.textContent).toBe("1 / 3");
+  expect(app.view.document.getElementById("selected-detail")?.textContent).toContain("Beta update");
+
+  type("digest.example.org");
+  expect([...app.view.document.querySelectorAll("[data-report-index]")].map((node) => node.getAttribute("data-report-index"))).toEqual(["3"]);
+  expect(app.view.document.getElementById("selected-detail")?.textContent).toContain("Gamma note");
+
+  app.data.revision++;
+  app.changed();
+  await app.view.happyDOM.whenAsyncComplete();
+  expect(filter.value).toBe("digest.example.org");
+  expect([...app.view.document.querySelectorAll("[data-report-index]")].map((node) => node.getAttribute("data-report-index"))).toEqual(["3"]);
+
+  type("nomatch-keyword");
+  expect(app.view.document.querySelectorAll("[data-report-index]")).toHaveLength(0);
+  expect(app.text()).toContain("No matching items in this edition.");
+  expect(app.text()).not.toContain("No noteworthy items in this verified edition.");
+  const emptyReset = app.view.document.querySelector('[data-report-action="reset-filter"]') as unknown as HTMLButtonElement;
+  expect(emptyReset).not.toBeNull();
+  emptyReset.click();
+  expect(filter.value).toBe("");
+  expect(clear.hidden).toBe(true);
+  expect(app.view.document.activeElement).toBe(filter);
+  expect(app.view.document.querySelectorAll("[data-report-index]")).toHaveLength(3);
+
+  type("Alpha");
+  filter.dispatchEvent(new app.view.KeyboardEvent("keydown", { key: "Escape" }) as unknown as Event);
+  expect(filter.value).toBe("");
+  expect(app.view.document.querySelectorAll("[data-report-index]")).toHaveLength(3);
+
+  type("Beta");
+  const select = app.view.document.getElementById("edition") as unknown as HTMLSelectElement;
+  select.value = "2026-11-05";
+  select.dispatchEvent(new app.view.Event("change") as unknown as Event);
+  await app.view.happyDOM.whenAsyncComplete();
+  expect(filter.value).toBe("");
+  expect(app.text()).toContain("Older edition item");
+});
+
+it("matches GitHub repository names and updates filter copy for Chinese locale", async () => {
+  const current = header("2026-11-06");
+  const app = fixture("github_activity", {
+    current,
+    editions: [{
+      header: current,
+      items: [
+        item({ itemIndex: 1, title: "Fast runner", repoFullName: "acme/fast-runner", sourceLabel: "GitHub" }),
+        item({ itemIndex: 2, title: "Quiet tool", repoFullName: "other/quiet-tool", sourceLabel: "GitHub" }),
+      ],
+    }],
+  });
+  opened.push(app.view);
+  await app.view.happyDOM.whenAsyncComplete();
+
+  app.view.document.documentElement.lang = "zh-CN";
+  await app.view.happyDOM.whenAsyncComplete();
+  expect(app.view.document.getElementById("filter-label")?.textContent).toBe("筛选本期条目");
+  expect(app.view.document.getElementById("filter-clear")?.textContent).toBe("清除");
+
+  const filter = app.view.document.getElementById("filter") as unknown as HTMLInputElement;
+  filter.value = "acme/fast";
+  filter.dispatchEvent(new app.view.Event("input") as unknown as Event);
+  expect([...app.view.document.querySelectorAll("[data-report-index]")].map((node) => node.getAttribute("data-report-index"))).toEqual(["1"]);
+  filter.value = "missing-repo";
+  filter.dispatchEvent(new app.view.Event("input") as unknown as Event);
+  expect(app.text()).toContain("此版本中没有符合筛选条件的条目。");
+});
