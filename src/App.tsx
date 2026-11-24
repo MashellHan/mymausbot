@@ -164,7 +164,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   const [computerPanelWidth, setComputerPanelWidth] = useState(COMPUTER_PANEL_DEFAULT_WIDTH);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const previousViewRef = useRef(state.activeView);
-  const calendarOriginRef = useRef<"chat" | "team-map" | "web-panel">("chat");
+  const calendarOriginRef = useRef<"chat" | "web-panel">("chat");
   const loading = loadingLine({ connected: state.connected, hydrated: state.hydrated === true, developer: import.meta.env.DEV });
   const group = state.groups.find((g) => g.id === state.selectedId);
   const chiefStep = useChiefStepOpen();
@@ -257,7 +257,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
 
   useEffect(() => {
     if (state.activeView === "routines" && previousViewRef.current !== "routines") {
-      calendarOriginRef.current = previousViewRef.current === "team-map" || previousViewRef.current === "web-panel" ? previousViewRef.current : "chat";
+      calendarOriginRef.current = previousViewRef.current === "web-panel" ? "web-panel" : "chat";
     }
     previousViewRef.current = state.activeView;
   }, [state.activeView]);
@@ -284,10 +284,6 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   };
 
   const closeCalendar = useCallback(() => {
-    if (calendarOriginRef.current === "team-map") {
-      dispatch({ type: "showTeamMap" });
-      return;
-    }
     if (calendarOriginRef.current === "web-panel" && state.webPanelId) {
       dispatch({ type: "showWebPanel", id: state.webPanelId });
       return;

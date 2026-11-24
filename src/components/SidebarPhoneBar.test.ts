@@ -7,6 +7,9 @@ const fixture = vi.hoisted(() => {
   vi.stubGlobal("window", {});
   return {
     items: [] as SidebarMenuItem[],
+    activeView: "chat" as string,
+    pluginsOpen: false,
+    filesReady: false,
     dispatch: vi.fn(),
   };
 });
@@ -14,7 +17,15 @@ const fixture = vi.hoisted(() => {
 vi.mock("@/state/store", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/state/store")>()),
   useStore: () => ({
-    state: { activeView: "chat", routines: [], webhooks: [], bots: [], routineRuns: [], pluginsOpen: false, config: null },
+    state: {
+      activeView: fixture.activeView,
+      routines: [],
+      webhooks: [],
+      bots: [],
+      routineRuns: [],
+      pluginsOpen: fixture.pluginsOpen,
+      config: null,
+    },
     dispatch: fixture.dispatch,
   }),
 }));
@@ -22,7 +33,7 @@ vi.mock("./CloudRoomCard", () => ({ CloudRoomCard: () => null }));
 vi.mock("./CloudUsageMeter", () => ({ CloudUsageCard: () => null }));
 vi.mock("./SidebarFooterNav", () => ({ useAutomationsNeedYou: () => false }));
 vi.mock("./UpdateIndicator", () => ({ UpdateIndicator: () => null }));
-vi.mock("@/lib/cloud-files", () => ({ useCloudFilesReady: () => false }));
+vi.mock("@/lib/cloud-files", () => ({ useCloudFilesReady: () => fixture.filesReady }));
 vi.mock("./SidebarPopoverMenu", () => ({
   SidebarPopoverMenu: (props: { items: SidebarMenuItem[]; renderTrigger: (s: { open: boolean }) => unknown }) => {
     fixture.items = props.items;
@@ -40,6 +51,9 @@ afterAll(() => {
 
 beforeEach(() => {
   fixture.items = [];
+  fixture.activeView = "chat";
+  fixture.pluginsOpen = false;
+  fixture.filesReady = false;
   fixture.dispatch.mockReset();
   setActivePwaAuth(null);
 });
@@ -64,5 +78,39 @@ describe("SidebarPhoneBar", () => {
     });
     renderToStaticMarkup(createElement(SidebarPhoneBar, { query: "", onQuery: () => {} }));
     expect(fixture.items.map((item) => item.key)).toEqual(["automations", "team-map"]);
+  });
+
+  it("calls onOpened on every tool selection, including when already on that view", () => {
+    fixture.filesReady = true;
+    const onOpened = vi.fn();
+    renderToStaticMarkup(createElement(SidebarPhoneBar, { query: "", onQuery: () => {}, onOpened }));
+    expect(fixture.items.map((item) => item.key)).toEqual(["automations", "team-map", "files", "published-apps", "apps"]);
+    for (const item of fixture.items) {
+      item.onSelect();
+    }
+    expect(onOpened).toHaveBeenCalledTimes(5);
+    expect(fixture.dispatch).toHaveBeenNthCalledWith(1, { type: "showRoutines", view: "list" });
+    expect(fixture.dispatch).toHaveBeenNthCalledWith(2, { type: "showTeamMap" });
+    expect(fixture.dispatch).toHaveBeenNthCalledWith(3, { type: "showFiles" });
+    expect(fixture.dispatch).toHaveBeenNthCalledWith(4, { type: "showPublishedApps" });
+    expect(fixture.dispatch).toHaveBeenNthCalledWith(5, { type: "togglePlugins", open: true });
+
+    onOpened.mockClear();
+    fixture.activeView = "routines";
+    renderToStaticMarkup(createElement(SidebarPhoneBar, { query: "", onQuery: () => {}, onOpened }));
+    fixture.items.find((item) => item.key === "automations")!.onSelect();
+    expect(onOpened).toHaveBeenCalledTimes(1);
+
+    onOpened.mockClear();
+    fixture.activeView = "team-map";
+    renderToStaticMarkup(createElement(SidebarPhoneBar, { query: "", onQuery: () => {}, onOpened }));
+    fixture.items.find((item) => item.key === "team-map")!.onSelect();
+    expect(onOpened).toHaveBeenCalledTimes(1);
+
+    onOpened.mockClear();
+    fixture.pluginsOpen = true;
+    renderToStaticMarkup(createElement(SidebarPhoneBar, { query: "", onQuery: () => {}, onOpened }));
+    fixture.items.find((item) => item.key === "apps")!.onSelect();
+    expect(onOpened).toHaveBeenCalledTimes(1);
   });
 });
