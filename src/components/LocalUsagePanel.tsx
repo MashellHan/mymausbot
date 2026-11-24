@@ -2,7 +2,7 @@ import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState 
 import type { LocalUsageCategory, LocalUsageResponse } from "../../shared/local-dashboard";
 import { cn } from "@/lib/cn";
 import { localUsageView, retainUsageSnapshot, type UsageTrendDay, type UsageWindow } from "@/lib/local-usage-view";
-import { tokenTrendStacks, weeklyUsageTrend, type TokenTrendMode, type TokenTrendSeries, type UsageTrendBucket } from "@/lib/local-usage-trends";
+import { tokenTrendStacks, weeklyUsageTrend, type TokenTrendMode, type TokenTrendRow, type TokenTrendSeries, type UsageTrendBucket } from "@/lib/local-usage-trends";
 import { usageTrendRanges, type UsageTrendRange } from "../../shared/local-usage-range";
 import { compactMetricText, metricText, observedCountText, UsageCount, UsageChange, useUsageMetricHint, UsageSourceContext, usageMetrics as metrics, type UsageMetric as Metric } from "./LocalUsageValues";
 import { UsageDailyTable, UsageRepositoryTable, shortUsagePeriods } from "./LocalUsageTables";
@@ -168,10 +168,19 @@ function TrendChart({ days, metric, weekly, range, tokenDays }: { days: UsageTre
   const activeIndex = days.findIndex((day) => day.day === activeDay);
   const active = days[activeIndex];
   const tokenTotal = active?.totalTokens ?? 0;
-  const tokenRows = stack && mode !== "types" && active?.totalTokens != null ? stack.series.flatMap((series, index) => {
-    const amount = stack.points[activeIndex]?.[index];
-    return amount || (series.kind === "agent" && amount === 0) ? [{ series, amount, index }] : [];
-  }).sort((a, b) => b.amount - a.amount) : [];
+  const activePoints = stack?.points[activeIndex];
+  const tokenRows: TokenTrendRow[] = stack?.modelTooltips?.[activeIndex] ?? (mode === "agents" && stack && activePoints
+    ? stack.series.flatMap((series, index) => {
+      const amount = activePoints[index];
+      return amount || (series.kind === "agent" && amount === 0) ? [{ series, amount }] : [];
+    }).sort((a, b) => b.amount - a.amount) : []);
+  const hovered = hoveredSegment?.day === active?.day ? hoveredSegment?.series : undefined;
+  const chartModels = stack?.series.filter((series) => series.kind === "model");
+  const featuredFromOther = hovered?.kind === "other" ? tokenRows.filter(({ series }) =>
+    series.kind === "model" && !chartModels?.some(({ key }) => key === series.key)) : [];
+  const chartOther = stack?.series.findIndex((series) => series.kind === "other") ?? -1;
+  const remainingChartOther = (activePoints?.[chartOther] ?? 0) - featuredFromOther.reduce((total, row) => total + row.amount, 0);
+  const hoveredModelIsGrouped = hovered?.kind === "model" && !tokenRows.some(({ series }) => series.kind === "model" && series.key === hovered.key);
   const teams = new Map<string, { name: string; total: number; members: typeof tokenRows }>();
   for (const row of tokenRows) {
     if (row.series.kind !== "agent") continue;
@@ -181,10 +190,11 @@ function TrendChart({ days, metric, weekly, range, tokenDays }: { days: UsageTre
     teams.set(row.series.teamId, team);
   }
   const partialTeamTotal = active?.tokenStatus !== "ready" || tokenRows.some(({ series }) => series.kind === "unknown");
-  const tokenRow = ({ series, amount, index }: typeof tokenRows[number]) => {
-    const highlighted = hoveredSegment?.day === active?.day
-      && hoveredSegment?.series.kind === series.kind && hoveredSegment.series.key === series.key;
-    return <tr key={index} data-usage-token-row={series.key} data-usage-token-highlighted={highlighted || undefined}
+  const tokenRow = ({ series, amount }: TokenTrendRow) => {
+    const highlighted = series.kind === "other"
+      ? hoveredModelIsGrouped || (hovered?.kind === "other" && remainingChartOther > 0)
+      : (hovered?.kind === series.kind && hovered.key === series.key) || featuredFromOther.some((row) => row.series === series);
+    return <tr key={`${series.kind}:${series.key}`} data-usage-token-row={series.key} data-usage-token-highlighted={highlighted || undefined}
       className={highlighted ? "bg-raised" : undefined}>
       <th scope="row" dir="auto" className={cn("py-0.5 pe-3 text-start align-top font-normal [overflow-wrap:anywhere] text-ink-secondary", series.kind === "agent" && "ps-2")}>{tokenSeriesLabel(series, mode)}</th>
       <td className="whitespace-nowrap py-0.5 pe-3 text-start align-top text-ink">{metricText(amount)}</td>
