@@ -1,6 +1,6 @@
 // Nothing said on the call is logged; the summary line has counters only.
 import { randomUUID } from "node:crypto";
-import { spokenConsent } from "../shared/call-consent.ts";
+import { chineseConsent, spokenConsent } from "../shared/call-consent.ts";
 import {
   LIVE_COPY, liveCardKind, liveStepLabel, spokenApprovalPrompt, spokenConnectorPrompt, spokenQuestionPrompt, spokenReviewPrompt, spokenSecretPrompt, spokenSignInPrompt,
 } from "../shared/live-approval.ts";
@@ -168,6 +168,14 @@ const CLOSE_REASONS: Record<string, LiveEndReason> = {
   remote_hangup: "remote-hangup",
   connection_lost: "connection-lost",
 };
+
+function liveConsent(withoutEcho: string, full: string): "allow" | "deny" | null {
+  const decision = spokenConsent(withoutEcho, "live");
+  if (!decision) return null;
+  const chinese = chineseConsent(withoutEcho);
+  // Chinese has no word boundaries, so a negation or clause lost in the echo span can invert the reply.
+  return chinese && chineseConsent(full) !== chinese ? null : decision;
+}
 
 export class LiveCallController {
   private readonly deps: LiveCallDeps;
@@ -593,7 +601,7 @@ export class LiveCallController {
     if (call.state.status !== "live" || call.goodbye) return;
     const open = call.approval;
     if (!open || open.submitted) return;
-    const decision = spokenConsent(said, "live");
+    const decision = liveConsent(said, heard);
     if (!decision) {
       if (heard.trim()) this.append(call, "instructions", LIVE_COPY.notClear, delegationId);
       return;
@@ -624,7 +632,8 @@ export class LiveCallController {
       call.consentTimer = null;
       if (!call.approval || call.approval.submitted) return;
       const pending = call.transcript.pending({ skipEcho: true });
-      return spokenConsent(pending, "live") ? this.decide(call, pending, call.activeDelegation) : undefined;
+      const full = call.transcript.pending();
+      return liveConsent(pending, full) ? this.decide(call, pending, call.activeDelegation, full) : undefined;
     }, CONSENT_SETTLE_MS);
   }
 

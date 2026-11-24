@@ -224,15 +224,12 @@ applicable integration testing and findings, then assign batched repairs. Do not
 postpone blocking findings or applicable QA holds to preserve the cadence, add
 approval gates, or replay broad unchanged product checks.
 
-Lead assigns each independent PR or coherent batch to an available reviewer
-with the shorter queue: `mausbot-review`, `mausbot-review2` or `mausbot-review3`.
-Record one review owner with the exact source handoff. Any one reviewer's
-acceptance satisfies the independent review requirement; Reviewer3 is an
-alternative owner, never an additional approval gate. Keep correction deltas
-with that owner, or explicitly transfer the existing findings and accepted
-evidence if another reviewer can unblock the work. Do not send an already
-assigned change to multiple reviewers or repeat accepted review merely to
-balance their queues. Historical QA triage remains separate from source review.
+Lead balances developer assignments and review capacity from active work and
+the waiting queues. Dev can request review directly. For unassigned general
+source, choose an available `mausbot-review`, `mausbot-review2` or
+`mausbot-review3` and record one owner with the exact source handoff. Lead
+resolves ownership conflicts and handles transfers with their existing findings
+and evidence. The assigned reviewer's acceptance satisfies source review.
 
 Follow `CONTRIBUTING-FORK.md`. Keep a factual, short project runbook for build
 commands and incident recovery. No secrets in commits, prompts or artifacts.
@@ -248,7 +245,7 @@ citing their new counterparts.
 The user requested commit/PR history. Preserve intermediate meaningful commits;
 do not manufacture commit counts, force-push others' work or bypass checks.
 
-Lead sends compatible ready changes for one focused independent review of the
+Dev sends compatible ready changes for one focused independent review of the
 final integrated diff against current main, with exact head, scope and
 validation. Review may run alongside independent next work. Carry accepted
 unchanged hunks and checks on stable inputs. A composition commit alone does
@@ -266,7 +263,8 @@ only for explicitly held or dependent batches. Creating and pushing reviewable
 PRs is authorized here.
 Never equate a green badge or an idle agent with completed work.
 
-Lead owns disposition of every open PR, including drafts. Inspect the queue at
+Lead owns backlog disposition across all open PRs, including drafts. Each PR
+author tracks review, CI and merge through closeout. Inspect the queue at
 existing handoffs and queue touchpoints. Twelve hours without observed activity
 and twenty-four hours open are advisory scan targets, not closure deadlines.
 Inspect real review/fix/CI progress; status-only comments, labels, empty commits
@@ -292,24 +290,25 @@ source review and CI can start while those checks finish. Do not wait for all
 screenshots or a package to begin source review. Pending acceptance still blocks
 the corresponding delivery. Batch corrections and review only their delta.
 
-1. **Dev hands off ready source.** Send the PR, its current `QA-Handoff` SHA,
-   validation, and open review threads to the assigned Reviewer once. Lead
-   assigns the review owner and recovers failed handoffs. After a
-   requested correction, reply on the original threads and update `QA-Handoff`
-   to the pushed head. In the same turn, send that head directly to the assigned
-   Reviewer for delta review, including PRs held for merge order.
-2. **Reviewer hands off blocking findings.** Post one GitHub review on the
-   reviewed SHA (`COMMENT` for single-account PRs). Send the assigned Dev one
-   direct handoff with the blocking threads in the same turn. Verify each
-   correction before resolving its thread. For a read-only Reviewer, the
-   PR owner or Lead records the returned exact-SHA verdict and routes it.
-3. **Reviewer hands off accepted source.** Record source acceptance on the
-   reviewed SHA. Once all review threads are resolved, enable
-   `gh pr merge --auto --merge` (or merge if required `CI` is already green) for
-   an ordinary PR. For an explicit merge-order hold, send Lead the accepted SHA
-   and current check status once. The PR owner or Lead takes the corresponding
-   action for a read-only verdict. Lead records the actual merge and advances
-   the ordered batch.
+1. **Dev submits the current head.** Send the PR, `QA-Handoff` SHA, validation
+   and open threads directly to the assigned Reviewer. Record the PR in the
+   developer's open-work handoff. After a correction, reply on the original
+   threads, update `QA-Handoff`, and send the pushed head for delta review.
+2. **Reviewer queues and reviews.** Accept requests from Dev or Lead and record
+   the PR, SHA, developer and next action when queued. Post one GitHub review
+   against the reviewed SHA (`COMMENT` for single-account PRs), then send Dev
+   the link and verdict. For a reviewer with read-only tools, the PR author or
+   Lead records the queue and posts the exact verdict. That writer records the
+   link and resolves GitHub threads after the reviewer verifies corrections.
+3. **Assigned Reviewer advances accepted work.** For an ordinary PR with resolved
+   threads and accepted exact head, enable `gh pr merge --auto --merge` or merge
+   when required `CI` is green. The PR author or Lead takes this step for a
+   mirrored read-only verdict. Lead retains upstream merge decisions and
+   merge-order holds. Send Lead the accepted SHA and checks for those cases.
+4. **Dev closes out the PR.** Follow the open PR across assignments until actual
+   merge or explicit disposition. After merge, send Lead the link, merge SHA,
+   outcome, verification and outstanding QA or delivery. Lead registers the
+   summary and advances any ordered batch.
 
 Record delivery and the recipient's observed start separately in the existing
 handoff. The sender may continue independent work after delivery. If delivery
