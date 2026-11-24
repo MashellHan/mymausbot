@@ -297,13 +297,14 @@ the corresponding delivery. Batch corrections and review only their delta.
 2. **Reviewer queues and reviews.** Accept requests from Dev or Lead and record
    the PR, SHA, developer and next action when queued. Post one GitHub review
    against the reviewed SHA (`COMMENT` for single-account PRs), then send Dev
-   the link and verdict. For a read-only reviewer, the PR owner or Lead posts the
-   exact verdict and returns the comment link. Verify fixes before resolving
-   their threads.
-3. **Reviewer or PR owner advances accepted work.** For an ordinary PR with
-   resolved threads and accepted exact head, enable `gh pr merge --auto --merge`
-   or merge when required `CI` is green. For a merge-order hold, send Lead the
-   accepted SHA and current checks. The PR owner or Lead acts on read-only verdicts.
+   the link and verdict. For a reviewer with read-only tools, the PR author or
+   Lead records the queue and posts the exact verdict. That writer records the
+   link and resolves GitHub threads after the reviewer verifies corrections.
+3. **Assigned Reviewer advances accepted work.** For an ordinary PR with resolved
+   threads and accepted exact head, enable `gh pr merge --auto --merge` or merge
+   when required `CI` is green. The PR author or Lead takes this step for a
+   mirrored read-only verdict. Lead retains upstream merge decisions and
+   merge-order holds. Send Lead the accepted SHA and checks for those cases.
 4. **Dev closes out the PR.** Follow the open PR across assignments until actual
    merge or explicit disposition. After merge, send Lead the link, merge SHA,
    outcome, verification and outstanding QA or delivery. Lead registers the

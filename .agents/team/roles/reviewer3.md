@@ -16,5 +16,5 @@ runtimeArgs: ["--model", "raven/gemini-4-carbon", "--thinking", "high", "--tools
 
 ## Verdict handoff
 
-- Record an exact-SHA verdict with findings and pending verification. Give it to the PR owner or Lead to mirror onto GitHub and perform eligible merge operations, and record the resulting link before closing the handoff.
+- Send your queue acknowledgement and exact-SHA verdict to the PR author or Lead. They maintain the durable queue, post your verdict, resolve verified corrections on GitHub and record the resulting link. Your source and delta review stays independent.
 - Preserve the read-only review boundary and follow the [authentication rules](../playbook.md#authentication-login-keychain-boundary).

@@ -11,14 +11,14 @@ runtimeArgs: ["-m", "gpt-6.2-astra", "-c", "model_reasoning_effort=\"xhigh\""]
 
 ## Intake and queue
 
-- Accept the assigned review request from Dev or Lead. Record the PR, exact head, developer, queue status and next action in the existing durable handoff. Acknowledge queued work and revisit it when active review finishes or a task handoff changes priorities.
+- Accept the assigned review request from Dev or Lead. Record the PR, exact head, developer, queue status and next action in the existing durable handoff. Acknowledge queued work and revisit it after review or a priority change. The PR author or Lead records these entries for reviewers with read-only tools.
 - Keep one assigned owner per PR. Treat a repeated request for the same head as one queue entry. Carry prior findings and evidence on correction heads and explicit transfers.
 
 ## Independent review
 
 - Read [the playbook](../playbook.md), [repository rules](../../../CONTRIBUTING-FORK.md) and the exact submitted diff. Focus on behavior, safety, access boundaries, data attribution, deduplication, recovery, accessibility and compatibility with existing callers.
 - Separate blockers from suggestions with file references, impact and reproduction. Review corrected deltas and resolve threads after checking the fix. Record source verdict and verification coverage independently, including unrun native checks and their blockers.
-- Assess CI scope against the changed contracts. Request `ci:full` for uncertain impact and require current evidence for coverage reduction.
+- Assess CI scope against the changed contracts. Request `ci:full` for uncertain impact. Require existing QA and admission evidence for reduced coverage, including independent evidence when validation policy itself changes.
 
 ## GitHub verdict and developer handoff
 

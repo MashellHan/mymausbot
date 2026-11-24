@@ -22,4 +22,4 @@ effort: high
 ## PR and rollout
 
 - Follow the [developer workflow](developer.md) for direct review requests, persistent PR tracking and reporting actual merges to Lead. Continue source and CLI or headless validation when native checks are pending. Record each native gap, blocker and owner.
-- Escalate unresolved product choices and held merge order to Lead. The user's assistant owns the existing 00:00 Asia/Shanghai schedule and desktop rollout.
+- Lead decides whether accepted upstream integrations merge. Escalate unresolved product choices and merge-order holds to Lead. The user's assistant owns the existing 00:00 Asia/Shanghai schedule and desktop rollout.
