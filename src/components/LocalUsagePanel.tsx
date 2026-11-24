@@ -155,7 +155,7 @@ function TrendChart({ days, metric, weekly, range, tokenDays }: { days: UsageTre
   const [mode, setMode] = useState<TokenTrendMode>("models");
   const stack = useMemo(() => tokenDays && tokenTrendStacks(tokenDays, days, mode), [tokenDays, days, mode]);
   const [activeDay, setActiveDay] = useState<string | null>(null);
-  const [hoveredSegment, setHoveredSegment] = useState<{ day: string; series: TokenTrendSeries } | null>(null);
+  const [hoveredSegment, setHoveredSegment] = useState<{ day: string; series: TokenTrendSeries; layout: string | null } | null>(null);
   const [focusDay, setFocusDay] = useState<string | null>(null);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
   const focusedButton = useRef<HTMLButtonElement | null>(null);
@@ -165,6 +165,16 @@ function TrendChart({ days, metric, weekly, range, tokenDays }: { days: UsageTre
   const percent = new Intl.NumberFormat(activeLocale(), { style: "percent", maximumFractionDigits: 1 });
   const values = days.map((day) => trendValue(day, metric));
   const max = Math.max(1, ...values.filter((value): value is number => value !== null));
+  const barHeight = (value: number) => value === 0 ? 0 : Math.max(5, value / max * 100);
+  const stackLayout = (index: number) => {
+    const value = values[index];
+    if (!stack || !value) return null;
+    const segments = stack.series.flatMap(({ kind, key }, seriesIndex) => {
+      const amount = stack.points[index]?.[seriesIndex];
+      return amount ? [[kind, key, amount / value]] : [];
+    });
+    return JSON.stringify([barHeight(value), segments]);
+  };
   const activeIndex = days.findIndex((day) => day.day === activeDay);
   const active = days[activeIndex];
   const tokenTotal = active?.totalTokens ?? 0;
@@ -174,7 +184,8 @@ function TrendChart({ days, metric, weekly, range, tokenDays }: { days: UsageTre
       const amount = activePoints[index];
       return amount || (series.kind === "agent" && amount === 0) ? [{ series, amount }] : [];
     }).sort((a, b) => b.amount - a.amount) : []);
-  const hovered = hoveredSegment?.day === active?.day ? hoveredSegment?.series : undefined;
+  const activeLayout = stackLayout(activeIndex);
+  const hovered = hoveredSegment && hoveredSegment.day === active?.day && hoveredSegment.layout === activeLayout ? hoveredSegment.series : undefined;
   const chartModels = stack?.series.filter((series) => series.kind === "model");
   const featuredFromOther = hovered?.kind === "other" ? tokenRows.filter(({ series }) =>
     series.kind === "model" && !chartModels?.some(({ key }) => key === series.key)) : [];
@@ -207,7 +218,10 @@ function TrendChart({ days, metric, weekly, range, tokenDays }: { days: UsageTre
     setActiveDay(day);
     setHoveredSegment((segment) => segment?.day === day ? segment : null);
   };
-  useLayoutEffect(() => { setHoveredSegment(null); }, [range, stack]);
+  useLayoutEffect(() => { setHoveredSegment(null); }, [range]);
+  useLayoutEffect(() => {
+    if (hoveredSegment && hoveredSegment.layout !== activeLayout) setHoveredSegment(null);
+  }, [activeLayout, hoveredSegment]);
   const rovingDay = days.some((day) => day.day === focusDay) ? focusDay : days[0]?.day;
   const showUnclassified = metric !== "totalTokens" && days.some((day) => (categoryValue(day, metric, "unclassified") ?? 0) > 0);
   useLayoutEffect(() => {
@@ -273,11 +287,11 @@ function TrendChart({ days, metric, weekly, range, tokenDays }: { days: UsageTre
             className="relative flex h-full min-w-0 flex-1 items-end rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60">
             {value === null ? <span aria-hidden="true" className="h-full w-full bg-warning/15" />
               : <span aria-hidden="true" className="flex w-full flex-col-reverse overflow-hidden rounded-t-sm"
-                style={{ height: value === 0 ? 0 : `${Math.max(5, value / max * 100)}%` }}>
+                style={{ height: `${barHeight(value)}%` }}>
                 {stack ? stack.series.map((series, seriesIndex) => {
                   const part = stack.points[index]?.[seriesIndex];
                   return !!part && <span key={`${series.kind}:${series.key}`} data-usage-token-segment={series.key}
-                    onMouseEnter={mode !== "types" ? () => setHoveredSegment({ day: day.day, series }) : undefined}
+                    onMouseEnter={mode !== "types" ? () => setHoveredSegment({ day: day.day, series, layout: stackLayout(index) }) : undefined}
                     onMouseLeave={mode !== "types" ? () => setHoveredSegment(null) : undefined}
                     className={tokenSeriesTone(series, seriesIndex)} style={{ height: `${part / value * 100}%` }} />;
                 })
