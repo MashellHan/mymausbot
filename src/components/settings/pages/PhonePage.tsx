@@ -99,6 +99,10 @@ export function PhonePage() {
     void refreshServerDevices();
   }, [ctx.here, refreshServerDevices]);
 
+  const onSessionsChange = useCallback(() => {
+    void refreshServerDevices();
+  }, [refreshServerDevices]);
+
   async function removeServerDevice(id: string) {
     try {
       await api(`/api/auth/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
@@ -147,9 +151,9 @@ export function PhonePage() {
       ? <PhoneDevicesSection profileEmail={state.config?.profile?.email} focusRequest={!funnel?.checking && !funnelPairs ? focus : 0} simple={!ctx.advanced} placeName={place.name} top={<PairWithCloud />} extraPairedRows={extraPairedRows} extraPairedCount={serverDevices.length} unifiedLayout />
       : <ServerPairingCard funnel={funnel} cloudHome={ctx.cloud} focusRequest={focus} team={state.config?.team?.name} placeName={place.name} simple={!ctx.advanced}
         teamPhoneBlocked={state.config?.managedPolicy?.remoteAccess === false ? t("policy.teamRemoteBlocked", { organization: state.config.managedPolicy.organizationName }) : null} />}
-    {showLocalFunnel && <ServerPairingCard focusRequest={funnelPairs ? focus : 0} funnel={funnel} placeName={place.name} simple={!ctx.advanced} hidePairedList onSessionsChange={() => void refreshServerDevices()} />}
-    {showPwaBridge && <PwaBridgeCard remoteBlocked={remoteBlocked} onInviteChange={() => void refreshServerDevices()} />}
-    {ctx.here && <PhoneComputerAndAdvanced profileEmail={state.config?.profile?.email} simple={!ctx.advanced} onSessionsChange={() => void refreshServerDevices()} />}
+    {showLocalFunnel && <ServerPairingCard focusRequest={funnelPairs ? focus : 0} funnel={funnel} placeName={place.name} simple={!ctx.advanced} hidePairedList onSessionsChange={onSessionsChange} />}
+    {showPwaBridge && <PwaBridgeCard remoteBlocked={remoteBlocked} onInviteChange={onSessionsChange} />}
+    {ctx.here && <PhoneComputerAndAdvanced profileEmail={state.config?.profile?.email} simple={!ctx.advanced} onSessionsChange={onSessionsChange} />}
     <OtherPlaces />
   </>;
 }
