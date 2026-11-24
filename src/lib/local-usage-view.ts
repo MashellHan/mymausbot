@@ -18,6 +18,7 @@ export type UsageWindow = Omit<LocalUsageWindow, "categories" | "repositories"> 
 export type UsageTrendDay = Omit<LocalUsageTrendDay, "categories" | "repositories"> & UsageCounts & { categories: Categories; repositories?: UsageWindow["repositories"] };
 export type UsageRepositoryWindow = Pick<UsageWindow, "startDay" | "endDay" | "repositories"> & { comparison: Pick<UsageWindow["comparison"], "startDay" | "endDay"> };
 const periods = ["1", "7", "30"] as const;
+const categories: LocalUsageCategory[] = ["work", "personal", "unclassified"];
 const shiftDay = (day: string, offset: number) => new Date(Date.parse(`${day}T00:00:00Z`) + offset * 86_400_000).toISOString().slice(0, 10);
 const counts = (value?: LocalUsageMergedCounts | LocalContributionCounts): UsageCounts => ({
   prs: value?.prs ?? null, knownPrs: value?.knownPrs ?? null, commits: value?.commits ?? null,
@@ -171,16 +172,22 @@ export function localUsageView(snapshot: LocalUsageResponse, range: UsageTrendRa
 
 function stripKnownCommitComparison(windows: LocalUsageResponse["windows"]): LocalUsageResponse["windows"] {
   if (!windows) return null;
-  return Object.fromEntries(
-    Object.entries(windows).map(([key, window]) => {
-      if (!window.comparison.known) return [key, window];
-      const { known, ...comparison } = window.comparison;
-      return [key, {
-        ...window,
-        comparison: known.prs === null ? comparison : { ...comparison, known: { ...known, commits: null } },
-      }];
-    }),
-  ) as LocalUsageResponse["windows"];
+  const stripCount = (comparison: LocalUsageCountComparison): LocalUsageCountComparison =>
+    ({ prs: comparison.prs, commits: null });
+  return Object.fromEntries(Object.entries(windows).map(([key, window]) => {
+    const { known, knownCategories, ...comparison } = window.comparison;
+    return [key, {
+      ...window,
+      repositories: { ...window.repositories, rows: window.repositories.rows.map((row) => row.knownComparison
+        ? { ...row, comparison: stripCount(row.comparison), knownComparison: undefined } : row) },
+      comparison: {
+        ...comparison,
+        ...(known && known.prs !== null ? { known: { prs: known.prs, commits: null } } : {}),
+        ...(knownCategories ? { knownCategories: Object.fromEntries(categories.map((category) =>
+          [category, stripCount(knownCategories[category])])) as Record<LocalUsageCategory, LocalUsageCountComparison> } : {}),
+      },
+    }];
+  })) as LocalUsageResponse["windows"];
 }
 
 export function retainUsageSnapshot(previous: LocalUsageResponse | null, next: LocalUsageResponse,
