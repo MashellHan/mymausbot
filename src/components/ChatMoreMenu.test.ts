@@ -266,3 +266,34 @@ describe("sharing the conversation on screen, on a team", () => {
     expect(shareKeys(withSide({ private: true }))).toEqual([]);
   });
 });
+
+describe("ChatMoreMenu in remote PWA mode", () => {
+  it("hides model, computer, activity, and inspector while keeping profile, start-fresh, and export", async () => {
+    const { setActivePwaAuth } = await import("@/lib/pwa-transport");
+    setActivePwaAuth({
+      ownerKey: "https://relay.mxhan.com::env::s1",
+      relayUrl: "https://relay.mxhan.com",
+      token: "omb_sess_1",
+      deviceId: "d1",
+      environmentId: "env",
+      sessionId: "s1",
+      serverName: "Mac",
+      scopes: ["client"],
+      pairedAt: 1,
+    });
+    try {
+      const itemKeys = keys(menuOf(createElement(ChatMoreMenu, { bot, phoneHeader: true })).items);
+      expect(itemKeys).toContain("profile");
+      expect(itemKeys).toContain("find");
+      expect(itemKeys).toContain("start-fresh");
+      expect(itemKeys).toContain("copy");
+      expect(itemKeys).toContain("download");
+      expect(itemKeys).not.toContain("model");
+      expect(itemKeys).not.toContain("computer");
+      expect(itemKeys).not.toContain("activity");
+      expect(itemKeys).not.toContain("inspector");
+    } finally {
+      setActivePwaAuth(null);
+    }
+  });
+});

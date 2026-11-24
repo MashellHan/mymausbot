@@ -238,8 +238,43 @@ describe("Apps beside the profile", () => {
     const html = renderToStaticMarkup(createElement(Capture));
     expect(html).toMatch(/data-tour="nav-apps" data-sidebar-nav="apps"/);
     expect(html).toContain('aria-label="Apps"');
-    (tree.props.onClick as () => void)();
+    (tree!.props.onClick as () => void)();
     expect(fixture.dispatch).toHaveBeenLastCalledWith({ type: "togglePlugins", open: true });
+  });
+});
+
+describe("remote PWA mode filtering", () => {
+  it("hides published-apps and apps in remote PWA mode while keeping automations and team-map", async () => {
+    const { setActivePwaAuth } = await import("@/lib/pwa-transport");
+    setActivePwaAuth({
+      ownerKey: "https://relay.mxhan.com::env::s1",
+      relayUrl: "https://relay.mxhan.com",
+      token: "omb_sess_1",
+      deviceId: "d1",
+      environmentId: "env",
+      sessionId: "s1",
+      serverName: "Mac",
+      scopes: ["client"],
+      pairedAt: 1,
+    });
+    try {
+      fixture.advanced = true;
+      const comfortable = render("comfortable").html;
+      expect(comfortable).toContain('data-sidebar-nav="automations"');
+      expect(comfortable).toContain('data-sidebar-nav="team-map"');
+      expect(comfortable).not.toContain('data-sidebar-nav="published-apps"');
+      expect(comfortable).not.toContain('data-sidebar-nav="apps"');
+
+      const icons = render("icons").html;
+      expect(icons).toContain('data-sidebar-nav="automations"');
+      expect(icons).toContain('data-sidebar-nav="team-map"');
+      expect(icons).not.toContain('data-sidebar-nav="published-apps"');
+      expect(icons).not.toContain('data-sidebar-nav="apps"');
+
+      expect(renderBottom().html).not.toContain('data-sidebar-nav="apps"');
+    } finally {
+      setActivePwaAuth(null);
+    }
   });
 });
 

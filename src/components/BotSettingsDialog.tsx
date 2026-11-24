@@ -24,6 +24,7 @@ import { UsageSection } from "./bot-settings/UsageSection";
 import { VisibilitySection } from "./bot-settings/VisibilitySection";
 import { t } from "@/lib/i18n";
 import { useAdvancedMode } from "@/lib/interface-mode";
+import { isRemotePwaMode } from "@/lib/pwa-transport";
 import { BotPanel } from "./bot-panel/PanelShell";
 import { LibraryTab } from "./bot-panel/LibraryTab";
 import type { SimplePageId } from "./bot-panel/page-registry";
@@ -53,7 +54,9 @@ export function BotSettingsDialog({ bot, overlay = false }: {
   const slackUrl = useSlackManagementUrl(bot.id);
   const ownerOrAdmin = useOwnerOrAdmin();
   const teamName = useTeamName();
+  const remotePwa = isRemotePwaMode();
   const sections = BOT_SECTIONS
+    .filter((entry) => !remotePwa || (entry.id !== "soul" && entry.id !== "memory"))
     .filter((entry) => entry.id !== "slack" || slackUrl !== null)
     .filter((entry) => entry.id !== "visibility" || (!window.ogb && ownerOrAdmin === true && !teamName));
   // Connected apps load only once the person searches; their names find the Access section.
@@ -126,13 +129,13 @@ export function BotSettingsDialog({ bot, overlay = false }: {
           />
         );
       case "soul":
-        return <SoulSection bot={bot} patch={derived.patch} />;
+        return remotePwa ? null : <SoulSection bot={bot} patch={derived.patch} />;
       case "slack":
         return slackUrl ? <SlackSection managementUrl={slackUrl} /> : null;
       case "skills":
         return <SkillsSection bot={bot} />;
       case "memory":
-        return <MemorySection bot={bot} active={!collapsed && section === "memory"} onToggle={(enabled) => derived.patch({ memoryEnabled: enabled })} />;
+        return remotePwa ? null : <MemorySection bot={bot} active={!collapsed && section === "memory"} onToggle={(enabled) => derived.patch({ memoryEnabled: enabled })} />;
       case "library":
         return <LibraryTab bot={bot} onOpen={(page) => dispatch({ type: "toggleSettings", open: true, section: LIBRARY_LINKS[page] ?? "overview" })} />;
       case "routines":

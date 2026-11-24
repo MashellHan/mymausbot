@@ -31,6 +31,7 @@ import { modelMenuKey, modelMenuPointerMove } from "./model-menu-keys";
 import { lockedWhileBusy, offersReasoning, useRefocusAfterPick, variantChoices, variantLabel } from "./model-picker-reasoning";
 import { BusyModelMenu } from "./ModelPickerBusyMenu";
 import { useAdvancedMode } from "@/lib/interface-mode";
+import { isRemotePwaMode } from "@/lib/pwa-transport";
 import { useOwnerOrAdmin } from "@/lib/use-owner-or-admin";
 import { t } from "@/lib/i18n";
 import { COMPACT_SQUARE } from "@/lib/compact-chip";
@@ -163,7 +164,7 @@ export function ModelPicker({
     selectedIsCustom: Boolean(railInstance?.models.options.some((option) => option.id === selection.model && option.custom)) }, () => resetList());
 
   const refreshLocalInstances = useCallback(() => {
-    if (refreshingRef.current) return;
+    if (refreshingRef.current || isRemotePwaMode()) return;
     refreshingRef.current = true;
     setLoadingInstances(true);
     void refreshInstances({ cached: true })
@@ -175,7 +176,7 @@ export function ModelPicker({
   }, [refreshInstances]);
 
   const refreshModels = (instanceId: string | undefined) => {
-    if (refreshingRef.current || !instanceId) return;
+    if (refreshingRef.current || !instanceId || isRemotePwaMode()) return;
     refreshingRef.current = true;
     setRefreshingId(instanceId);
     void refreshInstances()
@@ -189,6 +190,7 @@ export function ModelPicker({
 
   // An engine with no models listed yet, or only a list it never confirmed, is asked for them, then they are shown.
   useEffect(() => {
+    if (isRemotePwaMode()) return;
     if (open || inlineSettings) ((hasOfficialModels || customOnly) && !modelsAwaitEngine(railInstance) ? refreshLocalInstances : () => refreshModels(displayedInstanceId))();
   }, [open, inlineSettings, refreshLocalInstances]);
 
