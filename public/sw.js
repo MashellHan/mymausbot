@@ -1,5 +1,5 @@
 const CACHE_PREFIX = "omb-pwa-shell-";
-const CACHE_NAME = `${CACHE_PREFIX}v2`;
+const CACHE_NAME = `${CACHE_PREFIX}v3`;
 const APP_SHELL_URLS = [
   "/",
   "/manifest.webmanifest",
@@ -8,6 +8,11 @@ const APP_SHELL_URLS = [
   "/app-icon-512.png",
   "/apple-touch-icon.png",
 ];
+
+function isHtmlResponse(response) {
+  const contentType = response && response.headers ? response.headers.get("content-type") || "" : "";
+  return /^\s*(?:text\/html|application\/xhtml\+xml)\b/i.test(contentType);
+}
 
 function isApiOrDynamicPath(pathname) {
   return (
@@ -104,8 +109,14 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       caches.open(CACHE_NAME).then(async (cache) => {
         const cached = await cache.match(request);
-        if (cached) return cached;
+        if (cached && !isHtmlResponse(cached)) return cached;
         const response = await fetch(request);
+        // Cloudflare Pages returns 200 text/html (SPA fallback) for pruned /assets/* hashes;
+        // never cache it under an asset URL and drop any stale cached shell so reload recovers.
+        if (isHtmlResponse(response)) {
+          if (typeof cache.delete === "function") void cache.delete("/");
+          return new Response("", { status: 404, statusText: "Not Found" });
+        }
         if (response && response.ok && response.type === "basic" && !response.redirected) {
           void cache.put(request, response.clone());
         }
@@ -120,7 +131,7 @@ self.addEventListener("fetch", (event) => {
       const cached = await cache.match(request);
       const networkUpdate = fetch(request)
         .then((response) => {
-          if (response && response.ok && response.type === "basic" && !response.redirected) {
+          if (response && response.ok && response.type === "basic" && !response.redirected && !isHtmlResponse(response)) {
             void cache.put(request, response.clone());
           }
           return response;

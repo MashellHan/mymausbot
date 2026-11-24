@@ -316,7 +316,7 @@ describe("pwa-cache", () => {
     expect(shouldRegisterPwaServiceWorker({ protocol: "https:", isDev: false, isElectron: true, serviceWorker: { register } })).toBe(false);
 
     await registerPwaServiceWorker({ protocol: "https:", isDev: false, isElectron: false, serviceWorker: { register } });
-    expect(register).toHaveBeenCalledWith("/sw.js", { scope: "/" });
+    expect(register).toHaveBeenCalledWith("/sw.js", { scope: "/", updateViaCache: "none" });
   });
 
   it("keeps public/sw.js scoped to static shell caches without touching /api/* or IndexedDB", () => {
@@ -329,7 +329,7 @@ describe("pwa-cache", () => {
     expect(OMB_PWA_DB_VERSION).toBe(3);
   });
 
-  it("never caches or serves redirected responses for navigation requests", async () => {
+  it("never caches or serves redirected responses for navigation or HTML fallbacks for /assets/*", async () => {
     const sw = readFileSync(new URL("../../public/sw.js", import.meta.url), "utf8");
     const listeners = new Map<string, (event: any) => void>();
     const cacheEntries = new Map<string, Map<string, Response>>();
@@ -348,6 +348,10 @@ describe("pwa-cache", () => {
           const key = typeof req === "string" ? req : new URL(req.url).pathname;
           return store!.get(key);
         },
+        delete: async (req: string | Request) => {
+          const key = typeof req === "string" ? req : new URL(req.url).pathname;
+          return store!.delete(key);
+        },
       };
     };
     cacheEntries.set("omb-pwa-shell-v1", new Map([["/index.html", new Response("stale")]]));
@@ -356,7 +360,7 @@ describe("pwa-cache", () => {
       const path = typeof input === "string" ? input : new URL(input.url).pathname;
       const res = new Response(`<html>${path}</html>`, { status: 200, headers: { "content-type": "text/html" } });
       Object.defineProperty(res, "type", { value: "basic" });
-      Object.defineProperty(res, "redirected", { value: path !== "/manifest.webmanifest" && path !== "/app-icon.svg" && path !== "/app-icon-192.png" && path !== "/app-icon-512.png" && path !== "/apple-touch-icon.png" && path !== "/" });
+      Object.defineProperty(res, "redirected", { value: path !== "/manifest.webmanifest" && path !== "/app-icon.svg" && path !== "/app-icon-192.png" && path !== "/app-icon-512.png" && path !== "/apple-touch-icon.png" && path !== "/" && !path.startsWith("/assets/") });
       return res;
     });
 
@@ -394,7 +398,7 @@ describe("pwa-cache", () => {
     const precachedPaths = mockFetch.mock.calls.map((call) => String(call[0]));
     expect(precachedPaths).toContain("/");
     expect(precachedPaths).not.toContain("/index.html");
-    expect(cacheEntries.has("omb-pwa-shell-v2")).toBe(true);
+    expect(cacheEntries.has("omb-pwa-shell-v3")).toBe(true);
 
     const activatePromises: Promise<unknown>[] = [];
     listeners.get("activate")!({ waitUntil: (p: Promise<unknown>) => activatePromises.push(p) });
@@ -404,7 +408,7 @@ describe("pwa-cache", () => {
     // Poison cache entry with a redirected Response to verify navigation strips `.redirected`.
     const poisoned = new Response("<html>poisoned</html>", { status: 200 });
     Object.defineProperty(poisoned, "redirected", { value: true });
-    cacheEntries.get("omb-pwa-shell-v2")!.set("/", poisoned);
+    cacheEntries.get("omb-pwa-shell-v3")!.set("/", poisoned);
 
     let navResponsePromise!: Promise<Response>;
     const bgPromises: Promise<unknown>[] = [];
@@ -418,8 +422,20 @@ describe("pwa-cache", () => {
     expect(await navResponse.text()).toBe("<html>poisoned</html>");
     await Promise.all(bgPromises);
 
+    // SPA HTML fallback for a stale /assets/*.js request must return 404, not be cached, and clear cached "/".
+    let staleAssetPromise!: Promise<Response>;
+    listeners.get("fetch")!({
+      request: { method: "GET", mode: "cors", url: "https://mausbot.mxhan.com/assets/App-stale.js" },
+      respondWith: (p: Promise<Response>) => { staleAssetPromise = p; },
+      waitUntil: () => {},
+    });
+    const staleAsset = await staleAssetPromise;
+    expect(staleAsset.status).toBe(404);
+    expect(cacheEntries.get("omb-pwa-shell-v3")!.has("/assets/App-stale.js")).toBe(false);
+    expect(cacheEntries.get("omb-pwa-shell-v3")!.has("/")).toBe(false);
+
     // Cold cache redirected navigation (e.g. /legacy/) must also resolve with redirected === false.
-    cacheEntries.get("omb-pwa-shell-v2")!.delete("/");
+    cacheEntries.get("omb-pwa-shell-v3")!.delete("/");
     let coldNavPromise!: Promise<Response>;
     listeners.get("fetch")!({
       request: { method: "GET", mode: "navigate", url: "https://mausbot.mxhan.com/legacy/" },
