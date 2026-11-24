@@ -1520,6 +1520,64 @@ describe("LiveCallController relay", () => {
         await vi.advanceTimersByTimeAsync(CONSENT_SETTLE_MS + 1);
         expect(t.deps.respond).toHaveBeenCalledWith(expect.objectContaining({ behavior: "allow" }));
       });
+
+      it("keeps English yes working when preceded by echoed voice speech", async () => {
+        const t = await live();
+        t.message(approval());
+        await vi.advanceTimersByTimeAsync(0);
+        speak(t, "May I run it?", 4_000, 5_000);
+        hear(t, "may I run it ", 4_100, 4_900);
+        hear(t, "yes", 5_200, 5_500);
+        await vi.advanceTimersByTimeAsync(CONSENT_SETTLE_MS + 1);
+        expect(t.deps.respond).toHaveBeenCalledWith(expect.objectContaining({ behavior: "allow" }));
+      });
+
+      it("keeps Chinese consent pending across settle and delegation when echo stripping drops a negation", async () => {
+        const t = await live();
+        t.message(approval());
+        await vi.advanceTimersByTimeAsync(0);
+        speak(t, "要执行吗？", 4_000, 6_000);
+        hear(t, "不", 4_500, 4_900);
+        hear(t, "同意", 6_100, 6_500);
+        await vi.advanceTimersByTimeAsync(CONSENT_SETTLE_MS + 1);
+        expect(t.deps.respond).not.toHaveBeenCalled();
+        expect(t.socket().appends("instructions").some((e) => e.content === LIVE_COPY.notClear)).toBe(false);
+
+        await delegate(t, "del_2", 6_600);
+        expect(t.deps.respond).not.toHaveBeenCalled();
+        expect(t.socket().appends("instructions").at(-1)).toMatchObject({ delegation_id: "del_2", content: LIVE_COPY.notClear });
+
+        hear(t, "拒绝", 9_000, 9_400);
+        await delegate(t, "del_3", 9_500);
+        expect(t.deps.respond).toHaveBeenCalledWith(expect.objectContaining({ behavior: "deny", message: LIVE_COPY.deniedMessage }));
+      });
+
+      it("keeps Chinese consent pending when echo stripping drops a trailing condition or question", async () => {
+        const t = await live();
+        t.message(approval());
+        await vi.advanceTimersByTimeAsync(0);
+        speak(t, "请确认", 4_000, 6_000);
+        hear(t, "同意", 3_500, 3_900);
+        hear(t, "，但是先备份", 4_500, 5_500);
+        await vi.advanceTimersByTimeAsync(CONSENT_SETTLE_MS + 1);
+        expect(t.deps.respond).not.toHaveBeenCalled();
+
+        await delegate(t, "del_2", 6_100);
+        expect(t.deps.respond).not.toHaveBeenCalled();
+        expect(t.socket().appends("instructions").at(-1)).toMatchObject({ delegation_id: "del_2", content: LIVE_COPY.notClear });
+      });
+
+      it("accepts Chinese consent when full and echo-filtered transcripts agree", async () => {
+        const t = await live();
+        t.message(approval());
+        await vi.advanceTimersByTimeAsync(0);
+        speak(t, "要执行吗？", 4_000, 5_000);
+        hear(t, "好的，", 4_200, 4_800);
+        hear(t, "同意", 5_200, 5_600);
+        await vi.advanceTimersByTimeAsync(CONSENT_SETTLE_MS + 1);
+        expect(t.deps.respond).toHaveBeenCalledWith(expect.objectContaining({ behavior: "allow" }));
+        expect(t.socket().appends("commentary").at(-1)).toMatchObject({ content: LIVE_COPY.granted });
+      });
     });
 
     it("does not ask to repeat a yes the quiet window already decided when its delegation arrives late", async () => {
