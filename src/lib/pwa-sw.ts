@@ -26,7 +26,7 @@ export async function registerPwaServiceWorker(
   if (!shouldRegisterPwaServiceWorker(env)) return null;
   const sw = env.serviceWorker ?? navigator.serviceWorker;
   try {
-    return await sw.register("/sw.js", { scope: "/" });
+    return await sw.register("/sw.js", { scope: "/", updateViaCache: "none" });
   } catch {
     return null;
   }

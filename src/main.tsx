@@ -108,23 +108,59 @@ async function chooseRoot(
 document.title = productName();
 const pwaBoot = window.ogb?.home && location.pathname === "/home"
   ? Promise.resolve<PwaPairingBootResult>({ status: "none" })
-  : bootstrapPwaConfig();
+  : bootstrapPwaConfig().catch((error: unknown): PwaPairingBootResult => ({
+    status: "failed",
+    error: error instanceof Error ? error.message : String(error),
+  }));
 const pwaCache = pwaBoot.then((result) =>
   (result.status === "existing" || result.status === "paired") &&
   location.pathname !== "/pair" &&
   location.pathname !== "/desktop-viewer" &&
   !(window.ogb?.home && location.pathname === "/home")
-    ? preloadPwaBootCache(result.auth)
+    ? preloadPwaBootCache(result.auth).catch(() => null)
     : null,
 );
 const brandBoot = pwaCache.then((cache) => {
   if (cache) {
-    void bootstrapBrand();
+    void bootstrapBrand().catch(() => undefined);
     return;
   }
-  return bootstrapBrand();
+  return bootstrapBrand().catch(() => undefined);
 });
-void Promise.all([brandBoot, chooseRoot(pwaBoot, pwaCache), pageLanguage]).then(([, root]) => {
-  createRoot(document.getElementById("root")!).render(<StrictMode><PageBoundary>{root}</PageBoundary></StrictMode>);
-  void registerPwaServiceWorker();
-});
+
+function BootThrow({ error }: { error: unknown }): never {
+  throw error instanceof Error ? error : new Error(String(error));
+}
+
+function renderBootFallback(rootEl: HTMLElement, error: unknown): void {
+  try {
+    createRoot(rootEl).render(<StrictMode><PageBoundary><BootThrow error={error} /></PageBoundary></StrictMode>);
+  } catch {
+    const wrapper = document.createElement("div");
+    wrapper.setAttribute("role", "alert");
+    wrapper.style.cssText = "min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;text-align:center;font-family:system-ui,sans-serif;";
+    const box = document.createElement("div");
+    const msg = document.createElement("p");
+    msg.textContent = error instanceof Error ? error.message : String(error);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "Reload";
+    btn.style.cssText = "margin-top:12px;padding:8px 14px;border-radius:6px;border:1px solid currentColor;background:transparent;cursor:pointer;";
+    btn.onclick = () => location.reload();
+    box.append(msg, btn);
+    wrapper.append(box);
+    rootEl.replaceChildren(wrapper);
+  }
+}
+
+const rootEl = document.getElementById("root")!;
+void Promise.all([brandBoot, chooseRoot(pwaBoot, pwaCache), pageLanguage.catch(() => "en")])
+  .then(([, root]) => {
+    createRoot(rootEl).render(<StrictMode><PageBoundary>{root}</PageBoundary></StrictMode>);
+  })
+  .catch((error: unknown) => {
+    renderBootFallback(rootEl, error);
+  })
+  .finally(() => {
+    void registerPwaServiceWorker();
+  });

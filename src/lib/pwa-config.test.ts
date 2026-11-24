@@ -10,6 +10,7 @@ import {
   getPwaAuth,
   initPwaAuth,
   isRemotePwaMode,
+  openPwaDb,
   parsePwaPairHash,
   remoteFetch,
   remoteFetchInit,
@@ -320,5 +321,68 @@ describe("pwa pairing lifecycle, IndexedDB persistence, and authenticated fetch"
     );
     expect(res.ok).toBe(false);
     expect(isRemotePwaMode()).toBe(false);
+  });
+
+  it("rejects openPwaDb cleanly when blocked instead of hanging", async () => {
+    const blockedIdb = {
+      open() {
+        const openReq: {
+          onupgradeneeded: ((ev: IDBVersionChangeEvent) => void) | null;
+          onsuccess: ((ev: Event) => void) | null;
+          onerror: ((ev: Event) => void) | null;
+          onblocked: ((ev: Event) => void) | null;
+        } = { onupgradeneeded: null, onsuccess: null, onerror: null, onblocked: null };
+        queueMicrotask(() => {
+          openReq.onblocked?.(new Event("blocked"));
+        });
+        return openReq as unknown as IDBOpenDBRequest;
+      },
+    } as unknown as IDBFactory;
+
+    await expect(openPwaDb(blockedIdb, { timeoutMs: 2000, blockedMs: 20 })).rejects.toThrow("IndexedDB open blocked");
+  });
+
+  it("keeps pairing working in-memory when IndexedDB storage is unavailable or rejects writes", async () => {
+    const throwingIdb = {
+      open() {
+        throw new DOMException("Storage disabled", "SecurityError");
+      },
+    } as unknown as IDBFactory;
+    const credential = `omb_pair_${"e".repeat(43)}`;
+    const encoded = encodeBase64Url({
+      relayUrl: "https://relay.mxhan.com",
+      credential,
+    });
+    vi.stubGlobal("location", {
+      origin: "https://mausbot.mxhan.com",
+      pathname: "/",
+      search: "",
+      hash: `#pair=${encoded}`,
+    });
+    vi.stubGlobal("history", { replaceState: vi.fn() });
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/pair")) {
+        return new Response(JSON.stringify({ token: "tok-mem-1", device: { id: "dev-m1" }, serverName: "Mac" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/auth/session")) {
+        return new Response(
+          JSON.stringify({ kind: "session", id: "sess-m1", environmentId: "env-m1", scopes: ["client"] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({ environmentId: "env-m1", label: "Mac" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+
+    const boot = await bootstrapPwaConfig({ idb: throwingIdb, fetchImpl: fetchMock });
+    expect(boot.status).toBe("paired");
+    expect(getPwaAuth()?.token).toBe("tok-mem-1");
+    expect(isRemotePwaMode()).toBe(true);
   });
 });

@@ -264,11 +264,42 @@ function resolveIdbFactory(override?: IDBFactory): IDBFactory | null {
   }
 }
 
-export function openPwaDb(idbFactory?: IDBFactory): Promise<IDBDatabase | null> {
+export function openPwaDb(
+  idbFactory?: IDBFactory,
+  { timeoutMs = 3000, blockedMs = 500 }: { timeoutMs?: number; blockedMs?: number } = {},
+): Promise<IDBDatabase | null> {
   const idb = resolveIdbFactory(idbFactory);
   if (!idb) return Promise.resolve(null);
   return new Promise((resolve, reject) => {
-    const req = idb.open(OMB_PWA_DB_NAME, OMB_PWA_DB_VERSION);
+    let settled = false;
+    let blockedTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearTimers = () => {
+      clearTimeout(timer);
+      if (blockedTimer !== null) clearTimeout(blockedTimer);
+    };
+    const finishResolve = (db: IDBDatabase | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimers();
+      resolve(db);
+    };
+    const finishReject = (err: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimers();
+      reject(err instanceof Error ? err : new Error(String(err)));
+    };
+    const timer = setTimeout(() => {
+      finishReject(new Error("Timed out opening IndexedDB"));
+    }, timeoutMs);
+
+    let req: IDBOpenDBRequest;
+    try {
+      req = idb.open(OMB_PWA_DB_NAME, OMB_PWA_DB_VERSION);
+    } catch (err) {
+      finishReject(err);
+      return;
+    }
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(OMB_PWA_AUTH_STORE)) {
@@ -288,8 +319,25 @@ export function openPwaDb(idbFactory?: IDBFactory): Promise<IDBDatabase | null> 
         db.createObjectStore(OMB_PWA_OUTBOX_LEASES_STORE);
       }
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error ?? new Error("Failed to open IndexedDB"));
+    req.onblocked = () => {
+      if (blockedTimer !== null || settled) return;
+      blockedTimer = setTimeout(() => {
+        finishReject(new Error("IndexedDB open blocked"));
+      }, blockedMs);
+    };
+    req.onsuccess = () => {
+      const db = req.result;
+      if (db && typeof db === "object") {
+        db.onversionchange = () => {
+          try {
+            db.close();
+          } catch {
+          }
+        };
+      }
+      finishResolve(db);
+    };
+    req.onerror = () => finishReject(req.error ?? new Error("Failed to open IndexedDB"));
   });
 }
 
@@ -379,7 +427,11 @@ export async function setPwaAuth(record: PwaAuthRecord, idbFactory?: IDBFactory)
   if (getPwaAuth()?.ownerKey !== record.ownerKey) {
     revokeMediaBlobCache();
   }
-  await writeStoredAuth(record, idbFactory);
+  try {
+    await writeStoredAuth(record, idbFactory);
+  } catch {
+    // Restricted Safari/WebKit storage can reject writes; keep active session in memory so pairing still boots.
+  }
   setActivePwaAuth(record);
   initPromise = Promise.resolve(record);
 }
@@ -543,19 +595,23 @@ export async function activatePwaPairing(
 
 export async function bootstrapPwaConfig(options: ActivatePairingOptions = {}): Promise<PwaPairingBootResult> {
   if (isElectronDesktop()) return { status: "none" };
-  const parsedPair = takePwaPairFromLocation(options);
-  const existing = await initPwaAuth(options.idb);
-  if (!parsedPair) {
-    return existing ? { status: "existing", auth: existing } : { status: "none" };
+  try {
+    const parsedPair = takePwaPairFromLocation(options);
+    const existing = await initPwaAuth(options.idb);
+    if (!parsedPair) {
+      return existing ? { status: "existing", auth: existing } : { status: "none" };
+    }
+    if (!parsedPair.ok) {
+      return { status: "failed", error: parsedPair.error };
+    }
+    const activated = await activatePwaPairing(parsedPair.payload, options);
+    if (!activated.ok) {
+      return { status: "failed", error: activated.error };
+    }
+    return { status: "paired", auth: activated.auth };
+  } catch (error) {
+    return { status: "failed", error: error instanceof Error ? error.message : String(error) };
   }
-  if (!parsedPair.ok) {
-    return { status: "failed", error: parsedPair.error };
-  }
-  const activated = await activatePwaPairing(parsedPair.payload, options);
-  if (!activated.ok) {
-    return { status: "failed", error: activated.error };
-  }
-  return { status: "paired", auth: activated.auth };
 }
 
 function setCachedMediaBlob(cacheKey: string, blobUrl: string): void {
