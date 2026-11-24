@@ -45,7 +45,8 @@ export async function readDocument(root: string, file: string): Promise<LocalAge
 }
 
 type DocumentReader = typeof readDocument;
-export type TeamSource = { root: string; playbook: string; roles: string; roleFiles?: Map<string, string>; worktrees?: Set<string> };
+export type TeamSource = { root: string; playbook: string; roles: string; roleFiles?: Map<string, string>; worktrees?: Set<string>;
+  sessionDocument?: LocalAgentConfigurationDocument };
 type Role = { label: string; file: string | null };
 const executeGit = promisify(execFile);
 
@@ -124,7 +125,7 @@ async function savedTeamSource(agents: Record<string, unknown>[], teamId: string
       }) as Record<string, unknown>[];
       if (matched.length === 1) roleFiles.set(agent.pane_id, `roles/${matched[0]!.role}.md`);
     }
-    if (roleFiles.size) candidates.push({ root, playbook: join(root, "playbook.md"), roles: join(root, "roles"), roleFiles });
+    if (roleFiles.size) candidates.push({ root, playbook: join(root, "playbook.md"), roles: join(root, "roles"), roleFiles, sessionDocument: document });
   }
   return { source: candidates.length === 1 ? candidates[0]! : null, error: error || candidates.length > 1 };
 }
@@ -160,18 +161,22 @@ export async function teamSource(agents: Record<string, unknown>[], teamId: stri
 }
 
 const cells = (line: string) => line.startsWith("|") && line.endsWith("|") ? line.slice(1, -1).split("|").map((part) => part.trim()) : [];
+const roleLink = (cell: string) => /^\[[^\]]+\]\((roles\/[a-z][a-z0-9-]*\.md)\)$/.exec(cell)?.[1];
 
 function declaredRole(name: string, playbook: LocalAgentConfigurationDocument, readme: LocalAgentConfigurationDocument): Role | null | undefined {
   const fromRules = playbook.markdown?.split("\n").map(cells).filter((parts) => parts[0] === name && /^[A-Za-z][A-Za-z ]+$/.test(parts[1] ?? "")) ?? [];
-  const fromReadme = readme.markdown?.split("\n").map(cells).filter((parts) => parts[1] === name &&
-    /^[A-Za-z][A-Za-z ]+$/.test(parts[0] ?? "") && /^\[[^\]]+\]\(roles\/[a-z][a-z0-9-]*\.md\)$/.test(parts[4] ?? "")) ?? [];
+  const fromReadme = readme.markdown?.split("\n").map(cells).filter((parts) => parts[1]?.split(/[、,，]/).some((entry) => entry.trim() === name) &&
+    /^[A-Za-z][A-Za-z ]+$/.test(parts[0] ?? "") && roleLink(parts[4] ?? "")) ?? [];
   if (fromRules.length > 1 || fromReadme.length > 1) return null;
   const ruleLabel = fromRules[0]?.[1];
   const readmeLabel = fromReadme[0]?.[0];
   if (ruleLabel && readmeLabel && ruleLabel.toLowerCase() !== readmeLabel.toLowerCase()) return null;
   const label = ruleLabel ?? readmeLabel;
   if (!label) return undefined;
-  const file = /^\[[^\]]+\]\((roles\/[a-z][a-z0-9-]*\.md)\)$/.exec(fromReadme[0]?.[4] ?? "")?.[1] ?? null;
+  const ruleFiles = fromRules[0]?.slice(2).map(roleLink).filter(Boolean) ?? [];
+  const readmeFile = roleLink(fromReadme[0]?.[4] ?? "");
+  if (ruleFiles.length > 1 || (ruleFiles[0] && readmeFile && ruleFiles[0] !== readmeFile)) return null;
+  const file = ruleFiles[0] ?? readmeFile ?? null;
   return { label, file };
 }
 

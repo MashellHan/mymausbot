@@ -136,7 +136,7 @@ export function mountMiniAppFrame(options: {
   const localWindow = () => miniAppNativeFrameGuard() && window.ogb?.app?.ownPage === true && window.ogb?.remoteClient?.active !== true;
   const site = localWindow() && options.site === managedMiniAppSite(document) ? options.site : undefined;
   const hongguo = localWindow() && options.hongguo === true && isManagedHongguoDocument(document);
-  const roleEditor = localWindow() && !!options.onAgentRoleEdit && installed.dashboardIdentity === "agent-team"
+  const roleEditor = localWindow() && window.ogb?.platform === "darwin" && !!options.onAgentRoleEdit && installed.dashboardIdentity === "agent-team"
     && installed.release?.packageId === "mashellhan.agent-team" && installed.dashboard?.kind === "agent-team"
     && installed.dashboard.renderer === "html" && (installed.dashboard.resources as readonly string[]).includes("configuration");
   const frameDocument = miniAppFrameDocument(document, typeof window.ogb?.openExternal === "function", { site, hongguo, roleEditor });

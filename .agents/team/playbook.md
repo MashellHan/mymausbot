@@ -9,20 +9,20 @@ PR, issue, review and CI records. Preserve upstream license and notices.
 
 ## Roles and launch defaults
 
-| Herdr name | Role | Runtime | Model | Effort | Context requested |
-| --- | --- | --- | --- | --- | --- |
-| mausbot-lead | Lead | Codex (Raven YOLO) | gpt-6-astra | max | provider default |
-| mausbot-design | Designer | Codex (Raven YOLO) | gpt-6.2-sol | xhigh | 1,000,000 |
-| mausbot-front | Frontend | Codex (Raven YOLO) | gpt-6.2-sol | high | 1,000,000 |
-| mausbot-back | Backend | Codex (Raven YOLO) | gpt-6.2-sol | high | 1,000,000 |
-| mausbot-upstream | Upstream integration | Pi (Raven, native execution) | gemini-4-hydrogen | high | provider default |
-| mausbot-dev1 | Additional developer | Pi (Raven, native execution) | gpt-6.2-sol | high | 1,000,000 |
-| mausbot-dev2 | Additional developer | Pi (Raven, native execution) | gemini-4-hydrogen | high | provider default |
-| mausbot-dev3 | Additional developer | Pi (Raven, native execution) | gpt-6.2-sol | high | 1,000,000 |
-| mausbot-review | Reviewer One | Codex (Raven YOLO) | gpt-6.2-astra | xhigh | provider default |
-| mausbot-review2 | Reviewer Two | Codex (Raven YOLO) | gpt-6.2-astra | xhigh | provider default |
-| mausbot-review3 | Reviewer Three | Pi (Raven, native execution) | gemini-4-carbon | high | provider default |
-| mausbot-mini-review | Mini App Reviewer | Codex (Raven YOLO) | gpt-6.2-astra | xhigh | provider default |
+| Herdr name | Role | Runtime | Model | Effort | Context requested | Role file |
+| --- | --- | --- | --- | --- | --- | --- |
+| mausbot-lead | Lead | Codex (Raven YOLO) | gpt-6-astra | max | provider default | [leader](roles/leader.md) |
+| mausbot-design | Designer | Codex (Raven YOLO) | gpt-6.2-sol | xhigh | 1,000,000 | [designer](roles/designer.md) |
+| mausbot-front | Frontend | Codex (Raven YOLO) | gpt-6.2-sol | high | 1,000,000 | [frontend](roles/frontend.md) |
+| mausbot-back | Backend | Codex (Raven YOLO) | gpt-6.2-sol | high | 1,000,000 | [backend](roles/backend.md) |
+| mausbot-upstream | Upstream integration | Pi (Raven, native execution) | gemini-4-hydrogen | high | provider default | [upstream](roles/upstream.md) |
+| mausbot-dev1 | Additional developer | Pi (Raven, native execution) | gpt-6.2-sol | high | 1,000,000 | [developer](roles/developer.md) |
+| mausbot-dev2 | Additional developer | Pi (Raven, native execution) | gemini-4-hydrogen | high | provider default | [developer](roles/developer.md) |
+| mausbot-dev3 | Additional developer | Pi (Raven, native execution) | gpt-6.2-sol | high | 1,000,000 | [developer](roles/developer.md) |
+| mausbot-review | Reviewer One | Codex (Raven YOLO) | gpt-6.2-astra | xhigh | provider default | [reviewer](roles/reviewer.md) |
+| mausbot-review2 | Reviewer Two | Codex (Raven YOLO) | gpt-6.2-astra | xhigh | provider default | [reviewer2](roles/reviewer2.md) |
+| mausbot-review3 | Reviewer Three | Pi (Raven, native execution) | gemini-4-carbon | high | provider default | [reviewer3](roles/reviewer3.md) |
+| mausbot-mini-review | Mini App Reviewer | Codex (Raven YOLO) | gpt-6.2-astra | xhigh | provider default | [mini-reviewer](roles/mini-reviewer.md) |
 
 The Codex launch defaults use the existing Raven provider
 in YOLO mode (preserving any existing pane shell profile without duplicating

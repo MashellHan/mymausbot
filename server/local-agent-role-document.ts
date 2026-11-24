@@ -1,6 +1,7 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, closeSync, constants, fstatSync, linkSync, lstatSync, mkdtempSync, openSync, readSync,
-  realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdtempSync, openSync, readSync,
+  realpathSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 
 import { LOCAL_AGENT_ROLE_DOCUMENT_MAX_BYTES, type LocalAgentRoleDocument,
@@ -15,6 +16,17 @@ export interface LocalAgentRoleSource {
   memberNames: string[];
   runtime: string;
 }
+
+export type RoleFileExchange = (current: string, staged: string) => void;
+
+// macOS renamex_np with RENAME_SWAP exchanges both paths in one filesystem operation.
+const RENAME_SWAP = `ObjC.bindFunction('renamex_np', ['int', ['char *', 'char *', 'uint32']]);
+function run(args) { if ($.renamex_np(args[0], args[1], 2) !== 0) throw Error('Could not exchange role files.'); }`;
+
+const exchangeLocalRoleFiles: RoleFileExchange = (current, staged) => {
+  if (process.platform !== "darwin") throw new Error("Atomic role editing requires macOS.");
+  execFileSync("/usr/bin/osascript", ["-l", "JavaScript", "-e", RENAME_SWAP, current, staged], { timeout: 5000, stdio: "ignore" });
+};
 
 export function roleFrontMatter(text: string): string | null {
   if (!/^---(?:\r?\n|$)/.test(text)) return "";
@@ -60,22 +72,13 @@ export function getLocalAgentRoleDocument(source: LocalAgentRoleSource): LocalAg
 }
 
 export function saveLocalAgentRoleDocument(source: LocalAgentRoleSource, input: LocalAgentRoleDocumentWrite,
-  move: typeof renameSync = renameSync): LocalAgentRoleSaveResult {
+  exchange: RoleFileExchange = exchangeLocalRoleFiles): LocalAgentRoleSaveResult {
+  if (exchange === exchangeLocalRoleFiles && process.platform !== "darwin") return { status: "unavailable" };
   let temporary: string | undefined;
-  let displaced: string | undefined;
-  let destination: string | undefined;
-  const restore = () => {
-    if (!displaced || !destination) return;
-    if (realpathSync(source.roles) !== dirname(dirname(displaced)) || !lstatSync(displaced).isFile()) return;
-    try { linkSync(displaced, destination); }
-    catch { return; }
-    unlinkSync(displaced);
-    displaced = undefined;
-  };
+  let removeStaging = true;
   try {
     const current = read(source);
     if (!current || current.doc.documentId !== input.documentId) return { status: "unavailable" };
-    destination = current.doc.sourcePath;
     if (current.doc.hash !== input.expectedHash) return { status: "conflict", doc: current.doc };
     if (current.doc.text === input.text) return { status: "saved", doc: current.doc };
     if (!current.metadata && /^---(?:\r?\n|$)/.test(input.text)) return { status: "unavailable" };
@@ -90,31 +93,30 @@ export function saveLocalAgentRoleDocument(source: LocalAgentRoleSource, input: 
     const latest = read(source);
     if (!latest) return { status: "unavailable" };
     if (latest.doc.hash !== input.expectedHash) return { status: "conflict", doc: latest.doc };
-    const previous = join(temporary, "previous.md");
-    move(destination, previous);
-    displaced = previous;
-    const moved = read(source, previous);
-    if (moved?.doc.hash !== input.expectedHash) {
-      restore();
-      const competing = getLocalAgentRoleDocument(source);
-      return competing ? { status: "conflict", doc: competing } : { status: "unavailable" };
+    const draft = read(source, replacement);
+    if (!draft) return { status: "unavailable" };
+    removeStaging = false;
+    try { exchange(current.doc.sourcePath, replacement); }
+    catch { /* Inspect both paths in case the exchange completed before the subprocess exited. */ }
+    const installed = read(source);
+    const previous = read(source, replacement);
+    if (previous?.doc.hash === draft.doc.hash && installed?.doc.hash === input.expectedHash) {
+      removeStaging = true;
+      return { status: "unavailable" };
     }
-    // Install with an exclusive link so a concurrent writer that recreated the path wins.
-    try { linkSync(replacement, destination); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const competing = getLocalAgentRoleDocument(source);
-      return competing ? { status: "conflict", doc: competing } : { status: "unavailable" };
+    if (previous?.doc.hash === input.expectedHash) {
+      removeStaging = true;
+      if (installed?.doc.hash === draft.doc.hash) return { status: "saved", doc: installed.doc };
+    } else if (installed?.doc.hash === draft.doc.hash) {
+      try { exchange(current.doc.sourcePath, replacement); }
+      catch { /* Read back the source and keep the displaced bytes if restoration is incomplete. */ }
+      removeStaging = read(source, replacement)?.doc.hash === draft.doc.hash;
     }
-    unlinkSync(replacement);
-    displaced = undefined;
-    const saved = read(source);
-    return saved ? { status: "saved", doc: saved.doc } : { status: "unavailable" };
+    const conflict = getLocalAgentRoleDocument(source);
+    return conflict ? { status: "conflict", doc: conflict } : { status: "unavailable" };
   } catch { return { status: "unavailable" }; }
   finally {
-    try {
-      restore();
-      if (temporary && !displaced) rmSync(temporary, { recursive: true, force: true });
-    } catch { /* Leave a displaced file available for recovery if restoration failed. */ }
+    try { if (temporary && removeStaging) rmSync(temporary, { recursive: true, force: true }); }
+    catch { /* A temporary cleanup failure must not change the result of a committed save. */ }
   }
 }

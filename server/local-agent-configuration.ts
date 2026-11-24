@@ -10,7 +10,8 @@ import { herdrRows, runHerdr, type HerdrRunner } from "./local-agent-teams.ts";
 import { localAgentOccupantId } from "./local-agent-occupant.ts";
 import { discoverCodexSkills, type CodexSkillDiscovery } from "./local-agent-skill-discovery.ts";
 import { inside, memberRole, readDocument, teamSource, verifiedLocalAgentMembers, type TeamSource } from "./local-agent-association.ts";
-import { getLocalAgentRoleDocument, roleFrontMatter, saveLocalAgentRoleDocument, type LocalAgentRoleSource } from "./local-agent-role-document.ts";
+import { getLocalAgentRoleDocument, roleFrontMatter, saveLocalAgentRoleDocument,
+  type LocalAgentRoleSource, type RoleFileExchange } from "./local-agent-role-document.ts";
 
 const PANE_ID = /^w\d+:p[0-9A-Za-z]+$/;
 const TEAM_ID = /^w\d+$/;
@@ -100,8 +101,9 @@ async function readSkill(home: string, cwd: string, path: string): Promise<Local
   return readDocument(allowed.root, path);
 }
 
-export function createLocalAgentConfigurationProvider({ run = runHerdr, home = homedir(), discoverSkills = discoverCodexSkills }: {
+export function createLocalAgentConfigurationProvider({ run = runHerdr, home = homedir(), discoverSkills = discoverCodexSkills, roleFileExchange }: {
   run?: HerdrRunner; home?: string; discoverSkills?: (cwd: string) => Promise<CodexSkillDiscovery>;
+  roleFileExchange?: RoleFileExchange;
 } = {}) {
   async function context(teamId: string, agentId?: string) {
     const live = await liveRows(run);
@@ -132,8 +134,7 @@ export function createLocalAgentConfigurationProvider({ run = runHerdr, home = h
       if (!role.file) {
         const frontMatter = roleFrontMatter(doc.markdown ?? "");
         const name = /^name:[ \t]*(.+?)\s*$/m.exec(frontMatter ?? "")?.[1]?.toLowerCase();
-        const label = role.label.toLowerCase();
-        if (!name || !` ${name} `.includes(` ${label} `)) return null;
+        if (name !== role.label.toLowerCase()) return null;
       }
       return file;
     }
@@ -154,6 +155,13 @@ export function createLocalAgentConfigurationProvider({ run = runHerdr, home = h
       && verifiedLocalAgentMembers(current.agents).some((agent) => agent.pane_id === agentId && agent.cwd === member.cwd
         && agent.name === member.name && localAgentOccupantId(agent, agentId) === occupantId);
     if (!stillBound) return null;
+    const sources = [[source.playbook, playbook] as const];
+    if (dirname(source.playbook) === source.root) sources.push([join(source.root, "README.md"), readme]);
+    if (source.sessionDocument) sources.push([join(source.root, "session.json"), source.sessionDocument]);
+    for (const [path, before] of sources) {
+      const after = await readDocument(source.root, path);
+      if (before.status !== after.status || before.markdown !== after.markdown) return null;
+    }
     return { root: source.root, roles: source.roles, file, agentName: String(member.name),
       memberNames, runtime: String(member.agent) };
   }
@@ -209,7 +217,7 @@ export function createLocalAgentConfigurationProvider({ run = runHerdr, home = h
       const source = await roleSource(input);
       if (!source) return { status: "unavailable" };
       assertCurrent();
-      return saveLocalAgentRoleDocument(source, input);
+      return saveLocalAgentRoleDocument(source, input, roleFileExchange);
     },
     async getAgent(agentId: string): Promise<LocalAgentConfigurationResponse> {
       return (await memberConfiguration(agentId)).response;
