@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { ArrowUpRight, Smartphone } from "lucide-react";
+import { ArrowUpRight, Monitor, Smartphone } from "lucide-react";
 import { t } from "@/lib/i18n";
-import { lastSeen, serverDeviceTag } from "@/lib/pairing-time";
+import { isComputerSession, lastSeen, serverDeviceTag } from "@/lib/pairing-time";
 import { useTailscaleFunnel } from "@/lib/tailscale-funnel";
 import { api, useStore } from "@/state/store";
 import { PhoneDevicesSection } from "../../PhoneDevicesSection";
@@ -10,6 +10,7 @@ import { PlaceBadge } from "../SettingsNav";
 import { ServerPairingCard, type PairedDevice } from "../../ServerPairingCard";
 import { SettingsGroup, SettingsLinkRow, SettingsRows, SettingsTag } from "../../SettingsPrimitives";
 import { useCloudPhoneDestination } from "../../SidebarProfileMenu";
+import { PhoneComputerAndAdvanced } from "../PhoneComputerAndAdvanced";
 import { PwaBridgeCard } from "../PwaBridgeCard";
 import { useOtherPlaces } from "../settings-context";
 import { useSettingsShell } from "../settings-shell";
@@ -110,7 +111,7 @@ export function PhonePage() {
     ? serverDevices.map((device) => (
       <li key={`server:${device.id}`} data-paired-device={device.id} className="flex min-h-16 items-center gap-3 px-4 py-3">
         <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-ink/[0.05] text-ink-secondary">
-          <Smartphone size={18} strokeWidth={1.75} aria-hidden="true" />
+          {isComputerSession(device) ? <Monitor size={18} strokeWidth={1.75} aria-hidden="true" /> : <Smartphone size={18} strokeWidth={1.75} aria-hidden="true" />}
         </span>
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 items-center gap-1.5">
@@ -143,11 +144,12 @@ export function PhonePage() {
 
   return <>
     {ctx.here
-      ? <PhoneDevicesSection profileEmail={state.config?.profile?.email} focusRequest={!funnel?.checking && !funnelPairs ? focus : 0} simple={!ctx.advanced} placeName={place.name} top={<PairWithCloud />} extraPairedRows={extraPairedRows} extraPairedCount={serverDevices.length} />
+      ? <PhoneDevicesSection profileEmail={state.config?.profile?.email} focusRequest={!funnel?.checking && !funnelPairs ? focus : 0} simple={!ctx.advanced} placeName={place.name} top={<PairWithCloud />} extraPairedRows={extraPairedRows} extraPairedCount={serverDevices.length} unifiedLayout />
       : <ServerPairingCard funnel={funnel} cloudHome={ctx.cloud} focusRequest={focus} team={state.config?.team?.name} placeName={place.name} simple={!ctx.advanced}
         teamPhoneBlocked={state.config?.managedPolicy?.remoteAccess === false ? t("policy.teamRemoteBlocked", { organization: state.config.managedPolicy.organizationName }) : null} />}
     {showLocalFunnel && <ServerPairingCard focusRequest={funnelPairs ? focus : 0} funnel={funnel} placeName={place.name} simple={!ctx.advanced} hidePairedList onSessionsChange={() => void refreshServerDevices()} />}
     {showPwaBridge && <PwaBridgeCard remoteBlocked={remoteBlocked} onInviteChange={() => void refreshServerDevices()} />}
+    {ctx.here && <PhoneComputerAndAdvanced profileEmail={state.config?.profile?.email} simple={!ctx.advanced} onSessionsChange={() => void refreshServerDevices()} />}
     <OtherPlaces />
   </>;
 }

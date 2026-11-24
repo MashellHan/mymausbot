@@ -2262,6 +2262,7 @@
   "pwaBridge.secret.rotate": "Geheimnis rotieren",
   "pwaBridge.secret.title": "Relay-Geheimnis",
   "pwaBridge.secret.valueLabel": "Bridge-Geheimnis",
+  "pwaBridge.sectionTitle": "Mobile Web-App über Relay",
   "pwaBridge.settings.notSet": "Nicht festgelegt",
   "pwaBridge.settings.saved": "Gespeichert",
   "pwaBridge.settings.saving": "Wird gespeichert…",

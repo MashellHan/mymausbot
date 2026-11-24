@@ -6498,6 +6498,7 @@
   "pwaBridge.secret.rotate": "輪替密鑰",
   "pwaBridge.secret.title": "中繼密鑰",
   "pwaBridge.secret.valueLabel": "橋接密鑰",
+  "pwaBridge.sectionTitle": "透過中繼連線行動網頁應用程式",
   "pwaBridge.settings.notSet": "未設定",
   "pwaBridge.settings.saved": "已儲存",
   "pwaBridge.settings.saving": "儲存中…",

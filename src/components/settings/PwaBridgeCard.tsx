@@ -455,7 +455,7 @@ export function PwaBridgeCard({
         </SettingsDialog>
       )}
 
-      <SettingsGroup block="pwa-bridge">
+      <SettingsGroup label={t("pwaBridge.sectionTitle")} block="pwa-bridge">
         <SettingsRows>
           <SettingsFoldRow
             id="pwa-bridge-settings"

@@ -29,12 +29,13 @@ const mocks = vi.hoisted(() => ({
     ],
     pairing: null,
     routes: {
-      wifi: { on: true, since: Date.now() - 86_400_000 },
-      relay: { on: false, since: null },
-      tailscale: { on: false, since: null },
-      https: { on: false, since: null },
+      wifi: { on: true, since: Date.now() - 86_400_000 as number | null },
+      relay: { on: false, since: null as number | null },
+      tailscale: { on: false, since: null as number | null, name: null as string | null, computers: false },
+      https: { on: false, since: null as number | null },
     },
     notices: [],
+    tailnetShare: { on: true, origin: "http://mac.tail123.ts.net:8799", https: false, problem: null },
   },
 }));
 
@@ -83,7 +84,6 @@ vi.mock("../PhoneSetupFlow", () => ({
 }));
 
 vi.mock("../PhonesList", () => ({ PhonesList: () => null }));
-vi.mock("../TailnetComputers", () => ({ TailnetComputers: () => null }));
 vi.mock("../SidebarProfileMenu", () => ({
   useCloudPhoneDestination: () => ({ cloud: "none", bridge: null }),
 }));
@@ -138,6 +138,13 @@ beforeEach(() => {
             lastSeenAt: Date.now() - 120_000,
             expiresAt: Date.now() + 86_400_000,
           },
+          {
+            id: "sess-computer-3",
+            label: "MacBook Pro",
+            scopes: ["admin", "client"],
+            lastSeenAt: Date.now() - 180_000,
+            expiresAt: Date.now() + 86_400_000,
+          },
         ],
         current: null,
       };
@@ -169,27 +176,58 @@ afterEach(() => {
 });
 
 describe("PhonePage unified Paired and PWA settings", () => {
-  it("merges Companion and Server paired devices into one Paired card with Native/PWA tags and removes the standalone relay toggle", async () => {
+  it("orders Paired -> Phone -> Computer -> collapsed Advanced, merges phones & computers, and drops verbose Tailscale copy", async () => {
+    mocks.companionState.routes = {
+      wifi: { on: true, since: Date.now() - 86_400_000 },
+      relay: { on: false, since: null },
+      tailscale: { on: true, since: Date.now() - 86_400_000, name: "mac.tail123.ts.net", computers: true },
+      https: { on: false, since: null },
+    };
+
     await act(async () => {
       root.render(createElement(PhonePage));
     });
     await vi.waitFor(() => {
       expect(host.querySelector('[data-paired-device="sess-pwa-1"]')).not.toBeNull();
       expect(host.querySelector('[data-settings-block="pwa-bridge"]')).not.toBeNull();
+      expect(host.querySelector('[data-settings-block="computers-pair"]')).not.toBeNull();
     });
 
     const pairedSections = host.querySelectorAll('[data-settings-block="paired"]');
     expect(pairedSections).toHaveLength(1);
 
     const pairedBlock = pairedSections[0]!;
-    const nativeRow = pairedBlock.querySelector('[data-phone-row="comp-1"]')!;
-    const pwaRow = pairedBlock.querySelector('[data-paired-device="sess-pwa-1"]')!;
-    const serverNativeRow = pairedBlock.querySelector('[data-paired-device="sess-native-2"]')!;
-    expect(nativeRow.querySelector("[data-settings-tag]")?.textContent).toBe("Native");
-    expect(pwaRow.querySelector("[data-settings-tag]")?.textContent).toBe("PWA");
-    expect(serverNativeRow.querySelector("[data-settings-tag]")?.textContent).toBe("Native");
+    expect(pairedBlock.querySelector('[data-phone-row="comp-1"] [data-settings-tag]')?.textContent).toBe("Native");
+    expect(pairedBlock.querySelector('[data-paired-device="sess-pwa-1"] [data-settings-tag]')?.textContent).toBe("PWA");
+    expect(pairedBlock.querySelector('[data-paired-device="sess-native-2"] [data-settings-tag]')?.textContent).toBe("Native");
+    expect(pairedBlock.querySelector('[data-paired-device="sess-computer-3"] [data-settings-tag]')?.textContent).toBe("Computer");
 
+    const pwaBlock = host.querySelector('[data-settings-block="pwa-bridge"]')!;
+    expect(pwaBlock.querySelector("h3")?.textContent).toBe("Mobile web app via relay");
     expect(host.textContent).not.toContain("Fast mobile PWA relay");
     expect(host.querySelector("[data-pwa-bridge-switch]")).toBeNull();
+
+    // Order: Paired -> Phone (pair / funnel / pwa) -> Computer -> Advanced (collapsed by default).
+    const pairBlock = host.querySelector('[data-settings-block="pair"]')!;
+    const funnelBlock = host.querySelector('[data-settings-block="funnel"]')!;
+    const computersBlock = host.querySelector('[data-settings-block="computers-pair"]')!;
+    const advancedBlock = host.querySelector('[data-settings-block="advanced"]')!;
+    expect(pairedBlock.compareDocumentPosition(pairBlock) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(pairBlock.compareDocumentPosition(funnelBlock) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(funnelBlock.compareDocumentPosition(pwaBlock) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(pwaBlock.compareDocumentPosition(computersBlock) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(computersBlock.compareDocumentPosition(advancedBlock) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    // Verbose WireGuard / HTTPS Certificates copy is hidden from the main Computer card.
+    expect(host.textContent).not.toContain("HTTPS Certificates in Tailscale");
+    expect(host.textContent).not.toContain("Same Wi-Fi");
+
+    const advToggle = advancedBlock.querySelector<HTMLButtonElement>('[data-settings-disclosure="phone-advanced"] button')!;
+    expect(advToggle.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => {
+      advToggle.click();
+    });
+    expect(advToggle.getAttribute("aria-expanded")).toBe("true");
+    expect(advancedBlock.textContent).toContain("Same Wi-Fi");
   });
 });

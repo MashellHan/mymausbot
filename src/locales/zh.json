@@ -6932,6 +6932,7 @@
   "pwaBridge.secret.rotate": "轮换密钥",
   "pwaBridge.secret.title": "中继密钥",
   "pwaBridge.secret.valueLabel": "桥接密钥",
+  "pwaBridge.sectionTitle": "通过中继连接移动网页应用",
   "pwaBridge.settings.notSet": "未设置",
   "pwaBridge.settings.saved": "已保存",
   "pwaBridge.settings.saving": "保存中…",

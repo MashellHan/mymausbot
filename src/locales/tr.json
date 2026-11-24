@@ -3582,6 +3582,7 @@
   "pwaBridge.secret.rotate": "Sırrı yenile",
   "pwaBridge.secret.title": "Aktarıcı sırrı",
   "pwaBridge.secret.valueLabel": "Köprü sırrı",
+  "pwaBridge.sectionTitle": "Aktarıcı üzerinden mobil web uygulaması",
   "pwaBridge.settings.notSet": "Ayarlanmadı",
   "pwaBridge.settings.saved": "Kaydedildi",
   "pwaBridge.settings.saving": "Kaydediliyor…",

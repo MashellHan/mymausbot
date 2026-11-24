@@ -1,6 +1,35 @@
 import type { CompanionAccountState } from "../types/ogb";
+import { productName } from "./brand";
 import { t } from "./i18n";
 import { companionPairingRoute, type CompanionEndpoint, type CompanionPairingRouteMode, type CompanionPairingRouteSource } from "./companion-pairing";
+
+export interface TailscalePairingStatus {
+  kind: "off" | "not-installed" | "signed-out" | "magicdns" | "waiting" | "ready" | "error";
+  title: string;
+  detail: string;
+}
+
+export function deriveTailscalePairingStatus(state: {
+  enabled: boolean;
+  routes?: { tailscale?: { on: boolean; name?: string | null } };
+  tailscaleProblem?: string;
+  error?: string;
+}): TailscalePairingStatus {
+  if (state.tailscaleProblem === "not-installed") return { kind: "not-installed", title: t("remote.tailscale.notInstalled"), detail: "" };
+  if (state.tailscaleProblem === "no-cli") return { kind: "signed-out", title: t("remote.tailscale.noCli"), detail: "" };
+  if (state.tailscaleProblem === "not-running") return { kind: "signed-out", title: t("remote.tailscale.notRunning"), detail: "" };
+  if (state.tailscaleProblem === "needs-permission") return { kind: "signed-out", title: t("remote.tailscale.needsPermission", { app: productName() }), detail: "" };
+  if (state.tailscaleProblem === "needs-approval") return { kind: "signed-out", title: t("remote.tailscale.needsApproval"), detail: "" };
+  if (state.tailscaleProblem === "signed-out") return { kind: "signed-out", title: t("remote.tailscale.signIn"), detail: "" };
+  if (state.error) return { kind: "error", title: t("remote.status.attention"), detail: state.error };
+  const route = state.routes?.tailscale;
+  if (!route?.on) return { kind: "off", title: t("remote.status.off"), detail: "" };
+  if (!route.name) return { kind: "magicdns", title: t("remote.tailscale.magicDns"), detail: t("remote.tailscale.magicDnsDetail") };
+  const title = t("remote.tailscale.ready", { name: route.name });
+  return state.enabled
+    ? { kind: "ready", title, detail: t("remote.tailscale.readyDetail") }
+    : { kind: "waiting", title, detail: t("remote.tailscale.linkOff") };
+}
 
 export type PhoneSetupPhase = "intro" | "sign-in" | "verifying" | "qr" | "success";
 
