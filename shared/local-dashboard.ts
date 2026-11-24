@@ -222,6 +222,8 @@ export interface LocalUsageComparison {
   commits: LocalUsagePeriodChange;
   /** Qualified local-ref commit comparisons when fetch-disabled scope matches across both periods. */
   known?: { prs: LocalUsagePeriodChange; commits: LocalUsagePeriodChange };
+  /** Qualified commit comparisons whose category scope matches across both periods. */
+  knownCategories?: Record<LocalUsageCategory, LocalUsageCountComparison>;
   totalTokens: LocalUsagePeriodChange;
   categories: Record<LocalUsageCategory, LocalUsageCountComparison>;
 }

@@ -300,6 +300,21 @@ def _collect_worker():
         raise SystemExit(1) from None
 
 
+class LocalWorkerCleanupUnverified(RuntimeError):
+    pass
+
+
+def _retain_unverified_worker_cleanup(config):
+    lock = Path(config["storageDir"]).expanduser() / ".refresh.lock"
+    try:
+        (lock / ".detached-child-unverified").mkdir(exist_ok=True)
+    except OSError:
+        print("usage stage=local-collect cleanup-failed lock-marker-failed", file=sys.stderr, flush=True)
+        os._exit(1)
+    print("usage stage=local-collect cleanup-failed lock-retained", file=sys.stderr, flush=True)
+    raise LocalWorkerCleanupUnverified("Local activity worker cleanup is unverified") from None
+
+
 def _run_worker(request, timeout):
     command = [sys.executable, "-c",
                "import os,runpy,sys; sys.path.insert(0,os.path.dirname(sys.argv[1])); "
@@ -317,7 +332,7 @@ def _run_worker(request, timeout):
             process.communicate(timeout=5)
         except subprocess.TimeoutExpired:
             print("usage stage=local-collect cleanup-failed lock-retained", file=sys.stderr, flush=True)
-            os._exit(1)
+            raise LocalWorkerCleanupUnverified("Local activity worker cleanup is unverified") from None
         if isinstance(error, subprocess.TimeoutExpired):
             print("usage stage=local-collect timeout worker-reaped", file=sys.stderr, flush=True)
             raise subprocess.TimeoutExpired("local activity collection", timeout) from None
@@ -345,6 +360,8 @@ def collect_local(collector_path, config, device, at=None, history_days=30, *, c
                 "config": {**request["config"], "repoRoots": [root]}},
                 min(REPOSITORY_TIMEOUT, max(0, deadline - time.monotonic()))))
             print(f"usage stage=repository root={index} end", file=sys.stderr, flush=True)
+        except LocalWorkerCleanupUnverified:
+            _retain_unverified_worker_cleanup(config)
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             failed_roots.append(root)
             errors.append({"source": "repositories", "rootIndex": index, "code": type(error).__name__})
@@ -353,15 +370,10 @@ def collect_local(collector_path, config, device, at=None, history_days=30, *, c
     try:
         result = _run_worker({**request, "stage": "collect", "repositories": repositories,
                               "failedRoots": failed_roots}, max(0, deadline - time.monotonic()))
+    except LocalWorkerCleanupUnverified:
+        _retain_unverified_worker_cleanup(config)
     except subprocess.TimeoutExpired:
-        lock = Path(config["storageDir"]).expanduser() / ".refresh.lock"
-        try:
-            (lock / ".detached-child-unverified").mkdir(exist_ok=True)
-        except OSError:
-            print("usage stage=local-collect timeout lock-marker-failed", file=sys.stderr, flush=True)
-            os._exit(1)
-        print("usage stage=local-collect timeout lock-retained", file=sys.stderr, flush=True)
-        raise RuntimeError("Local activity worker cleanup is unverified") from None
+        raise
     tokens, opencode_error = [], "ReadLimit"
     if cycle_deadline is not None:
         deadline = min(deadline, cycle_deadline - LEGACY_PUBLISH_RESERVE)
@@ -371,6 +383,8 @@ def collect_local(collector_path, config, device, at=None, history_days=30, *, c
             tokens, opencode_error = _run_worker({**request, "stage": "opencode", "repositories": repositories,
                 "failedRoots": failed_roots, "start": result["start"], "at": result["capturedAt"]},
                 min(remaining, local_usage_models.MAX_OPENCODE_READ_SECONDS + 2))
+        except LocalWorkerCleanupUnverified:
+            _retain_unverified_worker_cleanup(config)
         except subprocess.TimeoutExpired:
             pass
         except (OSError, ValueError):
@@ -1277,6 +1291,7 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
             if len(snapshot["sources"]) != len(machines):
                 raise ValueError("Activity source coverage does not match the collected machines")
             commit_statuses = []
+            category_commit_statuses = {category: [] for category in ("work", "personal", "unclassified")}
             for source, machine in zip(snapshot["sources"], machines):
                 if source.get("device") != machine.get("device"):
                     raise ValueError("Activity source identity does not match the collected machine")
@@ -1297,22 +1312,33 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
                 commit_ready = machine.get("status") == "ok" or (
                     machine.get("status") == "partial" and bool(errors) and commit_errors == []
                 )
-                source["commitStatus"] = "ready" if commit_ready else (
+                local_commit_status = "ready" if commit_ready else (
                     "local-ref-ready" if machine.get("status") == "partial" and fetch_disabled_only
                     and not machine.get("retainedCapturedAt")
                     and not machine.get("retainedCommits")
                     else "partial" if machine.get("status") in ("partial", "stale") else "unavailable"
                 )
-                if not ado["complete"] and source["commitStatus"] in ("ready", "local-ref-ready"):
-                    source["commitStatus"] = "partial"
+                category_status = {category: local_commit_status for category in ("personal", "unclassified")}
+                category_status["work"] = "partial" if not ado["complete"] else local_commit_status
+                source["commitCategoryStatus"] = category_status
+                source["commitStatus"] = "partial" if not ado["complete"] and local_commit_status in (
+                    "ready", "local-ref-ready") else local_commit_status
                 if machine.get("status") != "missing":
                     commit_statuses.append(source["commitStatus"])
+                    for category, status in category_status.items():
+                        category_commit_statuses[category].append(status)
             day_commit_status = None
             if commit_statuses and all(s == "ready" for s in commit_statuses):
                 day_commit_status = "ready"
             elif commit_statuses and all(s in ("ready", "local-ref-ready") for s in commit_statuses):
                 day_commit_status = "local-ref-ready"
-            if day_commit_status:
+            day_category_commit_status = {}
+            for category, statuses in category_commit_statuses.items():
+                if statuses and all(status == "ready" for status in statuses):
+                    day_category_commit_status[category] = "ready"
+                elif statuses and all(status in ("ready", "local-ref-ready") for status in statuses):
+                    day_category_commit_status[category] = "local-ref-ready"
+            if day_commit_status or day_category_commit_status:
                 at_instant = collector.instant(at.isoformat() if isinstance(at, dt.datetime) else at)
                 tz = getattr(collector, "TZ", dt.timezone(dt.timedelta(hours=8)))
                 today_date = at_instant.astimezone(tz).date() if at_instant is not None else None
@@ -1343,7 +1369,10 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
                     day_start = dt.datetime.combine(row_date, dt.time(), tz)
                     required_end = at_instant if row_date == today_date else day_start + dt.timedelta(days=1)
                     if all(m_start <= day_start and m_end >= required_end for m_start, m_end in machine_windows):
-                        row["commitStatus"] = day_commit_status
+                        if day_commit_status:
+                            row["commitStatus"] = day_commit_status
+                        if day_category_commit_status:
+                            row["commitCategoryStatus"] = dict(day_category_commit_status)
             previous = collector.read_json(latest, {}) if latest is not None else {}
             saved = collector.read_json(retained, {}) if retained is not None else {}
             models = local_usage_models.daily_models(collector, machines, snapshot)
