@@ -98,6 +98,12 @@ function parseFrameMediaRead(value: unknown): FrameMediaRead | null {
   return value as FrameMediaRead;
 }
 
+function isAgentRoleEditorApp(app: MiniAppDocument["app"]): boolean {
+  return app.dashboardIdentity === "agent-team" && app.release?.packageId === "mashellhan.agent-team"
+    && app.dashboard?.kind === "agent-team" && app.dashboard.renderer === "html"
+    && (app.dashboard.resources as readonly string[]).includes("configuration");
+}
+
 export interface MiniAppFrameMount {
   readonly iframe: HTMLIFrameElement;
   update(state: MiniAppState, document?: MiniAppDocument): void;
@@ -136,9 +142,7 @@ export function mountMiniAppFrame(options: {
   const localWindow = () => miniAppNativeFrameGuard() && window.ogb?.app?.ownPage === true && window.ogb?.remoteClient?.active !== true;
   const site = localWindow() && options.site === managedMiniAppSite(document) ? options.site : undefined;
   const hongguo = localWindow() && options.hongguo === true && isManagedHongguoDocument(document);
-  const roleEditor = localWindow() && window.ogb?.platform === "darwin" && !!options.onAgentRoleEdit && installed.dashboardIdentity === "agent-team"
-    && installed.release?.packageId === "mashellhan.agent-team" && installed.dashboard?.kind === "agent-team"
-    && installed.dashboard.renderer === "html" && (installed.dashboard.resources as readonly string[]).includes("configuration");
+  const roleEditor = localWindow() && window.ogb?.platform === "darwin" && !!options.onAgentRoleEdit && isAgentRoleEditorApp(installed);
   const frameDocument = miniAppFrameDocument(document, typeof window.ogb?.openExternal === "function", { site, hongguo, roleEditor });
   let hongguoMount: ReturnType<typeof mountManagedHongguoFrame> | undefined;
   let refreshKey = options.refreshKey ?? 0;
@@ -484,9 +488,10 @@ export function MiniAppFrame({ document, state, onRevoked, onChanged, onRuntimeR
   selectionChangeRef.current = onGithubSelectionChange;
   const bindings = JSON.stringify(document.bindings);
   const nativeGuard = miniAppNativeFrameGuard();
-  const scopeRevision = site || hongguo ? document.app.revision : 0;
+  const scopeRevision = site || hongguo || isAgentRoleEditorApp(document.app) ? document.app.revision : null;
 
   useLayoutEffect(() => {
+    setRoleEditor(null);
     if (!nativeGuard || !box.current) return;
     const current = mountMiniAppFrame({
       container: box.current,

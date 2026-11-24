@@ -3,6 +3,8 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Window as HappyWindow } from "happy-dom";
 import type { MiniAppDocument, MiniAppQueryResult, MiniAppState } from "../../../shared/mini-apps";
@@ -14,7 +16,7 @@ vi.mock("@/state/store", () => ({
 }));
 
 import { ApiError } from "@/state/store";
-import { mountMiniAppFrame } from "./MiniAppFrame";
+import { MiniAppFrame, mountMiniAppFrame } from "./MiniAppFrame";
 import { miniAppFrameDocument, MINI_APP_CSP } from "./mini-app-document";
 import { AppDocs } from "../../../server/app-docs";
 import { MiniApps } from "../../../server/mini-apps/registry";
@@ -37,6 +39,11 @@ const page: MiniAppQueryResult = { columns: [{ name: "amount", type: "decimal" }
 const teamDocument: MiniAppDocument = { ...document, app: { ...app, dashboardIdentity: "agent-team",
   dashboard: { kind: "agent-team", renderer: "html", htmlRole: "primary", editableFields: ["title", "description"],
     resources: ["teams", "activity", "configuration", "team-rules", "skill"] } }, bindings: [] };
+const managedTeamDocument: MiniAppDocument = { ...teamDocument, app: { ...teamDocument.app, release: {
+  packageId: "mashellhan.agent-team", appVersion: "0.1.4", sourceCommit: "a".repeat(40),
+  tag: "mini-app/agent-team/v0.1.4", requires: ["agent-team-v1"], htmlSha256: "b".repeat(64),
+  htmlBytes: 16, queriesSha256: "c".repeat(64), queriesBytes: 8,
+} } };
 const usageDocument: MiniAppDocument = { ...document, app: { ...app, title: "Activities", dashboardIdentity: "usage",
   dashboard: { kind: "usage", renderer: "html", htmlRole: "primary", editableFields: ["title", "description"], resources: ["usage"] } }, bindings: [] };
 const usageState: MiniAppState = { ...state, data: [] };
@@ -57,15 +64,10 @@ afterEach(() => { container.remove(); window.document.body.innerHTML = ""; vi.re
 
 describe("persistent Mini App frame", () => {
   it("opens the native Agent MD editor from the current managed frame and accepts only its exact member target", () => {
-    const managed = { ...teamDocument, app: { ...teamDocument.app, release: {
-      packageId: "mashellhan.agent-team", appVersion: "0.1.4", sourceCommit: "a".repeat(40),
-      tag: "mini-app/agent-team/v0.1.4", requires: ["agent-team-v1"], htmlSha256: "b".repeat(64),
-      htmlBytes: 16, queriesSha256: "c".repeat(64), queriesBytes: 8,
-    } } };
     Object.defineProperties(container, { clientWidth: { value: 500 }, clientHeight: { value: 500 } });
     vi.spyOn(window.document, "visibilityState", "get").mockReturnValue("visible");
     const onAgentRoleEdit = vi.fn();
-    const mount = mountMiniAppFrame({ container, document: managed, state: { ...state, data: [] }, onRevoked: vi.fn(), onAgentRoleEdit });
+    const mount = mountMiniAppFrame({ container, document: managedTeamDocument, state: { ...state, data: [] }, onRevoked: vi.fn(), onAgentRoleEdit });
     const view = mount.iframe.contentWindow!;
     const dispatch = (data: unknown, origin = "null") => window.dispatchEvent(new MessageEvent("message", {
       source: view as unknown as MessageEventSource, data, origin,
@@ -87,6 +89,46 @@ describe("persistent Mini App frame", () => {
       expect(onAgentRoleEdit).toHaveBeenCalledTimes(1);
       expect(fixture.api).not.toHaveBeenCalled();
     } finally { mount.retire(); }
+  });
+
+  it("reopens Agent MD after the managed document advances within the same template version", () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.spyOn(window.document, "visibilityState", "get").mockReturnValue("visible");
+    fixture.api.mockImplementation(() => new Promise(() => {}));
+    const root = createRoot(container);
+    const render = (document: MiniAppDocument, revision: number) => act(() => root.render(createElement(MiniAppFrame, {
+      document, state: { ...state, revision, data: [] }, onRevoked: vi.fn(),
+    })));
+    const selection = { agentId: "w6:p1", occupantId: "o1234567890abcdef" };
+    const dispatch = (source: Window, data: unknown) => window.dispatchEvent(new MessageEvent("message", { source, data, origin: "null" }));
+    const openEditor = (source: Window) => act(() => {
+      dispatch(source, { jsonrpc: "2.0", method: "ui/notifications/initialized" });
+      dispatch(source, { mausMiniApp: 1, type: "agent-md-edit", id: "mini:2", selection });
+    });
+    const dialog = () => window.document.querySelector("dialog[data-agent-role-editor]");
+    try {
+      render(managedTeamDocument, 3);
+      const oldFrame = container.querySelector("iframe")!;
+      Object.defineProperties(oldFrame.parentElement!, { clientWidth: { value: 500 }, clientHeight: { value: 500 } });
+      const oldView = oldFrame.contentWindow!;
+      openEditor(oldView);
+      expect(dialog()).not.toBeNull();
+      expect(fixture.api).toHaveBeenLastCalledWith(`/api/mini-apps/${app.id}/agent-md`, expect.objectContaining({
+        method: "POST", body: JSON.stringify({ ...selection, expectedRevision: 3 }),
+      }));
+
+      render({ ...managedTeamDocument, app: { ...managedTeamDocument.app, title: "Renamed team", revision: 4 } }, 4);
+      expect(oldFrame.isConnected).toBe(false);
+      expect(dialog()).toBeNull();
+      openEditor(oldView);
+      expect(fixture.api).toHaveBeenCalledTimes(1);
+
+      openEditor(container.querySelector("iframe")!.contentWindow!);
+      expect(dialog()).not.toBeNull();
+      expect(fixture.api).toHaveBeenLastCalledWith(`/api/mini-apps/${app.id}/agent-md`, expect.objectContaining({
+        method: "POST", body: JSON.stringify({ ...selection, expectedRevision: 4 }),
+      }));
+    } finally { act(() => root.unmount()); }
   });
 
   it("carries an HTML SDK history selection through the existing frame and registry guards", async () => {

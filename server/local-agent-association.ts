@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { lstat, open, readdir, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
+import { fromMarkdown } from "mdast-util-from-markdown";
 
 import type { LocalAgentConfigurationDocument } from "../shared/local-dashboard.ts";
 import { localAgentOccupantId } from "./local-agent-occupant.ts";
@@ -163,10 +164,43 @@ export async function teamSource(agents: Record<string, unknown>[], teamId: stri
 const cells = (line: string) => line.startsWith("|") && line.endsWith("|") ? line.slice(1, -1).split("|").map((part) => part.trim()) : [];
 const roleLink = (cell: string) => /^\[[^\]]+\]\((roles\/[a-z][a-z0-9-]*\.md)\)$/.exec(cell)?.[1];
 
-function declaredRole(name: string, playbook: LocalAgentConfigurationDocument, readme: LocalAgentConfigurationDocument): Role | null | undefined {
-  const fromRules = playbook.markdown?.split("\n").map(cells).filter((parts) => parts[0] === name && /^[A-Za-z][A-Za-z ]+$/.test(parts[1] ?? "")) ?? [];
-  const fromReadme = readme.markdown?.split("\n").map(cells).filter((parts) => parts[1]?.split(/[、,，]/).some((entry) => entry.trim() === name) &&
-    /^[A-Za-z][A-Za-z ]+$/.test(parts[0] ?? "") && roleLink(parts[4] ?? "")) ?? [];
+function rosterRows(markdown: string, grouped: boolean, requireTable: boolean): string[][] {
+  if (!markdown.includes("|")) return [];
+  const rows: string[][] = [];
+  const legacy: string[][] = [];
+  let hasRoster = false;
+  for (const block of fromMarkdown(markdown).children) {
+    if (block.type !== "paragraph" || !block.position) continue;
+    const [header = [], separator = [], ...body] = markdown.slice(block.position.start.offset, block.position.end.offset)
+      .split(/\r?\n/).map((line) => cells(line.trim()));
+    if (separator.length < 2 || !separator.every((cell) => /^:?-+:?$/.test(cell))) {
+      if (!requireTable) legacy.push(header, separator, ...body);
+      continue;
+    }
+    if (header.length !== separator.length) continue;
+    const columns = header.join("|");
+    if (grouped ? columns !== "Role|Agent|Model|Effort|Role file" && columns !== "角色|Herdr agent|模型|推理强度|定义"
+      : header[0] !== "Herdr name" || header[1] !== "Role") continue;
+    hasRoster = true;
+    for (const parts of body) {
+      if (!parts.length) break;
+      if (parts.length !== header.length) continue;
+      rows.push(grouped ? parts : [parts[0]!, parts[1]!, parts[header.indexOf("Role file")] ?? ""]);
+    }
+  }
+  return hasRoster ? rows : legacy;
+}
+
+export function teamRoleRoster(playbook: LocalAgentConfigurationDocument, readme: LocalAgentConfigurationDocument, requireTable = false) {
+  return { rules: rosterRows(playbook.markdown ?? "", false, requireTable), grouped: rosterRows(readme.markdown ?? "", true, requireTable) };
+}
+
+type TeamRoleRoster = ReturnType<typeof teamRoleRoster>;
+
+function declaredRole(name: string, roster: TeamRoleRoster): Role | null | undefined {
+  const fromRules = roster.rules.filter((parts) => parts[0] === name && /^[A-Za-z][A-Za-z ]+$/.test(parts[1] ?? ""));
+  const fromReadme = roster.grouped.filter((parts) => parts[1]?.split(/[、,，]/).some((entry) => entry.trim() === name) &&
+    /^[A-Za-z][A-Za-z ]+$/.test(parts[0] ?? "") && roleLink(parts[4] ?? ""));
   if (fromRules.length > 1 || fromReadme.length > 1) return null;
   const ruleLabel = fromRules[0]?.[1];
   const readmeLabel = fromReadme[0]?.[0];
@@ -180,9 +214,8 @@ function declaredRole(name: string, playbook: LocalAgentConfigurationDocument, r
   return { label, file };
 }
 
-export function memberRole(source: TeamSource, member: Record<string, unknown>, playbook: LocalAgentConfigurationDocument,
-  readme: LocalAgentConfigurationDocument): Role | null {
-  const declared = declaredRole(String(member.name), playbook, readme);
+export function memberRole(source: TeamSource, member: Record<string, unknown>, roster: TeamRoleRoster): Role | null {
+  const declared = declaredRole(String(member.name), roster);
   if (source.roleFiles) {
     const file = source.roleFiles.get(String(member.pane_id));
     return file && declared !== null && (!declared?.file || declared.file === file)
@@ -221,8 +254,9 @@ export async function localAgentRoles(agents: Record<string, unknown>[], home: s
     const playbook = await cachedRead(source.root, source.playbook);
     const readme = dirname(source.playbook) === source.root ? await cachedRead(source.root, join(source.root, "README.md")) : empty("unverified");
     if (playbook.status === "error" || readme.status === "error") continue;
+    const roster = teamRoleRoster(playbook, readme);
     for (const member of agents.filter((agent) => agent.workspace_id === teamId)) {
-      const role = memberRole(source, member, playbook, readme);
+      const role = memberRole(source, member, roster);
       if (role) roles.set(String(member.pane_id), role.label);
     }
   }

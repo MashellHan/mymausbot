@@ -9,7 +9,7 @@ import type { LocalAgentConfigurationDocument, LocalAgentConfigurationResponse, 
 import { herdrRows, runHerdr, type HerdrRunner } from "./local-agent-teams.ts";
 import { localAgentOccupantId } from "./local-agent-occupant.ts";
 import { discoverCodexSkills, type CodexSkillDiscovery } from "./local-agent-skill-discovery.ts";
-import { inside, memberRole, readDocument, teamSource, verifiedLocalAgentMembers, type TeamSource } from "./local-agent-association.ts";
+import { inside, memberRole, readDocument, teamRoleRoster, teamSource, verifiedLocalAgentMembers, type TeamSource } from "./local-agent-association.ts";
 import { getLocalAgentRoleDocument, roleFrontMatter, saveLocalAgentRoleDocument,
   type LocalAgentRoleSource, type RoleFileExchange } from "./local-agent-role-document.ts";
 
@@ -127,6 +127,7 @@ export function createLocalAgentConfigurationProvider({ run = runHerdr, home = h
     const { source, playbook, member } = found;
     const readme = dirname(source.playbook) === source.root ? await readDocument(source.root, join(source.root, "README.md")) : empty("unverified");
     if (readme.status === "error") return null;
+    const roster = teamRoleRoster(playbook, readme, true);
     const resolved = new Map<string, ReturnType<typeof resolveRole>>();
     async function resolveRole(role: NonNullable<ReturnType<typeof memberRole>>) {
       const { doc, file } = await agentDocument(source, role);
@@ -139,7 +140,7 @@ export function createLocalAgentConfigurationProvider({ run = runHerdr, home = h
       return file;
     }
     const binding = (agent: Record<string, unknown>) => {
-      const role = memberRole(source, agent, playbook, readme);
+      const role = memberRole(source, agent, roster);
       if (!role) return Promise.resolve(null);
       const key = role.file ?? role.label.toLowerCase();
       let file = resolved.get(key);
@@ -183,7 +184,7 @@ export function createLocalAgentConfigurationProvider({ run = runHerdr, home = h
     const readme = found.source && dirname(found.source.playbook) === found.source.root
       ? await readDocument(found.source.root, join(found.source.root, "README.md")) : empty("unverified");
     const roleFile = found.source?.roleFiles?.get(agentId);
-    const role = found.source ? memberRole(found.source, found.member, found.playbook, readme) : null;
+    const role = found.source ? memberRole(found.source, found.member, teamRoleRoster(found.playbook, readme)) : null;
     const agent = found.source ? (await agentDocument(found.source, role)).doc : empty(found.playbook.status);
     const references = found.source && (!found.source.roleFiles || roleFile)
       ? skillReferences(role, agent, found.playbook, home) : [];

@@ -17,7 +17,7 @@ const fixtureExchange = (current: string, staged: string) => {
   renameSync(`${staged}.original`, staged);
 };
 
-async function fixture() {
+async function fixture(sharedRole = false) {
   const home = await mkdtemp(join(tmpdir(), "mausbot-agent-config-"));
   folders.push(home);
   const repo = join(home, "workspace", "OpenMausBot");
@@ -27,6 +27,7 @@ async function fixture() {
   await put(join(repo, "AGENTS.md"), "Read `.agents/team/playbook.md` and the assigned role in `.agents/team/roles/`.");
   await put(join(repo, ".agents/team/playbook.md"), [
     "# MausBot development team", "| Herdr name | Role | Role file |", "| --- | --- | --- |", "| mausbot-design | Designer | [Designer](roles/designer.md) |",
+    ...(sharedRole ? ["| mausbot-mini-review | Designer | [Designer](roles/designer.md) |"] : []), "",
     "Use the Herdr skill for Herdr operations.", "Consult the github-accounts skill for repository auth.",
     `Designer follows \`${skill(".codex", "impeccable")}\`.`,
   ].join("\n"));
@@ -60,9 +61,7 @@ async function fixture() {
 
 describe("verified local Agent Team configuration", () => {
   it("edits the exact shared role body, preserving launch metadata and external edits", async () => {
-    const data = await fixture();
-    const playbook = join(data.repo, ".agents/team/playbook.md");
-    await data.put(playbook, `${await readFile(playbook, "utf8")}\n| mausbot-mini-review | Designer | [Designer](roles/designer.md) |`);
+    const data = await fixture(true);
     const source = join(data.repo, ".agents/team/roles/designer.md");
     const prefix = "---\r\nname: MausBot Designer\r\nruntime: codex\r\n---\r\n";
     await data.put(source, `${prefix}# Original\r\n`);
@@ -103,7 +102,7 @@ describe("verified local Agent Team configuration", () => {
       const result = await data.run(args);
       if (args.at(-2) !== "agent" || --remaining > 0) return result;
       if (updateRole) {
-        await data.put(playbook, "| mausbot-design | Designer | [Designer](roles/other.md) |");
+        await data.put(playbook, "| Herdr name | Role | Role file |\n| --- | --- | --- |\n| mausbot-design | Designer | [Designer](roles/other.md) |");
         return result;
       }
       const parsed = JSON.parse(result);
@@ -124,7 +123,7 @@ describe("verified local Agent Team configuration", () => {
     expect(await provider.saveRoleDocument(input, () => {})).toEqual({ status: "unavailable" });
     expect(await readFile(source, "utf8")).toBe(original);
     remaining = Infinity;
-    await data.put(playbook, "| mausbot-design | Designer |");
+    await data.put(playbook, "| Herdr name | Role |\n| --- | --- |\n| mausbot-design | Designer |");
     await unlink(source);
     for (const example of ["# Example metadata\nname: Designer", "---\nname: Mini App Designer\n---\n# Different role"]) {
       await data.put(join(dirname(source), "example.md"), example);
@@ -133,10 +132,29 @@ describe("verified local Agent Team configuration", () => {
     }
   });
 
+  it("uses the declared role table without accepting example or unrelated table rows", async () => {
+    const data = await fixture();
+    const playbook = join(data.repo, ".agents/team/playbook.md");
+    const original = await readFile(playbook, "utf8");
+    const row = "| mausbot-design | Designer | [Example](roles/example.md) |";
+    const table = `| Herdr name | Role | Role file |\n| --- | --- | --- |\n${row}`;
+    const unrelated = `| Seat | Label | Example |\n| --- | --- | --- |\n${row}`;
+    const examples = `\`\`\`markdown\n${table}\n\`\`\`\n\n<!--\n${table}\n-->\n\n${unrelated}`;
+    await data.put(join(dirname(playbook), "roles/example.md"), "# Example role");
+    const provider = createLocalAgentConfigurationProvider({ home: data.home, run: data.run, discoverSkills: noDiscovery });
+    const selected = await provider.getAgent("w6:p2");
+    const target = { agentId: selected.agentId, occupantId: selected.occupantId! };
+    await data.put(playbook, `${original}\n\n${examples}`);
+    expect(await provider.getRoleDocument(target)).toMatchObject({ file: ".agents/team/roles/designer.md" });
+    await data.put(playbook, `${examples}\n\n${row}`);
+    expect(await provider.getRoleDocument(target)).toBeNull();
+  });
+
   it("reports seats sharing one role through both explicit and inferred paths", async () => {
     const data = await fixture();
-    await data.put(join(data.mini, "README.md"), "| Designer | miniapp-design、miniapp-offline | sol | high | [designer](roles/designer.md) |");
-    await data.put(join(data.mini, "playbook.md"), "| miniapp-lead | Designer |");
+    await data.put(join(data.mini, "README.md"), ["| 角色 | Herdr agent | 模型 | 推理强度 | 定义 |", "| --- | --- | --- | --- | --- |",
+      "| Designer | miniapp-design、miniapp-offline | sol | high | [designer](roles/designer.md) |"].join("\n"));
+    await data.put(join(data.mini, "playbook.md"), "| Herdr name | Role |\n| --- | --- |\n| miniapp-lead | Designer |");
     await data.put(join(data.mini, "roles/designer.md"), "---\nname: Designer\n---\n# Role body");
     const provider = createLocalAgentConfigurationProvider({ home: data.home, run: data.run, discoverSkills: noDiscovery });
     const selected = await provider.getAgent("w8:p4");
