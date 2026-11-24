@@ -220,6 +220,28 @@ test("allows only the exact SQLGlot demo document route while rejecting lookalik
   ]) assert.equal(githubMediaUrlAllowed(url), false, url);
 });
 
+test("allows only the exact jsonschema demo document route while rejecting lookalike, subfile, query and other-origin URLs", () => {
+  for (const url of [
+    "https://mxhan.com/github/demo/jsonschema-agent-contract/",
+    "https://mxhan.com/github/demo/jsonschema-agent-contract/#contract",
+  ]) assert.equal(githubActivityPageAllowed(url), true, url);
+
+  for (const url of [
+    "https://mxhan.com/github/demo/jsonschema-agent-contract",
+    "https://mxhan.com/github/demo/jsonschema-agent-contract-2/",
+    "https://mxhan.com/github/demo/jsonschema-agent-contract/extra/",
+    "https://mxhan.com/github/demo/jsonschema-agent-contract/index.html",
+    "https://mxhan.com/github/demo/jsonschema-agent-contract/results.json",
+    "https://mxhan.com/github/demo/jsonschema-agent-contract/?q=1",
+    "https://other.example/github/demo/jsonschema-agent-contract/",
+  ]) assert.equal(githubActivityPageAllowed(url), false, url);
+
+  for (const url of [
+    "https://mxhan.com/github/demo/jsonschema-agent-contract/",
+    "https://mxhan.com/github/demo/jsonschema-agent-contract/results.json",
+  ]) assert.equal(githubMediaUrlAllowed(url), false, url);
+});
+
 test("allows only the exact Hypothesis demo document route while rejecting superseded/lookalike/ZIP/subfile/media/query/dot/encoded/other-origin URLs", () => {
   for (const url of [
     "https://mxhan.com/github/demo/hypothesis-orders/",

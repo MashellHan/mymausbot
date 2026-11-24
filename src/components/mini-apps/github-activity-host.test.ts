@@ -138,5 +138,33 @@ it("validates and maps canonical edition/repo selections in both directions", ()
   for (const args of rejectedHypothesisCases) {
     expect(selectionFromGithubPath(...args)).toEqual({ ok: false });
   }
+  expect(selectionFromGithubPath("/github/demo/jsonschema-agent-contract/", "2026-11-24", "python-jsonschema/jsonschema"))
+    .toEqual({ ok: true, selection: { editionKey: "2026-11-24", repo: "python-jsonschema/jsonschema" } });
+  expect(selectionFromGithubPath("/github/demo/jsonschema-agent-contract/#contract", "2026-11-24", "python-jsonschema/jsonschema"))
+    .toEqual({ ok: true, selection: { editionKey: "2026-11-24", repo: "python-jsonschema/jsonschema" } });
+  expect(selectionFromGithubPath("/github/demo/jsonschema-agent-contract/", undefined, undefined, "leaving"))
+    .toEqual({ ok: true, selection: { editionKey: "2026-11-24", repo: "python-jsonschema/jsonschema" } });
+  expect(selectionFromGithubPath("/github/demo/jsonschema-agent-contract/", undefined, undefined, "shown"))
+    .toEqual({ ok: true, selection: { editionKey: "2026-11-24", repo: "python-jsonschema/jsonschema" } });
+  expect(selectionFromGithubPath("/github/demo/jsonschema-agent-contract/", "2026-11-24", "python-jsonschema/jsonschema", "shown"))
+    .toEqual({ ok: true, selection: { editionKey: "2026-11-24", repo: "python-jsonschema/jsonschema" } });
+  const rejectedJsonschemaCases: ReadonlyArray<Parameters<typeof selectionFromGithubPath>> = [
+    ["/github/demo/jsonschema-agent-contract/"],
+    ["/github/demo/jsonschema-agent-contract/", null, null],
+    ["/github/demo/jsonschema-agent-contract/", "2026-11-24"],
+    ["/github/demo/jsonschema-agent-contract/", "2026-11-24", null],
+    ["/github/demo/jsonschema-agent-contract/", null, "python-jsonschema/jsonschema"],
+    ["/github/demo/jsonschema-agent-contract/", "2026-11-23", "python-jsonschema/jsonschema"],
+    ["/github/demo/jsonschema-agent-contract/", "2026-11-24", "other/repo"],
+    ["/github/demo/jsonschema-agent-contract/", "2026-11-24", "Python-jsonschema/jsonschema"],
+    ["/github/demo/jsonschema-agent-contract/", "2026-11-23", "python-jsonschema/jsonschema", "leaving"],
+    ["/github/demo/jsonschema-agent-contract/", "2026-11-24", undefined, "shown"],
+    ["/github/demo/jsonschema-agent-contract/results.json", "2026-11-24", "python-jsonschema/jsonschema"],
+    ["/github/demo/jsonschema-agent-contract/index.html", "2026-11-24", "python-jsonschema/jsonschema"],
+    ["/github/demo/jsonschema-agent-contract", "2026-11-24", "python-jsonschema/jsonschema"],
+  ];
+  for (const args of rejectedJsonschemaCases) {
+    expect(selectionFromGithubPath(...args)).toEqual({ ok: false });
+  }
   expect(selectionFromGithubPath("/github/media/demo.png")).toEqual({ ok: false });
 });
