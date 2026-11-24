@@ -3181,6 +3181,8 @@
   "common.checking": "检测中…",
   "common.close": "关闭",
   "agentRoleEditor.title": "编辑 Agent MD",
+  "agentRoleEditor.preview": "预览",
+  "agentRoleEditor.edit": "编辑",
   "agentRoleEditor.shared": "共用此文件的成员：{names}",
   "agentRoleEditor.loadFailed": "无法打开当前角色文件。请重新打开 Agent MD 或重试。",
   "agentRoleEditor.saveFailed": "无法保存角色文件。请重新打开 Agent MD 并核对当前版本。",
