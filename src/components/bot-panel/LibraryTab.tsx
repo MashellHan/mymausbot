@@ -3,6 +3,7 @@ import { useMemo } from "react";
 
 import { t } from "@/lib/i18n";
 import { usePageOpener } from "@/lib/page-open";
+import { isRemotePwaMode } from "@/lib/pwa-transport";
 import { shortPath } from "@/lib/short-path";
 import { SIDEBAR_INLINE, TWO_SIDE_PANELS_FIT, useMediaQuery } from "@/lib/use-media-query";
 import { useStore, visibleMessages, type Bot, type Message } from "@/state/store";
@@ -73,7 +74,7 @@ export function LibraryTab({ bot, onOpen, embedded = false }: { bot: Bot; onOpen
     : notes === 1 ? t("botPanel.memory.note") : t("botPanel.memory.notes", { count: notes });
   const keeps = (
     <Card anchor="keeps">
-      <NavRow data-panel-page="memory" icon={Brain} title={t("botPanel.memoryRow")} value={memoryValue} onClick={() => onOpen("memory")} />
+      {!isRemotePwaMode() && <NavRow data-panel-page="memory" icon={Brain} title={t("botPanel.memoryRow")} value={memoryValue} onClick={() => onOpen("memory")} />}
       <NavRow
         data-panel-page="skills"
         icon={Zap}

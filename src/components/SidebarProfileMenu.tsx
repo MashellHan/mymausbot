@@ -62,7 +62,7 @@ import { shortcutLabel } from "./ShortcutHint";
 import { useAnnouncements } from "./announcements/use-announcements";
 import { useOtherServerName } from "@/lib/other-server";
 import { isOwnerOrAdmin, profileForSession, readSessionState, type SessionState } from "@/lib/session";
-import { clearPwaAuth } from "@/lib/pwa-config";
+import { clearPwaAuth, isRemoteClientSession, isRemotePwaMode } from "@/lib/pwa-config";
 import {
   cloudPhoneDestination,
   phonePairingSettingsAction,
@@ -547,13 +547,15 @@ export function SidebarProfileMenu({ iconOnly = false, rail = false, circle = fa
   const [menuOpen, setMenuOpen] = useState(false);
   const advancedMode = useAdvancedMode();
   const automationsNeedYou = useAutomationsNeedYou();
-  const planSnapshot = useCloudPlanSnapshot(usageBridge(state.config?.cloudHome === true) ?? (window.ogb?.remoteClient?.active ? undefined : window.ogb?.cloudPlan));
+  const remote = isRemoteClientSession();
+  const remotePwa = isRemotePwaMode();
+  const planSnapshot = useCloudPlanSnapshot(usageBridge(state.config?.cloudHome === true) ?? (remote ? undefined : window.ogb?.cloudPlan));
   const cloudUsage = cloudUsageSummary(planSnapshot);
-  const phoneState = usePhonePlaceState(menuOpen);
+  const phoneState = usePhonePlaceState(menuOpen && !remote);
   const place = useSettingsPlace();
   const summary = useAccountSummary();
   const desktopUpdate = useUpdateItem();
-  const serverUpdate = useServerUpdateItem(!window.ogb?.updater);
+  const serverUpdate = useServerUpdateItem(!window.ogb?.updater && !remotePwa);
   const here = pageIsThisComputer();
   const openComputer = window.ogb?.rail?.openComputer;
   // A Cloud's page in the desktop window can't update the app: the row says where that happens, and goes there.
@@ -577,7 +579,6 @@ export function SidebarProfileMenu({ iconOnly = false, rail = false, circle = fa
 
   const profile = profileForSession(state.config?.profile, session);
   const name = profileLabel(profile);
-  const remote = window.ogb?.remoteClient?.active === true;
   const besideRail = railShown(usePlaces());
   const filesReady = useCloudFilesReady();
   const desktop = Boolean(window.ogb);
@@ -614,7 +615,7 @@ export function SidebarProfileMenu({ iconOnly = false, rail = false, circle = fa
         onAutomations: () => dispatch({ type: "showRoutines", view: "list" }),
         onTeamMap: () => dispatch({ type: "showTeamMap" }),
         onFiles: filesReady ? () => dispatch({ type: "showFiles" }) : undefined,
-        onPublishedApps: () => dispatch({ type: "showPublishedApps" }),
+        onPublishedApps: remotePwa ? undefined : () => dispatch({ type: "showPublishedApps" }),
         onTeamFiles: state.config?.team ? () => dispatch({ type: "showTeamFiles" }) : undefined,
         archived: account?.archived,
       }),

@@ -7,6 +7,7 @@ import { cn } from "@/lib/cn";
 import { useCloudFilesReady } from "@/lib/cloud-files";
 import { t } from "@/lib/i18n";
 import { useAdvancedMode } from "@/lib/interface-mode";
+import { isRemoteClientSession, isRemotePwaMode } from "@/lib/pwa-transport";
 import { useWebPanels } from "@/lib/web-panel-preferences";
 import { useSidebarToolsLayout, type SidebarDensity } from "@/lib/sidebar-preferences";
 import { useStore } from "@/state/store";
@@ -65,6 +66,7 @@ function NavRow({
 
 export function SidebarAppsButton() {
   const { state, dispatch } = useStore();
+  if (isRemotePwaMode()) return null;
   const label = t("sidebar.nav.apps");
   return (
     <button
@@ -89,7 +91,7 @@ export function SidebarAppsButton() {
 export function useAutomationsNeedYou(): boolean {
   const { state } = useStore();
   const appTriggers = useAppTriggers();
-  const routinesOnly = typeof window !== "undefined" && window.ogb?.remoteClient?.active === true;
+  const routinesOnly = isRemoteClientSession();
   const unseenProblem = useMemo(() => hasUnseenProblemRun(automationsFrom({
     routines: state.routines, webhooks: routinesOnly ? [] : state.webhooks, appTriggers: appTriggers.triggers, runs: state.routineRuns, bots: state.bots,
   })), [state.routines, state.webhooks, appTriggers.triggers, state.routineRuns, state.bots, routinesOnly]);
@@ -124,6 +126,7 @@ export function SidebarFooterNav({
   const toolbar = advanced && !iconsOnly && toolsLayout === "toolbar";
   const iconSize = iconsOnly && !rail ? 20 : 18;
   const tone = (active: boolean) => (active ? "text-accent" : "text-ink-secondary");
+  const remotePwa = isRemotePwaMode();
   const automationsNeedYou = useAutomationsNeedYou();
   const automationsRow = <NavRow
     id="automations"
@@ -145,7 +148,7 @@ export function SidebarFooterNav({
     onClick={() => dispatch({ type: "showFiles" })}
   />;
   if (!advanced && !iconsOnly) return null;
-  const appsRow = iconsOnly && <NavRow
+  const appsRow = iconsOnly && !remotePwa && <NavRow
     id="apps"
     label={t("sidebar.nav.apps")}
     tourId="nav-apps"
@@ -173,14 +176,14 @@ export function SidebarFooterNav({
         />
       )}
       {filesRow}
-      <NavRow
+      {!remotePwa && <NavRow
         id="published-apps"
         label={t("sidebar.nav.publishedApps")}
         iconsOnly={iconsOnly || toolbar}
         active={state.activeView === "published-apps"}
         icon={(active) => <Rocket size={iconSize} className={tone(active)} />}
         onClick={() => dispatch({ type: "showPublishedApps" })}
-      />
+      />}
       {state.config?.team && (
         <NavRow
           id="team-files"

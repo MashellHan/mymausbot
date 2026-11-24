@@ -2,6 +2,7 @@ import { api } from "@/state/store";
 import { unlessRefused } from "@/lib/admin-scope";
 import { readCachedInventory, writeCachedInventory } from "@/lib/connected-apps-cache";
 import type { ConnectorStatus } from "@/lib/connector-status";
+import { isRemotePwaMode } from "@/lib/pwa-transport";
 
 // The connected-apps inventory and its 30 s memory cache. Its own module so the sidebar, the usage meter and a bot's apps
 // can ask for it without loading the Apps panel.
@@ -28,6 +29,7 @@ function unavailableInventory(fallback: Record<string, ConnectorStatus> = {}): C
 }
 
 export function preloadConnectedApps(force = false, background = false): Promise<ConnectorInventory> { // background: src/state/api.ts
+  if (isRemotePwaMode()) return Promise.resolve(REFUSED_INVENTORY);
   if (!force && cachedConnectorStatus !== null && Date.now() - cachedConnectorStatusAt < CONNECTOR_STATUS_CACHE_MS) {
     return Promise.resolve({
       services: cachedConnectorStatus,

@@ -2,6 +2,7 @@ import { useSyncExternalStore } from "react";
 
 import type { PublishedApp, PublishedAppsList } from "../../shared/published-apps";
 import { api } from "@/state/api";
+import { isRemotePwaMode } from "./pwa-transport";
 import { knownPublishedApps, onPublishedAppsChange, rememberPublishedApps } from "./published-apps";
 
 /** The list is read at most this often; a request inside that time waits for its end. */
@@ -10,6 +11,7 @@ let loading = false, loadedAt = 0, later: ReturnType<typeof setTimeout> | null =
 const asked = new Set<string>();
 
 async function load(): Promise<void> {
+  if (isRemotePwaMode()) return;
   loading = true;
   const list = await Promise.resolve().then(() => api<PublishedAppsList>("/api/published-apps", { background: true })).catch(() => null);
   if (Array.isArray(list?.apps)) rememberPublishedApps(list.apps);
@@ -19,7 +21,7 @@ async function load(): Promise<void> {
 
 /** Reads the viewer's Published apps list again, soon: now, or once the last read is old enough. */
 export function refreshPublishedApps(): void {
-  if (loading || later) return;
+  if (isRemotePwaMode() || loading || later) return;
   const wait = loadedAt + REFRESH_EVERY_MS - Date.now();
   if (wait <= 0) { void load(); return; }
   later = setTimeout(() => { later = null; void load(); }, wait);

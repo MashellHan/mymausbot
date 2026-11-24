@@ -8,6 +8,7 @@ import { effectiveDefaultResponder, jevRoomRoutingOn } from "@/lib/group-routing
 import { t } from "@/lib/i18n";
 import { normalizeState } from "@/lib/mascot";
 import { effectivePlace, placeLabelKey } from "@/lib/place";
+import { isRemoteClientSession } from "@/lib/pwa-transport";
 import { closeRoomPanel, openRoomPanel } from "@/lib/room-panel";
 import { chosenResponder, responderChoice, responderTitle } from "@/lib/room-responder";
 import { busyPlaceOf, roomSpeakerIds } from "@/lib/room-threads";
@@ -152,6 +153,7 @@ export function RoomHeader({
   membersTriggerRef: RefObject<HTMLButtonElement | null>;
 }) {
   const { state, dispatch } = useStore();
+  const remote = remoteClient || isRemoteClientSession();
   const { dragProps: headerDragProps, noDragStyle: headerNoDragStyle } = useCaptionChrome();
   const faces = memberMauses(group, members, busyPlaceOf(state.groups, state.bots));
   const pinned = (
@@ -159,13 +161,13 @@ export function RoomHeader({
       pins={pinnedPreview(group.messages, group.pinnedMessageId, t("room.aBot"), false)}
       triggerClassName="transition-colors hover:bg-ink/[0.06]"
       onJump={(messageId) => dispatch({ type: "focusMessage", threadId: group.threadId, messageId })}
-      onUnpin={remoteClient ? undefined : () => dispatch({ type: "patchGroup", groupId: group.id, patch: { pinnedMessageId: "" } })}
+      onUnpin={remote ? undefined : () => dispatch({ type: "patchGroup", groupId: group.id, patch: { pinnedMessageId: "" } })}
     />
   );
   const membersLabel = members.length === 1
     ? t("room.members.ariaOne")
     : t("room.members.ariaMany", { count: members.length });
-  const computerButton = !remoteClient && (
+  const computerButton = !remote && (
     <button
       type="button"
       data-tour="computer"
@@ -286,9 +288,9 @@ export function RoomHeader({
           {!setupPending && <ConversationTurnLimit group={group} />}
           <RoomHeaderCallButton group={group} members={members} />
           <GroupUsageChip usage={group.usage} />
-          {!remoteClient && !setupPending && !group.dm && <RoomWorkingFolderChip group={group} onToggle={onToggleFolder} />}
-          {!remoteClient && !setupPending && !group.dm && <DefaultResponderSelect group={group} members={members} />}
-          {group.dm || remoteClient ? (
+          {!remote && !setupPending && !group.dm && <RoomWorkingFolderChip group={group} onToggle={onToggleFolder} />}
+          {!remote && !setupPending && !group.dm && <DefaultResponderSelect group={group} members={members} />}
+          {group.dm || remote ? (
             faces
           ) : (
             <button

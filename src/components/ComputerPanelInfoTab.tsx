@@ -3,6 +3,7 @@ import type { Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import type { PanelFilePreview } from "@/lib/file-preview";
+import { isRemotePwaMode } from "@/lib/pwa-transport";
 import { ComputerFilesPane } from "./ComputerFilesPane";
 import { useBotSettingsDerived } from "./bot-settings/useBotSettingsDerived";
 import { LibraryTab } from "./bot-panel/LibraryTab";
@@ -50,7 +51,7 @@ export function ComputerPanelInfoTab({ view, bot, filePreview, onPreviewClose, r
   return (
     <div {...tabPanelProps(view)} className={cn("flex min-h-0 flex-1 flex-col", TAB_PANEL_FOCUS)}>
       {view === "files" && <FilesWithLibrary key={bot.id} bot={bot} filePreview={filePreview} onPreviewClose={onPreviewClose} />}
-      {view === "mini-apps" && <MiniAppsSlot requestedApp={requestedApp} />}
+      {view === "mini-apps" && !isRemotePwaMode() && <MiniAppsSlot requestedApp={requestedApp} />}
     </div>
   );
 }
