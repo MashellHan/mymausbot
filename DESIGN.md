@@ -174,6 +174,9 @@ element's job and never a pixel value:
   icons flip with `rtl:-scale-x-100`.
 - **Design for 1440×900 and check it narrow.** Nothing may clip or overlap at
   the smallest window the app allows.
+- **Simple's chat header floats over the transcript** (see [section 8](#8-surfaces-and-depth)):
+  the first message rests just below it at the top of the history, and only its
+  controls take clicks.
 
 ## 7. Icons
 
@@ -196,6 +199,11 @@ element's job and never a pixel value:
 - **Only floating things cast shadows:** menus, popovers and dialogs. Use
   `menu-surface` or `popover-surface`, which carry each skin's shadow. Cards
   in the page are flat, with a `hairline` border or a tint.
+- **Simple's chat header has no band.** The transcript runs up to the
+  window's top edge under the floating pill and buttons and fades in, in even
+  steps, over the header's 60px (a mask on the scroller, so any skin's ground
+  shows through). A solid band cut messages off at the header; the floating
+  controls already carry their own lift. Advanced keeps its band.
 - **Borders are 1px `hairline`.** Panes meet on a 0.5px `edge`. An element in
   the page gets a border or a tint, not both, and no shadow. Floating surfaces
   take their surface class, which already balances all three.
