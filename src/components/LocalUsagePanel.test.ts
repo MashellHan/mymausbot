@@ -147,6 +147,10 @@ describe("local Usage panel", () => {
     ]);
     expect(modelRows.map((row) => row.cells[0]?.textContent)).toEqual(["fixture-large", "activities-unpriced-fixture"]);
     expect([...modelRows[0]!.cells].map((cell) => cell.firstChild?.textContent)).toEqual(["fixture-large", "75", "15", "50", "10", "<$0.001"]);
+    expect(modelRows[0]!.cells[2]?.textContent).toBe("15 (23.1%)");
+    expect(modelRows[1]!.cells[2]?.textContent).toBe("10 (50%)");
+    expect(modelRows[0]!.cells[5]?.querySelector("[data-usage-cost-amount]")?.className).toContain("text-warning");
+    expect(modelRows[1]!.cells[5]?.querySelector("[data-usage-cost-amount]")?.className).toContain("text-ink-secondary");
     const tokenShare = (row: HTMLTableRowElement) => row.cells[1]?.querySelector("[data-usage-model-share]");
     expect(tokenShare(modelRows[0]!)?.textContent).toBe("Share 50%");
     expect(tokenShare(modelRows[1]!)?.textContent).toBe("Share 16.7%");
@@ -197,7 +201,7 @@ describe("local Usage panel", () => {
     Object.assign(day, tokens);
     await renderRaw(snapshot);
     expect(host.querySelector("[data-usage-token-breakdown] dd")?.textContent).toBe("2.9B (97.2%)");
-    expect(host.querySelector("[data-usage-model-table] tbody td:nth-child(3)")?.textContent).toBe("2.9B");
+    expect(host.querySelector("[data-usage-model-table] tbody td:nth-child(3)")?.textContent).toBe("2.9B (97.2%)");
     const trend = host.querySelector('[data-usage-trend="totalTokens"]')!;
     const types = trend.querySelector<HTMLButtonElement>('[role="group"] button')!;
     const point = trend.querySelector<HTMLButtonElement>(`[data-usage-day="${day.day}"]`)!;
@@ -987,6 +991,24 @@ describe("local Usage panel", () => {
     expect(daily.open).toBe(true);
     expect(tabs[2]!.getAttribute("aria-selected")).toBe("true");
     expect(text()).toContain("Personal");
+    // Daily activity values sits at the very bottom after repositories and uses the same 16px semibold heading style.
+    const panel = host.querySelector('[data-testid="local-usage-panel"]')!;
+    const repoSection = panel.querySelector('[data-usage-period="repositories"]')!;
+    expect(Boolean(repoSection.compareDocumentPosition(daily) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    expect(panel.lastElementChild).toBe(daily);
+    expect(daily.querySelector("summary")?.textContent).toContain("2026-10-05 – 2026-11-03");
+    expect(daily.querySelector("summary span")?.className).toContain("text-[16px]");
+    expect(daily.querySelector("summary span")?.className).toContain("font-semibold");
+    // Positive, negative, and new deltas use distinct semantic trend classes.
+    const posChange = host.querySelector('[data-usage-change][data-usage-trend-dir="up"]');
+    const newChange = host.querySelector('[data-usage-change][data-usage-trend-dir="new"]');
+    expect(posChange?.className).toContain("text-success");
+    expect(newChange?.className).toContain("text-accent-text");
+    const negSample = structuredClone(sample);
+    negSample.windows!["1"].comparison.prs = -25;
+    await render(negSample);
+    const negChange = host.querySelector('[data-usage-change][data-usage-trend-dir="down"]');
+    expect(negChange?.className).toContain("text-danger");
   });
 
   it.each([401, 403])("clears old activity data on HTTP %i", async (status) => {

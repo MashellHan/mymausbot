@@ -17,7 +17,16 @@ export function useUsageMetricHint() {
 export const changeText = (value: LocalUsageWeekChange) => value === null ? "—" : value === "new" ? t("computer.usage.newActivity")
   : new Intl.NumberFormat(activeLocale(), { style: "percent", signDisplay: "exceptZero", maximumFractionDigits: 1 }).format(value / 100);
 
-export function UsageChange({ value, startDay, endDay, metric, daily = false, periodDays, known = false, unavailableHint, className = "text-[13px] text-ink-secondary" }: {
+export function changeToneClass(value: LocalUsageWeekChange, fallback = "text-ink-secondary") {
+  if (value === "new") return "text-accent-text font-medium";
+  if (typeof value === "number") {
+    if (value > 0) return "text-success font-medium";
+    if (value < 0) return "text-danger font-medium";
+  }
+  return fallback;
+}
+
+export function UsageChange({ value, startDay, endDay, metric, daily = false, periodDays, known = false, unavailableHint, className = "text-[13px]" }: {
   value: LocalUsageWeekChange; startDay: string; endDay: string;
   metric: "prs" | "commits" | "totalTokens"; daily?: boolean; periodDays?: 1 | 7 | 30; known?: boolean; unavailableHint?: string; className?: string;
 }) {
@@ -33,7 +42,9 @@ export function UsageChange({ value, startDay, endDay, metric, daily = false, pe
     + `${known ? ` ${t("computer.usage.primaryKnownLabel")}.` : ""}`
     + ` ${usageMetricHint(metric)}`
     + `${value === null ? ` ${unavailableHint ?? t("computer.usage.changeUnavailableHint")}` : ""}`;
-  return <span data-usage-change data-usage-provisional={known || undefined} className={className} title={description}>
+  const trend = value === "new" ? "new" : typeof value === "number" ? (value > 0 ? "up" : value < 0 ? "down" : "flat") : "none";
+  const tone = changeToneClass(value, daily ? "text-ink" : "text-ink-secondary");
+  return <span data-usage-change data-usage-trend-dir={trend} data-usage-provisional={known || undefined} className={`${className} ${tone}`} title={description}>
     <span aria-hidden="true" className="whitespace-nowrap">{shown}</span><span className="sr-only">{description}</span>
   </span>;
 }
