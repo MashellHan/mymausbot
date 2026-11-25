@@ -80,5 +80,5 @@ export const PANE_UA_HOSTS = new Map();
 /** The user agent a pane sends to `host`: Electron's with the app's tokens taken out, so sites see the Chromium it is. */
 export function paneUserAgent(userAgent, host = "", hosts = PANE_UA_HOSTS) {
   if (hosts.get(String(host).toLowerCase()) === "electron") return String(userAgent);
-  return String(userAgent).replace(/\s(?:Electron|OpenMausBot|openmausbot)\/\S+/g, "").replace(/\s{2,}/g, " ").trim();
+  return String(userAgent).replace(/\s(?:Electron|OpenMausBot|openmausbot|mymausbot)\/\S+/g, "").replace(/\s{2,}/g, " ").trim();
 }
