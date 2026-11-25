@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import type { LocalAgentMember, LocalAgentState, LocalAgentTeamsResponse, LocalAgentTeam } from "../shared/local-dashboard.ts";
 import { OwnedFile } from "./atomic.ts";
 import { augmentedPath } from "./env-path.ts";
+import { agyModelFromArgv, agySessionId, readAgySessions } from "./local-agent-agy.ts";
 import { readOpenCodeMessages } from "./local-agent-opencode-message.ts";
 import { openCodeSessionId, openCodeUsageDatabase, readOpenCodeMemberUsage } from "./local-agent-opencode-usage.ts";
 import { codexSessionId, createLocalAgentSessionReader, dashboardText, unavailableMemberUsage } from "./local-agent-session.ts";
@@ -84,6 +85,24 @@ async function observePiContexts(agents: Record<string, unknown>[], sessions: Ma
   } catch { return new Map(); }
 }
 
+async function observeAgyModels(panes: readonly string[], run: HerdrRunner): Promise<Map<string, string>> {
+  const models = new Map<string, string>();
+  if (!panes.length) return models;
+  await Promise.all(panes.slice(0, 16).map(async (pane) => {
+    try {
+      const { result } = JSON.parse(await run(["--session", "default", "pane", "process-info", "--pane", pane]));
+      const processes = result?.process_info?.foreground_processes;
+      if (!Array.isArray(processes)) return;
+      for (const proc of processes) {
+        if (!Array.isArray(proc?.argv)) continue;
+        const model = agyModelFromArgv(proc.argv);
+        if (model) { models.set(pane, model); return; }
+      }
+    } catch { /* fallback to settings.json default */ }
+  }));
+  return models;
+}
+
 type BindingState = { starts: Map<string, number>; sessionOwners: Map<string, string>; legacyStarts?: Map<string, number> };
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const sessionFingerprint = (session: string) => createHash("sha256").update(`session:${session}`).digest("hex");
@@ -156,15 +175,25 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         const id = openCodeSessionId(agent);
         return id ? [[agent.pane_id, id] as const] : [];
       }));
+      const agySessions = new Map(verified.flatMap((agent) => {
+        const id = agySessionId(agent);
+        return id ? [[String(agent.pane_id), id] as const] : [];
+      }));
       const openCodeIds = [...openCodeSessions.values()];
       const openCodeFile = openCodeUsageDatabase(home);
       const openCodeUsage = readOpenCodeMemberUsage(openCodeFile, openCodeIds, sampledAt);
-      const [observations, roles, piSessions] = await Promise.all([
+      const [observations, roles, piSessions, agyModels] = await Promise.all([
         observationsFor(agents), localAgentRoles(verified, home), piSessionsFor(verified),
+        observeAgyModels([...agySessions.keys()], run),
       ]);
-      const piContexts = await observePiContexts(verified, piSessions, run, readProcessStart, now);
+      const agyInput = new Map([...agySessions.entries()].map(([pane, sessionId]) =>
+        [pane, { sessionId, configuredModel: agyModels.get(pane) ?? null }] as const));
+      const [piContexts, agyObservations] = await Promise.all([
+        observePiContexts(verified, piSessions, run, readProcessStart, now),
+        readAgySessions(home, agyInput, sampledAt),
+      ]);
       const openCodeMessages = readOpenCodeMessages(openCodeFile, openCodeIds, "preview");
-      const liveUsageMembers = openCodeIds.length || verified.some(codexSessionId)
+      const liveUsageMembers = openCodeIds.length || agySessions.size || verified.some(codexSessionId)
         ? verifiedLocalAgentMembers(herdrRows(await run(["--session", "default", "agent", "list"]), "agents")) : [];
       const liveByPane = new Map(liveUsageMembers.map((agent) => [agent.pane_id, agent] as const));
       const sessionTeams = new Map<string, Set<string>>();
@@ -182,6 +211,7 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
       const nextSessionOwners = new Map<string, string>();
       const invalidatedKeys = new Set<string>();
       const openCodeUsageByPane = new Map<string, { session: string; usage: ReturnType<NonNullable<ReturnType<typeof openCodeUsage.get>>["usage"]> }>();
+      const agyUsageByPane = new Map<string, { session: string; usage: ReturnType<NonNullable<ReturnType<typeof agyObservations.get>>["usage"]> }>();
       const seen = new Set<string>();
       for (const agent of agents) {
         const id = agent.pane_id;
@@ -196,13 +226,16 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         const verifiedCodexMember = sameBinding && verifiedIds.has(id) && sessionId !== null && codexSessionId(live) === sessionId &&
           sessionClaims.get(sessionId) === 1;
         const openCodeSession = sameBinding && openCodeSessionId(live) === openCodeSessions.get(id) ? openCodeSessions.get(id) : undefined;
+        const agySession = sameBinding && agySessionId(live) === agySessions.get(id) ? agySessions.get(id) : undefined;
         const openCode = openCodeSession ? openCodeMessages.get(openCodeSession) : undefined;
         const observation = sessionId ? observations.get(sessionId) : null;
         const openCodeEntry = openCodeSession ? openCodeUsage.get(openCodeSession) : undefined;
+        const agyEntry = agySession ? agyObservations.get(id) : undefined;
         const pi = verifiedIds.has(id) ? piSessions.get(id) : null;
-        if (observation?.lastActivityAt != null) team.lastActivityAt = Math.max(team.lastActivityAt ?? 0, observation.lastActivityAt);
-        const boundSession = verifiedCodexMember ? sessionId : openCodeSession;
-        const rawSession = sessionId ?? openCodeSessionId(agent);
+        const memberLastActivity = observation?.lastActivityAt ?? agyEntry?.lastActivityAt ?? null;
+        if (memberLastActivity != null) team.lastActivityAt = Math.max(team.lastActivityAt ?? 0, memberLastActivity);
+        const boundSession = verifiedCodexMember ? sessionId : openCodeSession ?? agySession;
+        const rawSession = sessionId ?? openCodeSessionId(agent) ?? agySessionId(agent);
         const binding = boundSession && occupantId ? JSON.stringify([id, agent.agent, occupantId, boundSession, agent.terminal_id]) : null;
         const bindingKey = binding && typeof agent.terminal_id === "string" && agent.terminal_id
           ? createHash("sha256").update(binding).digest("hex") : binding;
@@ -219,8 +252,10 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         const savedStart = directStart ?? legacyStart;
         const sessionHash = boundSession ? sessionFingerprint(boundSession) : null;
         const priorOwner = sessionHash ? previousBindings.sessionOwners.get(sessionHash) : undefined;
-        const originDir = verifiedCodexMember ? observation?.sessionCwd ?? null : openCodeEntry?.sessionDir ?? null;
-        const originStartedAt = verifiedCodexMember ? observation?.sessionStartedAt ?? null : openCodeEntry?.sessionStartedAt ?? null;
+        const originDir = verifiedCodexMember ? observation?.sessionCwd ?? null
+          : openCodeEntry?.sessionDir ?? agyEntry?.sessionDir ?? null;
+        const originStartedAt = verifiedCodexMember ? observation?.sessionStartedAt ?? null
+          : openCodeEntry?.sessionStartedAt ?? agyEntry?.sessionStartedAt ?? null;
         const sameOrigin = Boolean(
           bindingKey && (!priorOwner || priorOwner === bindingKey) &&
           typeof agent.cwd === "string" && originDir && await sameGitRepository(originDir, agent.cwd),
@@ -233,17 +268,20 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         if (sessionHash) nextSessionOwners.set(sessionHash, bindingKey ?? (priorOwner || "claimed"));
         const openCodeMemberUsage = openCodeEntry?.usage(switchedAt);
         if (openCodeSession && openCodeMemberUsage) openCodeUsageByPane.set(id, { session: openCodeSession, usage: openCodeMemberUsage });
+        const agyMemberUsage = agyEntry?.usage(switchedAt);
+        if (agySession && agyMemberUsage) agyUsageByPane.set(id, { session: agySession, usage: agyMemberUsage });
         const usage = verifiedCodexMember && observation
           ? observation.memberUsage(switchedAt)
-          : openCodeMemberUsage ?? { tokenUsage24h: unavailableMemberUsage(), tokenUsage7d: unavailableMemberUsage() };
+          : openCodeMemberUsage ?? agyMemberUsage ?? { tokenUsage24h: unavailableMemberUsage(), tokenUsage7d: unavailableMemberUsage() };
         const member: LocalAgentMember = {
           id, name: dashboardText(agent.name, 100) || id, kind: dashboardText(agent.agent, 40) || "unknown",
           ...(occupantId ? { occupantId } : {}),
-          role: dashboardText(roles.get(id), 40), model: observation?.model ?? pi?.model ?? openCode?.model ?? null,
-          reasoningEffort: observation?.reasoningEffort ?? pi?.reasoningEffort ?? openCode?.reasoningEffort ?? null, contextUsed: observation?.contextUsed ?? null,
-          contextWindow: observation?.contextWindow ?? (current() ? piContexts.get(id) : undefined) ?? null,
-          state: state(agent.agent_status), taskHint: observation?.taskHint ?? null,
-          messagePreview: verifiedIds.has(id) ? observation?.messagePreview ?? pi?.preview ?? openCode?.preview ?? null : null,
+          role: dashboardText(roles.get(id), 40), model: observation?.model ?? pi?.model ?? openCode?.model ?? agyEntry?.model ?? null,
+          reasoningEffort: observation?.reasoningEffort ?? pi?.reasoningEffort ?? openCode?.reasoningEffort ?? agyEntry?.reasoningEffort ?? null,
+          contextUsed: observation?.contextUsed ?? agyEntry?.contextUsed ?? null,
+          contextWindow: observation?.contextWindow ?? (current() ? piContexts.get(id) : undefined) ?? agyEntry?.contextWindow ?? null,
+          state: state(agent.agent_status), taskHint: observation?.taskHint ?? agyEntry?.taskHint ?? null,
+          messagePreview: verifiedIds.has(id) ? observation?.messagePreview ?? pi?.preview ?? openCode?.preview ?? agyEntry?.preview ?? null : null,
           tokenUsage24h: usage.tokenUsage24h,
           tokenUsage7d: usage.tokenUsage7d,
         };
@@ -275,7 +313,8 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         for (const agent of agents.filter((row) => row.workspace_id === team.id)) {
           const codex = codexSessionId(agent);
           const openCode = typeof agent.pane_id === "string" ? openCodeUsageByPane.get(agent.pane_id) : undefined;
-          const session = codex && sessionTeams.get(codex)?.size === 1 ? codex : openCode?.session;
+          const agy = typeof agent.pane_id === "string" ? agyUsageByPane.get(agent.pane_id) : undefined;
+          const session = codex && sessionTeams.get(codex)?.size === 1 ? codex : openCode?.session ?? agy?.session;
           if (!session) {
             totals.tokenUsage24h.missing = true;
             totals.tokenUsage7d.missing = true;
@@ -283,7 +322,7 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
           }
           if (counted.has(session)) continue;
           counted.add(session);
-          const source = codex ? observations.get(codex) : openCode?.usage;
+          const source = codex ? observations.get(codex) : openCode?.usage ?? agy?.usage;
           for (const key of ["tokenUsage24h", "tokenUsage7d"] as const) {
             const usage = source?.[key];
             const total = totals[key];
