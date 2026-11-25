@@ -280,23 +280,23 @@ export function createBoatRecovery(deps: BoatRecoveryDeps) {
    * reported). `witness`: before a delete, another computer of this installation must have answered as well. A restart
    * keeps the files, so the provider's own list answering is enough for it: an installation with one computer in use has
    * no witness, and would otherwise never be restarted. */
-  async function stillDown(owner: string, boxId: string, cfg: AppConfig, witness = true): Promise<boolean | null> {
+  async function stillDown(owner: string, boxId: string, cfg: AppConfig, witness = true): Promise<{ down: boolean } | null> {
     const sent = now();
     const probe = await boat.probeBoat(cfg, boxId);
     if (probe !== false) {
       if (probe) health.answered(boxId);
       clear(owner, boxId);
-      return false;
+      return { down: false };
     }
     const sample = { elapsedMs: now() - sent, timeoutMs: DEAD_COMPUTER.probeTimeoutMs };
-    if (stalledProbe(sample)) {
-      deps.log(`cloud computer ${owner}: ${boxId} probe ran past its timeout here; recovery waits before deciding`);
+    if (stalledProbe(sample) || stalled(sent, now())) {
+      deps.log(`cloud computer ${owner}: ${boxId} probe was held up here; recovery waits before deciding`);
       return null;
     }
-    if (!(await listWorks(cfg))) { unreachable(owner, boxId); return false; }
+    if (!(await listWorks(cfg))) { unreachable(owner, boxId); return { down: false }; }
     // An installation whose other computers do not answer either cannot tell a dead machine from its own outage.
-    if (witness && !health.otherAnsweredWithin(boxId, DEAD_COMPUTER.witnessMs)) { needsPerson(owner, boxId); return false; }
-    return true;
+    if (witness && !health.otherAnsweredWithin(boxId, DEAD_COMPUTER.witnessMs)) { needsPerson(owner, boxId); return { down: false }; }
+    return { down: true };
   }
 
   /** After the restart: replaced once the provider says the machine is gone, or after DEAD_COMPUTER.replaceAfterMs of no
@@ -318,9 +318,9 @@ export function createBoatRecovery(deps: BoatRecoveryDeps) {
       timers.set(owner, timer);
       return;
     }
-    const down = await stillDown(owner, boxId, cfg);
-    if (down === false) return;
-    if (down === null || stalled(since, now())) {
+    const probe = await stillDown(owner, boxId, cfg);
+    if (probe?.down === false) return;
+    if (probe === null) {
       deps.log(`cloud computer ${owner}: ${boxId} recovery probe was held up by this process; looking again later`);
       set(owner, boxId, "not-responding");
       const timer = setTimeout(() => {
@@ -358,9 +358,9 @@ export function createBoatRecovery(deps: BoatRecoveryDeps) {
       timers.set(owner, timer);
     };
     // Every guard before a stop: it closes the person's programs, and three failed probes can be this home's own outage.
-    const down = await stillDown(owner, boxId, cfg, false);
-    if (down === false) return;
-    if (down === null || stalled(since, now())) {
+    const probe = await stillDown(owner, boxId, cfg, false);
+    if (probe?.down === false) return;
+    if (probe === null) {
       deps.log(`cloud computer ${owner}: ${boxId} is not being restarted while this process may have held up its probes`);
       return later("not-responding");
     }
