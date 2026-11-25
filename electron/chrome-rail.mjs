@@ -42,7 +42,7 @@ const ABORTED = -3;
  * desktop keeps the person's choice to hide it; `changed()`: the rail came or went beside the page.
  */
 export function createChromeRail({ createView, preload, args, url, wanted, prefs = () => null, changed = () => {}, log = () => {}, openComputer = null }) {
-  let view = null, win = null, shown = false, expanded = false, held = false;
+  let view = null, win = null, shown = false, expanded = false, held = false, htmlFullscreen = false;
   // The rail's page didn't load (this app's server was restarting): it loads again at the next refresh, or it stays a blank strip.
   let unloaded = false;
   // Whether the page beside draws the frame; the window opens as if it does (windowChromeOptions).
@@ -118,7 +118,7 @@ export function createChromeRail({ createView, preload, args, url, wanted, prefs
     /** The window the rail stands beside: its size moves the rail, and each of its documents gets the room again. */
     attach(next) {
       win = next;
-      shown = false; expanded = false; held = false; offered = false; hung = false; told = "";
+      shown = false; expanded = false; held = false; htmlFullscreen = false; offered = false; hung = false; told = "";
       framed = prefs()?.windowFrame?.() !== false;
       // The window's first document has the same time as any other to offer the button and to draw the frame.
       if (choseHidden()) startGrace(); else stopGrace();
@@ -133,17 +133,19 @@ export function createChromeRail({ createView, preload, args, url, wanted, prefs
       contents.on("did-fail-load", (_event, code, _description, _url, mainFrame) => { if (mainFrame && code !== ABORTED) nextDocument(); });
       contents.on("unresponsive", () => { hung = true; rail.refresh(); });
       contents.on("responsive", () => { hung = false; rail.refresh(); });
+      contents.on("enter-html-full-screen", () => { htmlFullscreen = true; rail.refresh(); });
+      contents.on("leave-html-full-screen", () => { htmlFullscreen = false; rail.refresh(); });
       win.once("closed", () => {
         if (view && !view.webContents.isDestroyed()) view.webContents.close?.({ waitForBeforeUnload: false });
         stopGrace(); clearTimeout(frameGrace); frameGrace = null;
-        view = null; win = null; shown = false; expanded = false; offered = false;
+        view = null; win = null; shown = false; expanded = false; htmlFullscreen = false; offered = false;
       });
       rail.refresh();
     },
     /** Shown while there are two places or more (railPlaces) and the person hasn't hidden it; the page beside it has the
      * whole window otherwise. */
     refresh() {
-      const on = alive() && ((wanted() && !hidden()) || held);
+      const on = alive() && !htmlFullscreen && ((wanted() && !hidden()) || held);
       if (view && unloaded && on) { unloaded = false; load(view.webContents); }
       if (on === shown) layout();
       else {
