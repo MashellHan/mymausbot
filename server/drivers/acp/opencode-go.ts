@@ -10,6 +10,7 @@ import { hostedWorkspaceConfigured } from "../../enterprise.ts";
 import { decodeInjectId, hostApiKey, localHost, mergeLocalInject } from "../local-inject.ts";
 import { applyStandaloneSpawnEnv } from "../../engine-install.ts";
 import { OPENCODE_STANDALONE } from "./opencode-release.ts";
+import { openCodeBackgroundWork } from "./opencode-background.ts";
 import { createAcpDriver, type AccountErrorCode, type AcpConfig, type AcpSupport } from "./core.ts";
 import { offeredModels } from "./config-options.ts";
 import { declareTypedOpenCodeModel } from "./opencode-typed-model.ts";
@@ -685,6 +686,7 @@ const support = (
     // shares: a connection check or memory upkeep would show up in their history there.
     oneShotFolder: discoveryDirectory,
     shareProcess: true,
+    backgroundWork: openCodeBackgroundWork(),
     credentialEnv: ["OPENCODE_API_KEY", ...OPENCODE_PROVIDER_ENV],
     selectModel: { configId: "model" },
     fallbackModel: (sessionConfig, catalogDefault) => {
@@ -701,6 +703,10 @@ const support = (
       withholdProviderKeysWhenManaged(env, config, instanceId, instanceEnvironment);
       declareLiveOpenCodeModels(env, sources.liveLists);
       applyStandaloneSpawnEnv(OPENCODE_STANDALONE, env, config.cli);
+      // OpenCode 2.3.1+ reads CLAUDE.md, and ~/.claude/CLAUDE.md, where no AGENTS.md is found: the person's own Claude
+      // Code instructions are not a bot's. Only those: OPENCODE_DISABLE_CLAUDE_CODE would also drop the .claude/skills
+      // folders the app places bots' skills in.
+      env.OPENCODE_DISABLE_CLAUDE_CODE_PROMPT = "1";
     },
     spawnFingerprint: (env, config) => openCodeSpawnFingerprint(env, config.cli),
     applyTurnEnv: (env, { fullAuto, botId, cwd }) => {

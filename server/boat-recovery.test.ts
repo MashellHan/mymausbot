@@ -28,6 +28,8 @@ let autoOn = true;
 const teamOwners = new Set<string>();
 const watched = new Set<string>();
 const deleteSpans: Array<{ boxId: string; start: number; end: number }> = [];
+/** The recovery's requests to the stand-in: each answer is read whole before the recovery sees it. */
+let inFlight = 0, sent = 0;
 const pendingDeletes = new Set<string>();
 
 const send = (res: import("node:http").ServerResponse, status: number, body: unknown) => {
@@ -101,9 +103,18 @@ beforeAll(async () => {
   const { port } = server.address() as { port: number };
   vi.stubEnv("OMB_CLOUD_BOAT_URL", `http://127.0.0.1:${port}/relay/api/box/v1`);
   vi.stubEnv("OMB_CLOUD_BOAT_TOKEN", "box_omb_synthetic");
+  const realFetch = globalThis.fetch;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
+    inFlight++;
+    try {
+      const res = await realFetch(...args);
+      return new Response(await res.arrayBuffer(), { status: res.status, statusText: res.statusText, headers: res.headers });
+    } finally { inFlight--; sent++; }
+  });
 });
 afterAll(async () => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   server.closeAllConnections();
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
@@ -147,7 +158,10 @@ beforeEach(async () => {
   await load();
   start();
 });
-afterEach(() => recovery.close());
+afterEach(async () => {
+  recovery.close();
+  await quiet();
+});
 
 let bots = 0;
 async function botWith(state: string, extra: Partial<Box> = {}) {
@@ -166,6 +180,20 @@ const deletes = () => requests.filter((request) => request.method === "DELETE");
 const until = async (check: () => boolean, ms = 20_000) => {
   for (const end = Date.now() + ms; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 20))) if (check()) return;
   throw new Error("timed out");
+};
+/** A probe that is in flight while the clock jumps took that long, as far as the recovery can tell, so it counts as one
+ * this process held up. The jump waits for a moment with no request in flight. */
+const jump = async (ms: number) => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await until(() => inFlight === 0);
+  at += ms;
+};
+/** A closed recovery's work under way still finishes: the next test starts once it has sent nothing for a while. */
+const quiet = async () => {
+  for (let seen = -1, end = Date.now() + 10_000; (seen !== sent || inFlight > 0) && Date.now() < end;) {
+    seen = sent;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
 };
 /** Three probes with no answer over more than ten minutes, as the health check records them. */
 const stopsAnswering = (boxId: string) => {
@@ -434,7 +462,7 @@ describe("a cloud computer that says it is ready but does not answer", () => {
     stopsAnswering(box.id);
     await until(() => recovery.status(botId)?.state === "needs-person");
     expect(deletes()).toHaveLength(0);
-    at += DEAD_CONFIRM;
+    await jump(DEAD_CONFIRM);
     health.answered(witness.box.id);
     health.unanswered(box.id);
     await until(() => recovery.status(botId)?.state === "replaced");
@@ -523,7 +551,7 @@ describe("before a silent computer is restarted by itself", () => {
     await until(() => requests.filter((request) => request.path === `/boxes/${box.id}/commands`).length >= 3);
     expect(recovery.status(botId)?.state).toBe("not-responding");
     expect(stops()).toHaveLength(0);
-    at += 5 * 60_000;
+    await jump(5 * 60_000);
     await until(() => recovery.status(botId)?.state === "restarted");
     expect(stops()).toHaveLength(1);
   });
@@ -555,7 +583,7 @@ describe("before a silent computer is restarted by itself", () => {
     await until(() => requests.filter((request) => request.path === `/boxes/${box.id}/commands`).length >= 3);
     expect(recovery.status(botId)?.state).toBe("not-responding");
     expect(stops()).toHaveLength(0);
-    at += 11 * 60_000;
+    await jump(11 * 60_000);
     health.answered(witness.box.id);
     await until(() => recovery.status(botId)?.state === "needs-person");
     expect(stops()).toHaveLength(0);
@@ -590,7 +618,7 @@ describe("why a silent computer was left as it is", () => {
     await boat.findBoat(cfg, botId);
     stopsAnswering(box.id);
     await until(() => recovery.verdict(botId) === "restart-failed" && recovery.status(botId)?.state === "needs-person");
-    at += 20 * 60_000;
+    await jump(20 * 60_000);
     health.unanswered(box.id);
     await until(() => recovery.status(botId)?.state === "not-responding");
     await until(() => recovery.status(botId)?.state === "needs-person");
@@ -608,13 +636,13 @@ describe("why a silent computer was left as it is", () => {
     expect(recovery.verdict(botId)).toBeNull();
     resumeAnswers.delete(box.id);
     commandStatus.set(box.id, 502);
-    at += 20 * 60_000;
+    await jump(20 * 60_000);
     stopsAnswering(box.id);
     await until(() => recovery.verdict(botId) === "restart-limited" && recovery.status(botId)?.state === "needs-person");
     expect(stops()).toHaveLength(1);
     commandStatus.delete(box.id);
     health.answered(box.id);
-    at += 61 * 60_000;
+    await jump(61 * 60_000);
     expect(recovery.status(botId)).toBeNull();
     expect(recovery.verdict(botId)).toBeNull();
   });
@@ -788,7 +816,7 @@ describe("with automatic replacement off, the default", () => {
     expect(told).toEqual([[botId, "needsPerson"]]);
     expect(recovery.refusal(box.id, "after")).toBe(words.CLOUD_COMPUTER_NEEDS_PERSON);
     expect(recovery.refusal(box.id, "before")).toBeNull();
-    at += 6 * 60_000;
+    await jump(6 * 60_000);
     health.answered(witness.box.id);
     health.unanswered(box.id);
     expect(recovery.status(botId)?.state).toBe("not-responding");
