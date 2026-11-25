@@ -77,6 +77,15 @@ export function mountManagedHongguoFrame({ container, iframe, document, getState
   let deniedStatus: number | null = null;
   let player: { playbackId: string; playback: ReadyPlayback; native: ReturnType<typeof mountHongguoPlayer> } | null = null;
   let lastRetired: { playbackId: string; playback: ReadyPlayback } | null = null;
+  let wasFullscreen = false;
+  let enteringFullscreen = false;
+  let fullscreenGuardSent = false;
+  let exitGraceTimer: ReturnType<typeof setTimeout> | null = null;
+  let sawExitHidden = false;
+  const clearExitGrace = () => {
+    if (exitGraceTimer !== null) { clearTimeout(exitGraceTimer); exitGraceTimer = null; }
+    sawExitHidden = false;
+  };
   const previousPosition = container.style.position;
   const anchored = win.getComputedStyle(container).position === "static";
   if (anchored) container.style.position = "relative";
@@ -88,10 +97,18 @@ export function mountManagedHongguoFrame({ container, iframe, document, getState
       && win.ogb?.remoteClient?.active !== true && state.appId === app.id && state.revision === app.revision
       && state.templateVersion === app.templateVersion && state.status === "active";
   };
-  const showing = () => available() && scope.visible && doc.visibilityState !== "hidden" && iframe.clientWidth > 0 && iframe.clientHeight > 0;
+  const fullscreenPreserved = () => Boolean(player?.native.isFullscreen() || enteringFullscreen || exitGraceTimer !== null);
+  const showing = () => available() && scope.visible && (doc.visibilityState !== "hidden" || fullscreenPreserved())
+    && iframe.clientWidth > 0 && iframe.clientHeight > 0;
   const context = (): HongguoFrameContext => ({ appId: app.id, revision: app.revision, visible: showing(), refreshKey: scope.refreshKey });
   const post = (message: HongguoFrameReply | HongguoFrameNotice) => {
     if (active && iframe.contentWindow === frame && iframe.parentNode === container && iframe.srcdoc === srcdoc) frame?.postMessage(message, "*");
+  };
+  const syncFullscreenNotice = () => {
+    const guard = active && fullscreenPreserved();
+    if (guard === fullscreenGuardSent) return;
+    fullscreenGuardSent = guard;
+    if (isInitialized()) post({ mausMiniApp: 1, type: "hongguo-fullscreen", active: guard });
   };
   const sendError = (id: string, status: number) => post({ mausMiniApp: 1, type: "hongguo-result", id, error: { status } });
   const cancel = (status?: number) => {
@@ -110,6 +127,10 @@ export function mountManagedHongguoFrame({ container, iframe, document, getState
     while (observations.size > 4) observations.delete(observations.keys().next().value!);
   };
   const retirePlayer = () => {
+    clearExitGrace();
+    wasFullscreen = false;
+    enteringFullscreen = false;
+    syncFullscreenNotice();
     const attached = player;
     if (!attached) return;
     player = null;
@@ -127,6 +148,7 @@ export function mountManagedHongguoFrame({ container, iframe, document, getState
   const syncScope = (force = false) => {
     if (!active) return;
     if (!available()) { invalidate(409); return; }
+    syncFullscreenNotice();
     const next = showing();
     if (next !== visibleBefore || force) {
       if (!next || force) { cancel(); retirePlayer(); lastRetired = null; handles.clear(); }
@@ -138,9 +160,34 @@ export function mountManagedHongguoFrame({ container, iframe, document, getState
   visibleBefore = showing();
   const resizeObserver = typeof ResizeObserver === "function" ? new ResizeObserver(() => syncScope()) : null;
   resizeObserver?.observe(iframe);
-  const onVisibility = () => syncScope();
+  const onVisibility = () => {
+    if (exitGraceTimer !== null) {
+      if (doc.visibilityState === "hidden") sawExitHidden = true;
+      else if (sawExitHidden && doc.visibilityState === "visible") clearExitGrace();
+    }
+    syncScope();
+  };
+  const onFullscreenChange = () => {
+    const nowFs = Boolean(player?.native.isFullscreen());
+    enteringFullscreen = false;
+    if (wasFullscreen && !nowFs) {
+      clearExitGrace();
+      // macOS Space transition briefly hides the window after fullscreenchange already cleared fullscreenElement.
+      exitGraceTimer = setTimeout(() => {
+        exitGraceTimer = null;
+        sawExitHidden = false;
+        syncScope();
+      }, 1_500);
+    } else if (nowFs) {
+      clearExitGrace();
+    }
+    wasFullscreen = nowFs;
+    syncScope();
+  };
+  const onResize = () => syncScope();
   doc.addEventListener("visibilitychange", onVisibility);
-  win.addEventListener("resize", onVisibility);
+  doc.addEventListener("fullscreenchange", onFullscreenChange);
+  win.addEventListener("resize", onResize);
 
   const rememberCover = (seriesId: string, coverUrl: string | null) => {
     if (!coverUrl) return;
@@ -244,7 +291,13 @@ export function mountManagedHongguoFrame({ container, iframe, document, getState
     if (operation === "player.fullscreen") {
       if (Object.keys(input).length !== 1) return fail(400);
       if (player?.playbackId !== playbackId) return fail(412);
-      return player.native.fullscreen();
+      enteringFullscreen = true;
+      syncFullscreenNotice();
+      return Promise.resolve(player.native.fullscreen()).catch((cause) => {
+        enteringFullscreen = false;
+        syncFullscreenNotice();
+        throw cause;
+      });
     }
     const bounds = parseBounds(input.bounds);
     if (!bounds) return fail(400);
@@ -341,7 +394,8 @@ export function mountManagedHongguoFrame({ container, iframe, document, getState
       active = false;
       resizeObserver?.disconnect();
       doc.removeEventListener("visibilitychange", onVisibility);
-      win.removeEventListener("resize", onVisibility);
+      doc.removeEventListener("fullscreenchange", onFullscreenChange);
+      win.removeEventListener("resize", onResize);
       win.removeEventListener("message", handle);
       if (anchored) container.style.position = previousPosition;
     },

@@ -92,12 +92,18 @@ export function mountHongguoPlayer({ container, iframe, playbackId, appId, revis
   on("ended", () => { if (playbackEndIsComplete(video, duration)) { advanceRestore(); emit("ended"); } });
   on("error", () => observedError());
 
+  const isFullscreen = () => doc.fullscreenElement === video;
   const resize = () => {
     const width = iframe.clientWidth, height = iframe.clientHeight;
     Object.assign(layer.style, { left: `${iframe.offsetLeft}px`, top: `${iframe.offsetTop}px`, width: `${width}px`, height: `${height}px` });
     Object.assign(video.style, { left: `${slot.x}px`, top: `${slot.y}px`, width: `${slot.width}px`, height: `${slot.height}px` });
-    layer.hidden = width <= 0 || height <= 0 || slot.x >= width || slot.y >= height || slot.x + slot.width <= 0 || slot.y + slot.height <= 0;
+    layer.hidden = !isFullscreen() && (width <= 0 || height <= 0 || slot.x >= width || slot.y >= height || slot.x + slot.width <= 0 || slot.y + slot.height <= 0);
   };
+  const onFullscreenChange = () => {
+    video.style.borderRadius = isFullscreen() ? "0" : "12px";
+    resize();
+  };
+  doc.addEventListener("fullscreenchange", onFullscreenChange, { signal: lifetime.signal });
   const fullscreen = () => video.requestFullscreen();
   layer.append(video);
   container.append(layer);
@@ -107,6 +113,7 @@ export function mountHongguoPlayer({ container, iframe, playbackId, appId, revis
   return {
     position,
     resize,
+    isFullscreen,
     setBounds(next: HongguoPlayerBounds) { slot = next; resize(); },
     fullscreen,
     retire() {

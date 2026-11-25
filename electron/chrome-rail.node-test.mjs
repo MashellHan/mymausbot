@@ -407,3 +407,16 @@ test("the rail's page that couldn't load (this app's server was restarting) load
   w.rail.refresh();
   assert.equal(loads(), 3, "and the load that worked stays");
 });
+
+test("hides the rail while the page is in HTML5 fullscreen and restores it on leave", () => {
+  const w = world();
+  w.rail.attach(w.win);
+  assert.equal(w.rail.shown(), true);
+  assert.equal(w.children.length, 1);
+  w.page.emit("enter-html-full-screen");
+  assert.equal(w.rail.shown(), false);
+  assert.equal(w.children.length, 0);
+  w.page.emit("leave-html-full-screen");
+  assert.equal(w.rail.shown(), true);
+  assert.equal(w.children.length, 1);
+});
