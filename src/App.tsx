@@ -353,7 +353,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
       <BotLimitPopup />
       <ConversationShareDialogs />
       {!framed && strips}
-      <div className="relative flex min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1 overflow-x-clip">
       {!calendarFocus && <button
         type="button"
         ref={menuButtonRef}
@@ -383,7 +383,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
       <div data-window-card={framed ? "" : undefined}
         className={framed ? "relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-t-[12px] rounded-bl-[12px] bg-app" : "contents"}>
       {framed && strips}
-      <div className={framed ? "relative flex min-h-0 flex-1" : "contents"}>
+      <div className={framed ? "relative flex min-h-0 flex-1 overflow-x-clip" : "contents"}>
       {!calendarFocus && <Sidebar
         collapseToIcons={collapseSidebar}
         open={drawerOpen}
