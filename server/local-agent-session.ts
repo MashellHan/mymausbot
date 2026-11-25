@@ -1,6 +1,6 @@
 import type { Dirent } from "node:fs";
 import { open, readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import type { LocalAgentMember, LocalAgentMemberTokenUsageWindow, LocalAgentTokenUsageWindow } from "../shared/local-dashboard.ts";
 import { redactSecretsInText } from "../shared/redact.ts";
 import { assistantMessagePreview } from "./local-agent-visible-message.ts";
@@ -19,6 +19,8 @@ export const unavailableMemberUsage = (): LocalAgentMemberTokenUsageWindow => ({
 });
 type Observation = Pick<LocalAgentMember, "model" | "reasoningEffort" | "contextUsed" | "contextWindow" | "taskHint"> & { messagePreview: string | null; lastActivityAt: number | null };
 export type SessionObservation = Observation & {
+  sessionCwd: string | null;
+  sessionStartedAt: number | null;
   tokenUsage24h: LocalAgentTokenUsageWindow;
   tokenUsage7d: LocalAgentTokenUsageWindow;
   memberUsage: (switchedAt: number | null) => {
@@ -35,7 +37,7 @@ type PriorHistory = {
 };
 type Cached = {
   signature: string; identity: string; size: number; offset: number; observation: Observation; pendingLine: boolean;
-  scanStart: number; firstAt: number | null; sessionStartedAt: number | null; firstEventAt: number | null;
+  scanStart: number; firstAt: number | null; sessionCwd: string | null; sessionStartedAt: number | null; firstEventAt: number | null;
   highestTotal: number | null; lostAt: number | null; tokenSamples: TokenSample[];
 };
 
@@ -256,6 +258,7 @@ async function readObservation(
       const meta = record(JSON.parse(head.toString("utf8", 0, firstEnd)));
       const metaPayload = record(meta.payload);
       if (meta.type !== "session_meta" || String(metaPayload.id).toLowerCase() !== id) return null;
+      const sessionCwd = typeof metaPayload.cwd === "string" && isAbsolute(metaPayload.cwd) ? metaPayload.cwd : null;
       const sessionStartedAt = timestamp(metaPayload.timestamp) ?? timestamp(meta.timestamp);
       const incremental = cached && cached.identity === identity && info.size > cached.size && info.size - cached.offset <= READ_BYTES;
       const start = incremental ? cached.offset : Math.max(0, info.size - INITIAL_BYTES);
@@ -305,7 +308,7 @@ async function readObservation(
         if (identityChanged || shrunk || regressedTotal || lostObservedTokens || missingPriorSample) lostAt = now;
       }
       return { identity, signature, size: info.size, offset: end >= 0 ? start + end + 1 : start, observation,
-        scanStart: incremental ? cached.scanStart : start, firstAt, sessionStartedAt, firstEventAt, highestTotal,
+        scanStart: incremental ? cached.scanStart : start, firstAt, sessionCwd, sessionStartedAt, firstEventAt, highestTotal,
         lostAt, pendingLine: end < bytesRead - 1, tokenSamples: baseline ? [baseline, ...recent] : recent };
     } finally { await handle.close(); }
   } catch { return null; }
@@ -352,6 +355,8 @@ export function createLocalAgentSessionReader(codexHome: string, now: () => numb
       }
       result.set(id, value ? {
         ...value.observation,
+        sessionCwd: value.sessionCwd,
+        sessionStartedAt: value.sessionStartedAt,
         tokenUsage24h: tokenUsage(value, at, DAY_MS),
         tokenUsage7d: tokenUsage(value, at, WEEK_MS),
         memberUsage: (switchedAt) => ({
@@ -360,6 +365,8 @@ export function createLocalAgentSessionReader(codexHome: string, now: () => numb
         }),
       } : {
         ...empty(),
+        sessionCwd: null,
+        sessionStartedAt: null,
         tokenUsage24h: { coverage: "unavailable", knownTokens: null },
         tokenUsage7d: { coverage: "unavailable", knownTokens: null },
         memberUsage: () => ({
