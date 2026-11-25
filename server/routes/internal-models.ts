@@ -41,6 +41,8 @@ export interface ModelMenu {
   engines: MenuRow[];
   /** Engines that can't run anything now (not set up, turned off, unreachable), by name: a row each would cost more than they say. */
   unavailable?: string[];
+  /** Where the local models listed under the Other engine also run (Claude, Codex), once instead of a copy each. */
+  localAlso?: string;
 }
 
 const squash = (text: string) => text.toLowerCase().replace(/[^a-z0-9]/g, "");
