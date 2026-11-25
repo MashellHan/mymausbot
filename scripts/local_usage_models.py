@@ -150,6 +150,8 @@ def _opencode_event(message_id, session_id, started, payload, current, classify,
     if type(started) is not int or started > completed or not _clean_label(message_id) or not _clean_label(session_id):
         raise ValueError
     tokens = payload.get("tokens")
+    if tokens is None and "tokens" not in payload:
+        return None
     if not isinstance(tokens, dict) or not isinstance(cache := tokens.get("cache"), dict):
         raise ValueError
     incoming, outgoing, reasoning, cached, cache_write = (
