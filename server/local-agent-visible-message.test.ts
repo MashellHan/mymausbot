@@ -264,6 +264,7 @@ NOTIFICATION>internal</SYSTEM_NOTIFICATION>");`,
     expect(redactedAgentToolResult("/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2w==").text).toBeNull();
     expect(redactedAgentToolResult("prefix " + "A".repeat(40) + "/" + "B".repeat(40) + "==").text).toBeNull();
     expect(redactedAgentToolResult("prefix " + "A".repeat(30) + "+" + "B".repeat(20) + "/" + "C".repeat(30) + "==").text).toBeNull();
+    expect(redactedAgentToolResult("'https://example.com'," + "A".repeat(80) + "==").text).toBeNull();
     expect(show(`text(await tools.exec_command({ cmd: "echo /9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0a" }));`))
       .toMatchObject({ detailStatus: "withheld", text: "[Arguments unavailable]" });
     const mixed = show(`

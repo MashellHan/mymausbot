@@ -40,8 +40,8 @@ const SHELL_MASK_PREFIX = "\0";
 const MASKED_SHELL_FIELD = /^\s*\0«redacted \d+ chars»(?=$|[\s"';&|<>()])/;
 const SHELL_LONG_BEARER = /(\bBearer\s+)([^\s"'`;&|]+)/gi;
 
-// Recognizable filesystem path heuristic used only to avoid false-positive base64 hits on long workspace paths.
-// Requires an explicit path root (or multiple hyphen/dot-separated path segments without base64 '+'/'=') and forbids base64-length segments.
+// Recognizable anchored filesystem path heuristic used only to avoid false-positive base64 hits on long workspace paths.
+// Requires an explicit path root (e.g. /Users/, ~/, ./, ../, or drive root) and forbids base64 '+'/'=' or >64-char segments.
 const RECOGNIZABLE_FS_PATH = /(^|[\s"'`=:(])(?:(?:\/(?:Users|home|var|tmp|private|opt|etc|usr|bin|sbin|Applications|Library|Volumes)\/|~\/|\.\.?\/|[A-Za-z]:[\\/])(?:[A-Za-z0-9._-]{1,64}[\\/])*[A-Za-z0-9._-]{1,64})(?=$|[\s"'`<>:,;)\]}])/gm;
 
 function maskLinksAndPaths(value: string): string {
@@ -54,9 +54,9 @@ function maskLinksAndPaths(value: string): string {
 
 function hasEncodedToolPayload(value: string): boolean {
   if (/data:[^\s,]{0,100};base64,/i.test(value)) return true;
-  // Strip only recognizable anchored filesystem paths and URLs (never arbitrary '/' runs or '+'/'=' base64 blobs).
+  // Strip only recognizable anchored filesystem paths and bounded URLs (strictly a subset of what maskLinksAndPaths masks: never crossing quotes/delimiters or swallowing base64).
   const withoutSafePaths = value
-    .replace(/\b(?:https?|file):\/\/[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=-]{1,256}(?=$|[\s"'`<>])/gi, "[link]")
+    .replace(/\b(?:https?|file):\/\/[A-Za-z0-9._~:/?#[\]@!$&*+=-]{1,256}(?=$|[\s"'`<>(),;])/gi, "[link]")
     .replace(RECOGNIZABLE_FS_PATH, (_match, lead: string) => `${lead}[path]`);
   return ENCODED_TOOL_TEXT.test(withoutSafePaths);
 }
