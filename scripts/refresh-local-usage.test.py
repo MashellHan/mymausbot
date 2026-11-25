@@ -693,6 +693,52 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False):
         self.assertEqual(read.call_args.kwargs, {"env": request["opencodeEnvironment"]})
         self.assertEqual(json.loads(output.getvalue()), [[event], "ReadFailed"])
 
+    def test_collect_worker_merges_agy_events_and_clears_no_retained_logs(self):
+        start = "2026-11-06T00:00:00Z"
+        cutoff = "2026-11-06T08:00:00Z"
+
+        def parse(value):
+            return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+        request = {"stage": "collect", "collector": "fixture.py", "config": {"home": str(self.root)},
+                   "failedRoots": [], "repositories": [], "device": "fixture", "history_days": 59,
+                   "at": cutoff}
+        event = {"key": "agy-event", "at": "2026-11-06T07:59:00Z", "provider": "agy", "model": "gemini-4-neon",
+                 "input": 100, "output": 20, "cacheRead": 50, "category": "personal"}
+
+        class Classifier:
+            def __init__(self, repos, _config):
+                self.repos = repos
+
+            def classify(self, _cwd, _context=None):
+                return "personal"
+
+        collector = types.SimpleNamespace(
+            Classifier=Classifier,
+            instant=parse,
+            collect=lambda _cfg, _dev, at=None, history_days=30: {
+                "start": start, "capturedAt": cutoff, "status": "partial",
+                "errors": [{"source": "tokens", "code": "NoRetainedLogs"}],
+                "tokens": [], "commits": [], "adoRepos": [],
+            },
+        )
+        output = io.StringIO()
+        with (
+            patch.object(usage, "load_collector", return_value=collector),
+            patch.object(usage.local_usage_models, "agy_events", return_value=([event], None)) as read,
+            patch.object(sys, "stdin", io.StringIO(json.dumps(request))),
+            patch.object(sys, "stdout", output),
+        ):
+            usage._collect_worker()
+        home, classify, lower, upper = read.call_args.args
+        self.assertEqual((home, lower, upper), (self.root, parse(start), parse(cutoff)))
+        self.assertEqual(classify("/fixture/repo"), "personal")
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["errors"], [])
+        self.assertEqual(payload["tokens"], [event])
+        self.assertTrue(usage._is_opencode_error({"source": "agy", "code": "MalformedUsage"}))
+
     def test_repeat_disabled_fetch_only_keeps_local_ref_ready_and_marks_covered_days_only(self):
         at = dt.datetime.fromisoformat("2026-11-06T08:00:00+00:00")
         old = {"capturedAt": "2026-11-06T07:00:00Z", "retainedTokenCapturedAt": "2026-11-05T08:00:00Z",
