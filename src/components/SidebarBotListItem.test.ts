@@ -62,7 +62,7 @@ describe("BotListItem", () => {
     expect(badge).not.toContain("size-2.5");
     expect(badge).not.toContain("size-3");
     expect(waiting).toContain('aria-hidden="true">!</span>');
-    expect(waiting).toContain('class="flex min-w-0 items-center gap-1.5 truncate text-[13px] leading-[18px] font-semibold text-warning"');
+    expect(waiting).toContain('class="flex min-w-0 items-center gap-1.5 truncate text-[13px] leading-[18px] font-semibold text-warning max-md:text-[14px] max-md:leading-[20px]"');
     expect(waiting).toContain('class="min-w-0 overflow-hidden whitespace-nowrap">Waiting for you…</span>');
 
     const icons = opening(renderRow(bot({ activity: "waiting-on-you" }), "icons"), "waiting-dot");
