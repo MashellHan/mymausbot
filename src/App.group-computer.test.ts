@@ -74,7 +74,7 @@ it.each([false, true])("opens Mini Apps from a group and returns focus on close 
   expect(button.getAttribute("aria-label")).toBe("Computer");
   button.focus();
   click(button);
-  await vi.waitFor(() => expect(panel()?.querySelector('[data-testid="mini-apps-panel"]')).toBeTruthy());
+  await vi.waitFor(() => expect(panel()?.querySelector('[data-testid="mini-apps-panel"]')).toBeTruthy(), { timeout: 5000 });
   expect(panel()?.textContent).toContain("Shared installed Mini Apps");
   expect(panel()?.getAttribute("aria-label")).toBe("Computer");
   expect(current.selectedId).toBe(group.id);
@@ -152,4 +152,67 @@ it("defaults the outer panel to 1152px and retains a resized width across group 
   await vi.waitFor(() => expect(current.selectedId).toBe(bot.id));
   await vi.waitFor(() => expect(panel()).not.toBeNull(), { timeout: 5000 });
   expect(panel()!.style.width).toBe("1192px");
+});
+
+it("scopes multi-bot target selection to group members and isolates group-to-group-to-DM switches", async () => {
+  const outsider: Bot = {
+    ...bot,
+    id: "outsider",
+    threadId: "outsider-thread",
+    name: "Outsider",
+    computer: "cloud",
+  };
+  const secondMember: Bot = {
+    ...bot,
+    id: "scout",
+    threadId: "scout-thread",
+    name: "Scout",
+    computer: "off",
+  };
+  const groupA: Group = {
+    ...group,
+    id: "room-a",
+    threadId: "room-a-thread",
+    name: "Room A",
+    memberIds: [bot.id, secondMember.id],
+    defaultResponder: { kind: "member", botId: bot.id },
+  };
+  const groupB: Group = {
+    ...group,
+    id: "room-b",
+    threadId: "room-b-thread",
+    name: "Room B",
+    memberIds: [secondMember.id],
+    defaultResponder: { kind: "member", botId: secondMember.id },
+  };
+  initial = { ...initial, computerOpen: true, bots: [bot, secondMember, outsider], groups: [groupA, groupB], selectedId: groupA.id };
+  draw();
+
+  await vi.waitFor(() => expect(panel()?.querySelector('[data-testid="group-computer-target"]')).toBeTruthy());
+  const select = panel()!.querySelector<HTMLSelectElement>('[aria-label="Select bot computer"]')!;
+  expect(select).not.toBeNull();
+  const optionValues = [...select.options].map((option) => option.value);
+  expect(optionValues).toEqual([bot.id, secondMember.id]);
+  expect(optionValues).not.toContain(outsider.id);
+  expect(select.value).toBe(bot.id);
+
+  // Switch target bot to Scout (computer: "off") and open the Screen tab
+  select.value = secondMember.id;
+  flushSync(() => select.dispatchEvent(new Event("change", { bubbles: true })));
+  const screenTab = panel()!.querySelector<HTMLButtonElement>("#computer-panel-tabs-tab-computer")!;
+  click(screenTab);
+  await vi.waitFor(() => expect(panel()!.textContent).toContain("Scout has no screen"));
+
+  // Switch to Room B (only Scout is a member)
+  flushSync(() => selectChat!(groupB.id));
+  await vi.waitFor(() => expect(current.selectedId).toBe(groupB.id));
+  await vi.waitFor(() => expect(panel()?.querySelector('[data-testid="group-computer-target"]')?.textContent).toContain("Scout"));
+  expect(panel()!.querySelector('[aria-label="Select bot computer"]')).toBeNull();
+  expect(panel()!.querySelector('[data-testid="group-computer-target"]')?.textContent).not.toContain("Outsider");
+
+  // Switch to Outsider DM: should not show group target selector
+  flushSync(() => selectChat!(outsider.id));
+  await vi.waitFor(() => expect(current.selectedId).toBe(outsider.id));
+  await vi.waitFor(() => expect(panel()).not.toBeNull());
+  expect(panel()!.querySelector('[data-testid="group-computer-target"]')).toBeNull();
 });

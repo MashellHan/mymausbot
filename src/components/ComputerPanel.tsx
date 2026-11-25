@@ -2,7 +2,7 @@ import { boatCapableEngine, cloudEngineOf } from "@/lib/remote-desktop";
 import { canWorkOnCloud } from "../../shared/cloud-computer";
 import { viewerTargetId } from "../../shared/desktop-viewer";
 import { Switch } from "./SettingsPrimitives";
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { z } from "zod";
 import { waitForLocalVmReady } from "@/lib/local-vm-readiness";
 import { ChevronDown, Columns2, Globe, Hand, Loader2, Maximize2, Monitor, Moon, Power, Settings, X } from "lucide-react";
@@ -102,8 +102,9 @@ const computerControlSnapshotSchema = z.object({
   owned: z.boolean().optional(),
 }).passthrough();
 
-export function ComputerPanel({ bot: profileBot, onOpenVmWorkspace, panelWidth: sharedPanelWidth, onPanelWidthChange }: {
+export function ComputerPanel({ bot: profileBot, onOpenVmWorkspace, panelWidth: sharedPanelWidth, onPanelWidthChange, focusScopeId, viewScopeId, defaultView, showBotSettings = true, groupTarget, ariaLabel }: {
   bot: Bot; onOpenVmWorkspace?: (botId: string) => void; panelWidth?: number; onPanelWidthChange?: (width: number) => void;
+  focusScopeId?: string; viewScopeId?: string; defaultView?: ComputerPanelView; showBotSettings?: boolean; groupTarget?: ReactNode; ariaLabel?: string;
 }) {
   const { dragProps } = useCaptionChrome();
   const { panelWidth, panelMaxWidth, separatorRef, separatorWidth, onSeparatorKeyDown, onResizeStart, onResizeMove, onResizeEnd } = useComputerPanelResize({ defaultWidth: COMPUTER_PANEL_DEFAULT_WIDTH, width: sharedPanelWidth, onWidthChange: onPanelWidthChange });
@@ -234,7 +235,9 @@ export function ComputerPanel({ bot: profileBot, onOpenVmWorkspace, panelWidth: 
   const [requestedApp, setRequestedApp] = useState<{ id: string; nonce: number }>();
   const errorText = panelErrorText(error);
   const advanced = useAdvancedMode();
-  const [storedPanelView, setPanelView] = useState<ComputerPanelView>(() => readComputerPanelView(bot.id));
+  const focusId = focusScopeId ?? profileBot.id;
+  const viewId = viewScopeId ?? bot.id;
+  const [storedPanelView, setPanelView] = useState<ComputerPanelView>(() => readComputerPanelView(viewId, localStorage, defaultView ?? "computer"));
   const requestedDataResult = state.dataResultFocus?.botId === bot.id ? state.dataResultFocus : undefined;
   const [dataRequest, setDataRequest] = useState<{ id: string; requestId: number }>();
   const androidStatus = useAndroidUsbDevices(usbPhoneTakeoverEnabled(state.config));
@@ -243,7 +246,7 @@ export function ComputerPanel({ bot: profileBot, onOpenVmWorkspace, panelWidth: 
   const panelView = resolveComputerPanelView(storedPanelView, { advanced, androidConnected });
   const tabListRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => { if (tabListRef.current) revealSelectedTab(tabListRef.current); }, [panelView, advanced, androidConnected, separatorWidth]);
-  const panelRef = useComputerPanelEntry(profileBot.id, panelView);
+  const panelRef = useComputerPanelEntry(focusId, panelView);
   const browserAvailableHere = browserAvailable(state.config);
   const browserEnabled = builtInBrowserEnabled(state.config) && bot.browser !== false
     && (browserAvailableHere || state.config?.browserEngine?.installable === true);
@@ -284,7 +287,7 @@ export function ComputerPanel({ bot: profileBot, onOpenVmWorkspace, panelWidth: 
   const selectPanelView = (view: ComputerPanelView) => {
     explicitPanelView.current = true;
     setPanelView(view);
-    writeComputerPanelView(bot.id, view);
+    writeComputerPanelView(viewId, view);
   };
   useComputerPanelViewRequest(bot.id, panelRef, explicitPanelView, setPanelView);
   const [filePreview, setFilePreview] = useState<PanelFilePreview | null>(null);
@@ -1192,9 +1195,7 @@ export function ComputerPanel({ bot: profileBot, onOpenVmWorkspace, panelWidth: 
         "animate-panel-in relative flex h-full shrink-0 flex-col border-l border-hairline/40 bg-panel",
         "max-2xl:absolute max-2xl:inset-y-0 max-2xl:right-0 max-2xl:z-40",
       )}
-      ref={panelRef}
-      data-computer-panel
-      style={{ width: panelWidth, maxWidth: panelMaxWidth }}
+      ref={panelRef} data-computer-panel aria-label={ariaLabel} style={{ width: panelWidth, maxWidth: panelMaxWidth }}
     >
       <div
         ref={separatorRef}
@@ -1215,17 +1216,15 @@ export function ComputerPanel({ bot: profileBot, onOpenVmWorkspace, panelWidth: 
       {/* ml-1.5 keeps the drag region clear of the resize handle: a later drag region in the DOM wins. */}
       <div {...dragProps} className="@container/paneltabs ml-1.5 py-3 pl-2.5 pr-4">
         <div className="relative flex min-h-7 items-center justify-center">
-          <button
+          {showBotSettings && <button
             onClick={() => {
-              releaseComputerPanelFocus(panelRef.current, bot.id);
+              releaseComputerPanelFocus(panelRef.current, focusId);
               dispatch({ type: "toggleComputer", open: false });
               dispatch({ type: "toggleSettings", open: true, section: advanced ? "access" : "overview" });
             }}
             className="absolute left-0 top-1/2 -translate-y-1/2 rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink"
             title={t("computer.botSettings")} aria-label={t("computer.botSettings")}
-          >
-            <Settings size={18} />
-          </button>
+          ><Settings size={18} /></button>}
           <div ref={tabListRef} className="mx-9 flex min-w-0 touch-pan-x gap-0.5 overflow-x-auto whitespace-nowrap rounded-full bg-inset p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" data-tour="computer-tabs" data-testid="computer-tabs" role="tablist" aria-label={t("computer.tabsAria")} onWheel={scrollTabsWithWheel} onKeyDown={(event) => moveBetweenTabs(event, panelTabs, chooseTab)}>
             {panelTabs.map((view) => {
               const { Icon, label, tour } = PANEL_TABS[view];
@@ -1243,7 +1242,7 @@ export function ComputerPanel({ bot: profileBot, onOpenVmWorkspace, panelWidth: 
           <button
             data-computer-panel-close
             onClick={() => {
-              releaseComputerPanelFocus(panelRef.current, bot.id);
+              releaseComputerPanelFocus(panelRef.current, focusId);
               dispatch({ type: "toggleComputer", open: false });
             }}
             className="absolute right-0 top-1/2 -translate-y-1/2 rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink"
@@ -1254,6 +1253,7 @@ export function ComputerPanel({ bot: profileBot, onOpenVmWorkspace, panelWidth: 
           </button>
         </div>
       </div>
+      {groupTarget}
 
       {panelView === "routines" ? (
         <div {...tabPanelProps("routines")} className={cn("min-h-0 flex-1 overflow-y-auto px-4 pb-4", TAB_PANEL_FOCUS)}>
