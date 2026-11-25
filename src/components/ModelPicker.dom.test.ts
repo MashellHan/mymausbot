@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 // The Simple model menu in a real DOM, where effects run, focus moves and the menu floats in a portal.
 import { createElement } from "react";
+import { readFileSync } from "node:fs";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -545,6 +546,53 @@ describe("while the bot is working", () => {
     fixture.bots = [busy];
     render(busy);
     expect(chip().disabled).toBe(true);
+  });
+});
+
+describe("the header pill beside an open side panel", () => {
+  const renderFolded = (folded: boolean) => flushSync(() => root.render(createElement(ModelPicker, { bot: scout(), threadId: "thread-scout", folded })));
+  const pill = () => host.querySelector<HTMLButtonElement>("[data-model-pill]")!;
+
+  it("folds to a 32px mark button, names the model and reasoning, stays focusable, and opens the same menu", async () => {
+    renderFolded(true);
+    expect(pill().hasAttribute("data-folded")).toBe(true);
+    expect(pill().className).toContain("h-8");
+    expect(pill().className).toContain("min-w-8");
+    expect(pill().getAttribute("aria-label")).toContain("Claude Opus 5.5");
+    expect(pill().getAttribute("aria-label")).toBe(pill().title.split("\n")[0]);
+    pill().focus();
+    expect(document.activeElement).toBe(pill());
+    await openWith("click");
+    expect(menu()).not.toBeNull();
+    expect(chip().getAttribute("aria-expanded")).toBe("true");
+    flushSync(() => { menu()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    await settle();
+    expect(menu()).toBeNull();
+    expect(document.activeElement).toBe(pill());
+  });
+
+  it("opens back out to the full pill, named by its words again, when the panel closes", () => {
+    renderFolded(true);
+    renderFolded(false);
+    expect(pill().hasAttribute("data-folded")).toBe(false);
+    expect(pill().hasAttribute("aria-label")).toBe(false);
+    expect(pill().textContent).toContain("Claude Opus 5.5");
+  });
+
+  it("never folds a contained or small picker", () => {
+    flushSync(() => root.render(createElement(ModelPicker, { bot: scout(), threadId: "thread-scout", contained: true, folded: true })));
+    expect(host.querySelector("[data-model-pill]")).toBeNull();
+    expect(chip().hasAttribute("aria-label")).toBe(false);
+
+    flushSync(() => root.render(createElement(ModelPicker, { bot: scout(), threadId: "thread-scout", size: "sm", folded: true })));
+    expect(host.querySelector("[data-model-pill]")).toBeNull();
+    expect(chip().hasAttribute("aria-label")).toBe(false);
+  });
+
+  it("disables pill transitions under prefers-reduced-motion and data-reduced-motion", () => {
+    const css = readFileSync("src/styles.css", "utf8").replace(/\r\n/g, "\n");
+    expect(css).toContain("@media (prefers-reduced-motion: reduce) {\n  [data-model-pill], [data-model-pill] * { transition: none !important; }\n}");
+    expect(css).toContain(':root[data-reduced-motion="true"] [data-model-pill],\n:root[data-reduced-motion="true"] [data-model-pill] * { transition: none !important; }');
   });
 });
 
