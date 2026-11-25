@@ -44,7 +44,9 @@ new things where they belong instead of adding new places.
 - **No new header buttons.** The chat header shows the bot, its model and its
   screen. Anything else goes in the bot panel, a menu or the command palette.
   A pinned-message control can appear while that conversation has a pin. It
-  opens its menu and disappears when there is no pin.
+  opens its menu and disappears when there is no pin. One exception: **New
+  thread** (a plus, also ⌘T) sits at the end of the header in both modes, because
+  starting a thread is an everyday action people look for at the top.
 - **No count badges and no "needs you" summaries** above the sidebar list or
   in the header. A status mark on the row it belongs to is fine.
 - **Settings for one bot live in its bot panel.** App-wide settings live in
