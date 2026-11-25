@@ -13,7 +13,7 @@ import { codexSessionId, createLocalAgentSessionReader, dashboardText, unavailab
 import { PI_CONTEXT_KEY, parsePiContext, readPiProcessStart, type PiProcessStart } from "./local-agent-pi-context.ts";
 import { createPiSessionReader, type PiSessionView } from "./local-agent-pi-message.ts";
 import { localAgentOccupantId } from "./local-agent-occupant.ts";
-import { localAgentRoles, readDocument, verifiedLocalAgentMembers } from "./local-agent-association.ts";
+import { localAgentRoles, readDocument, sameGitRepository, verifiedLocalAgentMembers } from "./local-agent-association.ts";
 
 const execute = promisify(execFile);
 const STATES = new Set<LocalAgentState>(["idle", "working", "blocked", "done", "unknown"]);
@@ -84,20 +84,37 @@ async function observePiContexts(agents: Record<string, unknown>[], sessions: Ma
   } catch { return new Map(); }
 }
 
-async function restoreBindingStarts(file: OwnedFile): Promise<Map<string, number>> {
+type BindingState = { starts: Map<string, number>; sessionOwners: Map<string, string>; legacyStarts?: Map<string, number> };
+const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const sessionFingerprint = (session: string) => createHash("sha256").update(`session:${session}`).digest("hex");
+
+async function restoreBindingStarts(file: OwnedFile): Promise<BindingState> {
   try {
     const saved = await readDocument(dirname(file.path), file.path);
     if (saved.status === "ready") {
-      const entries: unknown = JSON.parse(saved.markdown!);
-      if (Array.isArray(entries) && entries.length <= 200 && entries.every((entry): entry is [string, number] =>
+      const parsed: unknown = JSON.parse(saved.markdown!);
+      const isLegacy = Array.isArray(parsed);
+      const entries = isLegacy ? parsed
+        : parsed && typeof parsed === "object" && Array.isArray((parsed as { bindings?: unknown }).bindings)
+          ? (parsed as { bindings: unknown[] }).bindings : null;
+      const sessions = parsed && typeof parsed === "object" && !isLegacy && Array.isArray((parsed as { sessions?: unknown }).sessions)
+        ? (parsed as { sessions: unknown[] }).sessions : [];
+      if (entries && entries.length <= 200 && entries.every((entry): entry is [string, number] =>
         Array.isArray(entry) && entry.length === 2 && typeof entry[0] === "string" && BINDING_FINGERPRINT.test(entry[0]) &&
         Number.isSafeInteger(entry[1]) && entry[1] >= 0)) {
+        const validSessions = sessions.length <= 200 && sessions.every((entry): entry is [string, string] =>
+          Array.isArray(entry) && entry.length === 2 && typeof entry[0] === "string" && BINDING_FINGERPRINT.test(entry[0]) &&
+          typeof entry[1] === "string" && BINDING_FINGERPRINT.test(entry[1])) ? sessions : [];
         file.loaded(saved.markdown!);
-        return new Map(entries);
+        return {
+          starts: new Map(entries),
+          sessionOwners: new Map(validSessions),
+          ...(isLegacy ? { legacyStarts: new Map(entries) } : {}),
+        };
       }
     }
   } catch { /* The cache is optional. */ }
-  return new Map();
+  return { starts: new Map(), sessionOwners: new Map() };
 }
 
 export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir(), codexHome = process.env.CODEX_HOME || join(home, ".codex"),
@@ -113,8 +130,8 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
   let pending: Promise<LocalAgentTeamsResponse> | null = null;
   let revision = 0;
   const bindingFile = bindingCachePath ? new OwnedFile(bindingCachePath, { mode: 0o600 }) : null;
-  let restoredBindings: Promise<Map<string, number>> | undefined;
-  let bindingStarts: Map<string, number> | undefined;
+  let restoredBindings: Promise<BindingState> | undefined;
+  let bindingStarts: BindingState | undefined;
 
   async function refresh(current: () => boolean): Promise<LocalAgentTeamsResponse> {
     try {
@@ -160,8 +177,11 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         owners.add(String(agent.workspace_id));
         sessionTeams.set(session, owners);
       }
-      const previousBindings = bindingStarts ?? await (restoredBindings ??= bindingFile ? restoreBindingStarts(bindingFile) : Promise.resolve(new Map()));
-      const nextBindings = new Map<string, number>();
+      const previousBindings: BindingState = bindingStarts ?? await (restoredBindings ??= bindingFile ? restoreBindingStarts(bindingFile) : Promise.resolve<BindingState>({ starts: new Map(), sessionOwners: new Map() }));
+      const nextStarts = new Map<string, number>();
+      const nextSessionOwners = new Map<string, string>();
+      const invalidatedKeys = new Set<string>();
+      const openCodeUsageByPane = new Map<string, { session: string; usage: ReturnType<NonNullable<ReturnType<typeof openCodeUsage.get>>["usage"]> }>();
       const seen = new Set<string>();
       for (const agent of agents) {
         const id = agent.pane_id;
@@ -178,19 +198,44 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         const openCodeSession = sameBinding && openCodeSessionId(live) === openCodeSessions.get(id) ? openCodeSessions.get(id) : undefined;
         const openCode = openCodeSession ? openCodeMessages.get(openCodeSession) : undefined;
         const observation = sessionId ? observations.get(sessionId) : null;
+        const openCodeEntry = openCodeSession ? openCodeUsage.get(openCodeSession) : undefined;
         const pi = verifiedIds.has(id) ? piSessions.get(id) : null;
         if (observation?.lastActivityAt != null) team.lastActivityAt = Math.max(team.lastActivityAt ?? 0, observation.lastActivityAt);
         const boundSession = verifiedCodexMember ? sessionId : openCodeSession;
-        const binding = boundSession && occupantId ? JSON.stringify([id, agent.agent, occupantId, boundSession, agent.cwd, agent.terminal_id]) : null;
+        const rawSession = sessionId ?? openCodeSessionId(agent);
+        const binding = boundSession && occupantId ? JSON.stringify([id, agent.agent, occupantId, boundSession, agent.terminal_id]) : null;
         const bindingKey = binding && typeof agent.terminal_id === "string" && agent.terminal_id
           ? createHash("sha256").update(binding).digest("hex") : binding;
-        const savedStart = bindingKey ? previousBindings.get(bindingKey) : undefined;
-        const switchedAt = savedStart !== undefined && savedStart <= sampledAt ? savedStart : sampledAt;
-        if (bindingKey) nextBindings.set(bindingKey, switchedAt);
+        const legacyKey = boundSession && occupantId && typeof agent.terminal_id === "string" && agent.terminal_id
+          ? createHash("sha256").update(JSON.stringify([id, agent.agent, occupantId, boundSession, agent.cwd, agent.terminal_id])).digest("hex") : null;
+        if (!boundSession && rawSession && occupantId && typeof agent.terminal_id === "string" && agent.terminal_id) {
+          const staleKey = createHash("sha256").update(JSON.stringify([id, agent.agent, occupantId, rawSession, agent.terminal_id])).digest("hex");
+          invalidatedKeys.add(staleKey);
+          const staleLegacy = createHash("sha256").update(JSON.stringify([id, agent.agent, occupantId, rawSession, agent.cwd, agent.terminal_id])).digest("hex");
+          invalidatedKeys.add(staleLegacy);
+        }
+        const directStart = bindingKey ? previousBindings.starts.get(bindingKey) : undefined;
+        const legacyStart = legacyKey ? (previousBindings.legacyStarts?.get(legacyKey) ?? previousBindings.starts.get(legacyKey)) : undefined;
+        const savedStart = directStart ?? legacyStart;
+        const sessionHash = boundSession ? sessionFingerprint(boundSession) : null;
+        const priorOwner = sessionHash ? previousBindings.sessionOwners.get(sessionHash) : undefined;
+        const originDir = verifiedCodexMember ? observation?.sessionCwd ?? null : openCodeEntry?.sessionDir ?? null;
+        const originStartedAt = verifiedCodexMember ? observation?.sessionStartedAt ?? null : openCodeEntry?.sessionStartedAt ?? null;
+        const sameOrigin = Boolean(
+          bindingKey && (!priorOwner || priorOwner === bindingKey) &&
+          typeof agent.cwd === "string" && originDir && await sameGitRepository(originDir, agent.cwd),
+        );
+        let switchedAt = savedStart !== undefined && savedStart <= sampledAt ? savedStart : sampledAt;
+        if (sameOrigin && (directStart === undefined || (legacyStart !== undefined && directStart === undefined))) {
+          switchedAt = originStartedAt !== null && originStartedAt <= sampledAt ? originStartedAt : 0;
+        }
+        if (bindingKey) nextStarts.set(bindingKey, switchedAt);
+        if (sessionHash) nextSessionOwners.set(sessionHash, bindingKey ?? (priorOwner || "claimed"));
+        const openCodeMemberUsage = openCodeEntry?.usage(switchedAt);
+        if (openCodeSession && openCodeMemberUsage) openCodeUsageByPane.set(id, { session: openCodeSession, usage: openCodeMemberUsage });
         const usage = verifiedCodexMember && observation
           ? observation.memberUsage(switchedAt)
-          : (openCodeSession ? openCodeUsage.get(openCodeSession)?.(switchedAt) : undefined)
-            ?? { tokenUsage24h: unavailableMemberUsage(), tokenUsage7d: unavailableMemberUsage() };
+          : openCodeMemberUsage ?? { tokenUsage24h: unavailableMemberUsage(), tokenUsage7d: unavailableMemberUsage() };
         const member: LocalAgentMember = {
           id, name: dashboardText(agent.name, 100) || id, kind: dashboardText(agent.agent, 40) || "unknown",
           ...(occupantId ? { occupantId } : {}),
@@ -205,9 +250,19 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         team.agents.push(member);
       }
       if (current()) {
-        bindingStarts = nextBindings;
-        const saved = [...nextBindings].filter(([key]) => BINDING_FINGERPRINT.test(key)).sort();
-        try { bindingFile?.write(JSON.stringify(saved)); } catch { /* Keep the in-memory observations. */ }
+        for (const [key, ts] of previousBindings.starts) {
+          if (nextStarts.has(key) || invalidatedKeys.has(key) || ts < sampledAt - RETENTION_MS) continue;
+          nextStarts.set(key, ts);
+        }
+        for (const [sessionHash, owner] of previousBindings.sessionOwners) {
+          if (nextSessionOwners.has(sessionHash) || !nextStarts.has(owner)) continue;
+          nextSessionOwners.set(sessionHash, owner);
+        }
+        bindingStarts = { starts: nextStarts, sessionOwners: nextSessionOwners };
+        const bindings = [...nextStarts].filter(([key]) => BINDING_FINGERPRINT.test(key)).sort((a, b) => b[1] - a[1]).slice(0, 200);
+        const kept = new Set(bindings.map(([key]) => key));
+        const sessions = [...nextSessionOwners].filter(([key, owner]) => BINDING_FINGERPRINT.test(key) && kept.has(owner)).sort().slice(0, 200);
+        try { bindingFile?.write(JSON.stringify({ bindings, sessions })); } catch { /* Keep the in-memory observations. */ }
       }
       for (const team of teams.values()) {
         team.agentCount = team.agents.length;
@@ -218,16 +273,19 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
           tokenUsage7d: { known: 0, covered: 0, missing: false, partial: false } };
         const counted = new Set<string>();
         for (const agent of agents.filter((row) => row.workspace_id === team.id)) {
-          const session = codexSessionId(agent);
-          if (!session || sessionTeams.get(session)?.size !== 1) {
+          const codex = codexSessionId(agent);
+          const openCode = typeof agent.pane_id === "string" ? openCodeUsageByPane.get(agent.pane_id) : undefined;
+          const session = codex && sessionTeams.get(codex)?.size === 1 ? codex : openCode?.session;
+          if (!session) {
             totals.tokenUsage24h.missing = true;
             totals.tokenUsage7d.missing = true;
             continue;
           }
           if (counted.has(session)) continue;
           counted.add(session);
+          const source = codex ? observations.get(codex) : openCode?.usage;
           for (const key of ["tokenUsage24h", "tokenUsage7d"] as const) {
-            const usage = observations.get(session)?.[key];
+            const usage = source?.[key];
             const total = totals[key];
             if (!usage || usage.coverage !== "ready") total.missing = true;
             if (usage?.coverage === "partial") total.partial = true;
