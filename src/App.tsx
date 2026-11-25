@@ -73,7 +73,7 @@ import { cloudFirstRun, cloudWelcomeVisible, useCloudWelcome } from "@/lib/cloud
 import { engineReady } from "@/components/EngineLibrary";
 import { CommandPalette } from "@/components/CommandPalette";
 import { t } from "@/lib/i18n";
-import { botCycleStep, shouldOpenKeyboardShortcuts } from "@/lib/keyboard-shortcuts";
+import { botCycleStep, isNewThreadShortcut, shouldOpenKeyboardShortcuts } from "@/lib/keyboard-shortcuts";
 import { effectiveLanguage, useLanguageChoice, usePageLanguage } from "@/lib/language-preference";
 import { botUnreadCount, showBrowserUnread } from "@/lib/bot-unread";
 import { phonePairingSettingsAction, takePhonePairingRequest } from "@/lib/phone-pairing"; import { useConnectLink } from "@/lib/use-connect-link";
@@ -223,6 +223,17 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
         } else {
           dispatch({ type: "newBot" });
         }
+      } else if (isNewThreadShortcut(e)) {
+        const selected = state.bots.find((bot) => bot.id === state.selectedId && !bot.hidden);
+        const supported = state.activeView === "chat"
+          && !group && !chiefStep && !firstRun && !(teamWelcomeOn && team)
+          && !(!remoteClient && localVmWorkspaceBotId)
+          && !state.appSettingsOpen && !state.pluginsOpen && !state.cloudAdd && !paletteOpen
+          && selected && selected.yourAccess !== "view";
+        if (supported) {
+          e.preventDefault();
+          if (!e.repeat) dispatch({ type: "newTask", botId: selected.id });
+        }
       } else if (/^[1-9]$/.test(e.key)) {
         const target = bots[Number(e.key) - 1];
         if (target) {
@@ -239,7 +250,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [state.bots, state.selectedId, state.shortcutsOpen, showThreads, dispatch]);
+  }, [state.bots, state.selectedId, state.shortcutsOpen, state.activeView, state.appSettingsOpen, state.pluginsOpen, state.cloudAdd, group, chiefStep, firstRun, teamWelcomeOn, team, remoteClient, localVmWorkspaceBotId, paletteOpen, showThreads, dispatch]);
 
   useReadShownChatOnFocus();
   useEffect(() => {

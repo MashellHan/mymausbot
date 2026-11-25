@@ -85,6 +85,7 @@ describe("the header's right side", () => {
     try {
       const { markup, controls } = header();
       expect(controls).toContain("data-test-model-control");
+      expect(controls).toContain('data-new-thread="true"');
       expect(fixture.model).toMatchObject({ threadId: "selected", folded: false });
       try {
         fixture.settingsOpen = true;
@@ -120,6 +121,7 @@ describe("the header's right side", () => {
       expect(controls).not.toContain(">Share");
       expect(controls).not.toContain('data-testid="chat-more"');
       expect(controls).not.toContain("data-test-model-control");
+      expect(controls).not.toContain("data-new-thread");
     } finally {
       fixture.raw = false;
       fixture.advanced = true;
@@ -188,6 +190,7 @@ describe("the header's right side", () => {
     fixture.advanced = true;
     const { markup } = header();
     expect(markup).toContain("data-test-model-control");
+    expect(markup).toContain('data-new-thread="true"');
     expect(markup).toContain('data-tour="computer"');
     expect(markup).toContain('data-testid="chat-more"');
     const more = fixture.menus.find((menu) => menu.ariaLabel === "More")!;
@@ -195,6 +198,13 @@ describe("the header's right side", () => {
     const inspector = more.items.find((item) => item.key === "inspector")!;
     expect(inspector.disabled).toBeFalsy();
     expect(inspector.heading).toBeUndefined();
+  });
+
+  it("hides the header New thread button in a fork panel or for view-only bots", () => {
+    const viewOnly = renderToStaticMarkup(createElement(ChatView, { bot: { ...bot, yourAccess: "view" } }));
+    expect(viewOnly).not.toContain("data-new-thread");
+    const forked = renderToStaticMarkup(createElement(ChatView, { bot, inForkPanel: true }));
+    expect(forked).not.toContain("data-new-thread");
   });
 });
 

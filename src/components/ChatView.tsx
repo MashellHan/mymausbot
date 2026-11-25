@@ -96,7 +96,7 @@ import { CompactionChip, DigestChip } from "./DigestChip";
 import { RenameTitle } from "./RenameTitle"; import { ChatHeadRole, chiefOfStaffBadge } from "./BotRole";
 import { BotActivityPicker } from "./TaskPicker"; import { ChatHeadPill } from "./ChatHeadPill"; import { HeaderShare } from "./bot-access/HeaderShare"; import { ThreadPresenceFaces } from "./TeamPresence"; import { useStoreRef } from "@/state/store-ref"; import { sameFields, useStoreDispatch, useStoreSelector } from "@/state/store-select"; import { sameDrawnBots } from "@/lib/drawn-bots";
 import { ELEVATED_FLOAT, ELEVATED_HOVER } from "./elevated";
-import { ChatComputerButton } from "./ChatComputerButton";
+import { ChatComputerButton } from "./ChatComputerButton"; import { NewThreadHeaderButton } from "./NewThreadHeaderButton";
 import { ChatStopButton } from "./ChatStopButton"; import { PwaPinBotButton } from "./PwaPinBotButton";
 import { ModelPicker } from "./ModelPicker";
 import { useFailedTurnFix } from "./FailedTurnFix";
@@ -1106,7 +1106,7 @@ export const ChatView = memo(function ChatView({ bot: profile, inForkPanel = fal
             onUnpin={remoteClient ? undefined : () => dispatch({ type: "updateTask", botId: bot.id, threadId: bot.threadId, patch: { pinnedMessageId: "" } })}
           />
           {computerButton}
-          <PwaPinBotButton botId={bot.id} /><HeaderShare bot={bot} />{phoneMenu ? <ChatMoreMenu bot={bot} phoneHeader /> : (advanced || remoteClient) && <ChatHeaderMenu key={`menu:${bot.threadId}`} bot={bot} />}
+          <PwaPinBotButton botId={bot.id} /><HeaderShare bot={bot} />{!inForkPanel && (!raw || remoteClient) && bot.yourAccess !== "view" && <NewThreadHeaderButton botId={bot.id} />}{phoneMenu ? <ChatMoreMenu bot={bot} phoneHeader /> : (advanced || remoteClient) && <ChatHeaderMenu key={`menu:${bot.threadId}`} bot={bot} />}
         </div>
         </div>
       </div>

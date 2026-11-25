@@ -192,6 +192,15 @@ export function botCycleStep(event: Pick<KeyboardEvent, "key">): 1 | -1 | null {
   return null;
 }
 
+export function isNewThreadShortcut(event: KeyboardEvent): boolean {
+  if (event.defaultPrevented || event.isComposing || event.altKey || event.shiftKey) return false;
+  if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "t") return false;
+  const target = event.target;
+  return !(target instanceof HTMLElement && (
+    target.isContentEditable || target.closest("input, textarea, select, dialog, [role=dialog], [role=alertdialog]")
+  ));
+}
+
 export function shouldOpenKeyboardShortcuts(event: KeyboardEvent): boolean {
   if (event.defaultPrevented || event.isComposing || event.altKey) return false;
   const helpKey = event.key === "?" && !event.metaKey && !event.ctrlKey;
