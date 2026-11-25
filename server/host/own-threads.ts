@@ -22,6 +22,8 @@ export function createOwnThreads(deps: {
   /** Why turn start would run a thread chosen on `selection` on the bot's own model instead. */
   givesWay(selection: ModelSelection, botModel: ModelSelection): ThreadModelFallback | null;
   modelName(selection: ModelSelection): string;
+  /** The engines with a local model the Other engine offers listed there only, and the line that says where else it runs. */
+  localOnce?(engines: readonly MenuEngine[]): { engines: MenuEngine[]; also?: string };
 }) {
   const { store } = deps;
   const own = (requester: Omit<Placed, "threadId">, child: Omit<Placed, "threadId">) =>
@@ -75,8 +77,10 @@ export function createOwnThreads(deps: {
       const bot = store.bot(botId);
       if (!bot) return null;
       const current = deps.current(botId, threadId) ?? bot.modelSelection;
-      return modelMenu({ engines: deps.registry.instances(), current, pinned: [bot.modelSelection], refusal: (selection) => refusal(selection, bot),
+      const listed: { engines: readonly MenuEngine[]; also?: string } = deps.localOnce?.(deps.registry.instances()) ?? { engines: deps.registry.instances() };
+      const menu = modelMenu({ engines: listed.engines, current, pinned: [bot.modelSelection], refusal: (selection) => refusal(selection, bot),
         down: (engine) => deps.givesWay({ instanceId: engine.instanceId, model: engine.models.default }, bot.modelSelection) === "unavailable", search });
+      return listed.also ? { ...menu, localAlso: listed.also } : menu;
     },
   };
 }
