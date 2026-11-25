@@ -28,6 +28,7 @@ function storageKey(botId: string): string {
 export function readComputerPanelView(
   botId: string,
   storage: Pick<Storage, "getItem"> = localStorage,
+  fallback: ComputerPanelView = "computer",
 ): ComputerPanelView {
   try {
     const value = storage.getItem(storageKey(botId));
@@ -35,7 +36,7 @@ export function readComputerPanelView(
     if (value === "computer" || value === "android" || value === "browser" || value === "routines" || value === "files" || value === "data" || value === "mini-apps") return value;
   } catch {
   }
-  return "computer";
+  return fallback;
 }
 
 export function writeComputerPanelView(

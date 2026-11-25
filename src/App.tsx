@@ -347,7 +347,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   </>;
   return (
     <RawPresentation value={interfaceMode === "raw"}>
-    <MiniAppsHost enabled={state.computerOpen && !!bot && !remoteClient}>
+    <MiniAppsHost enabled={state.computerOpen && (!!bot || !!group) && !remoteClient}>
     <div data-look="app" data-interface-mode={interfaceMode} data-raw-mac-frame={interfaceMode === "raw" && framed && capabilities.windowChrome === "mac-inset" ? "" : undefined} className={cn("flex h-full flex-col", framed && "bg-frame")} onClickCapture={drawerOpen ? noteDrawerAction : undefined} onKeyDownCapture={drawerOpen ? noteDrawerAction : undefined}>
       <WindowFrameBar notifications={notificationTray} />
       <BotLimitPopup />
@@ -471,6 +471,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
           groupId={group.id}
           panelWidth={computerPanelWidth}
           onPanelWidthChange={setComputerPanelWidth}
+          onOpenVmWorkspace={openLocalVmWorkspace}
         />
       )}
       {!remoteClient && <AppPreviewPanel />}
