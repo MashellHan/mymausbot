@@ -369,6 +369,93 @@ describe("local Agent Team provider", () => {
     expect(rebound.tokenUsage7d).toMatchObject({ coverage: "unavailable", knownTokens: null });
   });
 
+  it("discovers isolated OpenCode SQLite databases and prefers the freshest store when a session migrated", async () => {
+    const home = await mkdtemp(join(tmpdir(), "mausbot-opencode-isolated-"));
+    folders.push(home);
+    const dataHome = join(home, "xdg-data");
+    const opencodeDir = join(dataHome, "opencode");
+    const isolatedDir = join(opencodeDir, "isolated");
+    vi.stubEnv("XDG_DATA_HOME", dataHome);
+    vi.stubEnv("OPENCODE_DB", "");
+    await mkdir(isolatedDir, { recursive: true });
+    const repo = join(home, "repo");
+    await mkdir(join(repo, ".git"), { recursive: true });
+    const sharedDb = new DatabaseSync(join(opencodeDir, "opencode.db"));
+    const isolatedDb = new DatabaseSync(join(isolatedDir, "worker-front.db"));
+    const day = 24 * 60 * 60 * 1000;
+    const now = Date.UTC(2026, 10, 25, 8, 0);
+    const migratedSession = "ses_IsolatedMigrated1";
+    const isolatedOnlySession = "ses_IsolatedOnly2";
+    try {
+      const schema = `CREATE TABLE session_v2 (id TEXT PRIMARY KEY, directory TEXT, time_created INTEGER, time_updated INTEGER);
+        CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, time_created INTEGER, data TEXT);`;
+      sharedDb.exec(schema);
+      isolatedDb.exec(schema);
+      // Stale copy in shared opencode.db (>24h old)
+      sharedDb.prepare("INSERT INTO session_v2 VALUES (?, ?, ?, ?)").run(migratedSession, repo, now - 3 * day, now - 2 * day);
+      sharedDb.prepare("INSERT INTO session_message VALUES (?, ?, 'assistant', 1, ?, ?)").run(
+        "old-1", migratedSession, now - 2 * day, JSON.stringify({
+          time: { completed: now - 2 * day },
+          tokens: { input: 100, output: 10, reasoning: 0, cache: { read: 0, write: 0 } },
+          model: { providerID: "raven", id: "gemini-4-hydrogen", variant: "high" },
+          content: [{ type: "text", text: "Stale shared reply" }],
+        }),
+      );
+      // Active copy in isolated/worker-front.db with fresh 24h tokens
+      isolatedDb.prepare("INSERT INTO session_v2 VALUES (?, ?, ?, ?)").run(migratedSession, repo, now - 3 * day, now - 60_000);
+      isolatedDb.prepare("INSERT INTO session_message VALUES (?, ?, 'assistant', 2, ?, ?)").run(
+        "new-1", migratedSession, now - 60_000, JSON.stringify({
+          time: { completed: now - 50_000 },
+          tokens: { input: 500, output: 100, reasoning: 20, cache: { read: 400, write: 0 } },
+          model: { providerID: "raven", id: "gemini-4-hydrogen", variant: "high" },
+          content: [{ type: "text", text: "Fresh isolated reply" }],
+        }),
+      );
+      isolatedDb.prepare("INSERT INTO session_v2 VALUES (?, ?, ?, ?)").run(isolatedOnlySession, repo, now - 2 * 3600_000, now - 30_000);
+      isolatedDb.prepare("INSERT INTO session_message VALUES (?, ?, 'assistant', 1, ?, ?)").run(
+        "only-1", isolatedOnlySession, now - 30_000, JSON.stringify({
+          time: { completed: now - 20_000 },
+          tokens: { input: 200, output: 50, reasoning: 0, cache: { read: 100, write: 0 } },
+          model: { providerID: "raven", id: "gpt-6.2-sol", variant: "high" },
+          content: [{ type: "text", text: "Isolated only reply" }],
+        }),
+      );
+    } finally {
+      sharedDb.close();
+      isolatedDb.close();
+    }
+    const agents = [
+      {
+        pane_id: "w6:p6", workspace_id: "w6", name: "mausbot-upstream", agent: "opencode", agent_status: "working",
+        cwd: repo, terminal_id: "term_up",
+        agent_session: { kind: "id", agent: "opencode", source: "herdr:opencode", value: migratedSession },
+      },
+      {
+        pane_id: "w6:p3", workspace_id: "w6", name: "mausbot-front", agent: "opencode", agent_status: "working",
+        cwd: repo, terminal_id: "term_fr",
+        agent_session: { kind: "id", agent: "opencode", source: "herdr:opencode", value: isolatedOnlySession },
+      },
+    ];
+    const provider = createLocalAgentTeamsProvider({
+      home, codexHome: join(home, ".codex"), now: () => now,
+      bindingCachePath: join(home, "bindings.json"),
+      run: async (args) => args.at(-2) === "workspace" ? workspaces : JSON.stringify({ result: { agents } }),
+    });
+    const team = (await provider.get()).teams[0]!;
+    expect(team.agents[0]).toMatchObject({
+      name: "mausbot-upstream",
+      model: "gemini-4-hydrogen",
+      messagePreview: "Fresh isolated reply",
+      tokenUsage24h: { coverage: "partial", knownTokens: 1020 },
+    });
+    expect(team.agents[1]).toMatchObject({
+      name: "mausbot-front",
+      model: "gpt-6.2-sol",
+      messagePreview: "Isolated only reply",
+      tokenUsage24h: { coverage: "partial", knownTokens: 350 },
+    });
+  });
+
   it("computes per-member 24h and 7d tokens and sub-cent USD cost across turn_context model switches", async () => {
     const home = await mkdtemp(join(tmpdir(), "mausbot-member-cost-"));
     folders.push(home);
