@@ -11,6 +11,7 @@ const STRICT_DEMO_BINDINGS = new Map<string, { readonly editionKey: string; read
   ["/github/demo/sqlglot-query-lab/", { editionKey: "2026-11-22", repo: "tobymao/sqlglot" }],
   ["/github/demo/hypothesis-orders/", { editionKey: "2026-11-23", repo: "hypothesisworks/hypothesis" }],
   ["/github/demo/jsonschema-agent-contract/", { editionKey: "2026-11-24", repo: "python-jsonschema/jsonschema" }],
+  ["/github/demo/deepdiff-order-audit/", { editionKey: "2026-11-25", repo: "qlustered/deepdiff" }],
 ]);
 
 export interface GithubActivitySelection {

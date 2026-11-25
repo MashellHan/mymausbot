@@ -242,6 +242,35 @@ test("allows only the exact jsonschema demo document route while rejecting looka
   ]) assert.equal(githubMediaUrlAllowed(url), false, url);
 });
 
+test("allows only the exact DeepDiff demo document route while rejecting lookalike, subfile, ZIP and resource URLs", () => {
+  for (const url of [
+    "https://mxhan.com/github/demo/deepdiff-order-audit/",
+    "https://mxhan.com/github/demo/deepdiff-order-audit/#ignore-order",
+  ]) assert.equal(githubActivityPageAllowed(url), true, url);
+
+  for (const url of [
+    "https://mxhan.com/github/demo/deepdiff-order-audit",
+    "https://mxhan.com/github/demo/deepdiff-order-audit-2/",
+    "https://mxhan.com/github/demo/deepdiff-order-audit-lab/",
+    "https://mxhan.com/github/demo/deepdiff-order-audit/extra/",
+    "https://mxhan.com/github/demo/deepdiff-order-audit/index.html",
+    "https://mxhan.com/github/demo/deepdiff-order-audit/results.json",
+    "https://mxhan.com/github/demo/deepdiff-order-audit/run_demo.py",
+    "https://mxhan.com/github/demo/deepdiff-order-audit/deepdiff-order-audit-lab-source.zip",
+    "https://mxhan.com/github/demo/deepdiff-order-audit/preview.png",
+    "https://mxhan.com/github/demo/deepdiff-order-audit/?q=1",
+    "https://mxhan.com/github/demo/deepdiff%2dorder%2daudit/",
+    "https://other.example/github/demo/deepdiff-order-audit/",
+    "http://mxhan.com/github/demo/deepdiff-order-audit/",
+  ]) assert.equal(githubActivityPageAllowed(url), false, url);
+
+  for (const url of [
+    "https://mxhan.com/github/demo/deepdiff-order-audit/",
+    "https://mxhan.com/github/demo/deepdiff-order-audit/deepdiff-order-audit-lab-source.zip",
+    "https://mxhan.com/github/demo/deepdiff-order-audit/preview.png",
+  ]) assert.equal(githubMediaUrlAllowed(url), false, url);
+});
+
 test("allows only the exact Hypothesis demo document route while rejecting superseded/lookalike/ZIP/subfile/media/query/dot/encoded/other-origin URLs", () => {
   for (const url of [
     "https://mxhan.com/github/demo/hypothesis-orders/",
