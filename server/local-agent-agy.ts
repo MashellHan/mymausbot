@@ -199,10 +199,20 @@ function stripUserEnvelope(raw: string): string {
 }
 
 function agyWindowUsage(samples: readonly TokenSample[], cutoff: number, verifiedSince: number,
+  sessionStartedAt: number | null, scanStart: number,
   project: ReturnType<typeof createLocalTokenProjector>): LocalAgentMemberTokenUsageWindow {
   const observed = samples.filter(({ at }) => at > cutoff && at >= verifiedSince);
   const knownTokens = observed.reduce((sum, row) => sum + row.tokens, 0);
-  if (!knownTokens || !Number.isSafeInteger(knownTokens)) return unavailableMemberUsage();
+  if (!Number.isSafeInteger(knownTokens)) return unavailableMemberUsage();
+  if (!knownTokens) {
+    const windowCovered = scanStart === 0 && sessionStartedAt !== null && sessionStartedAt <= cutoff && verifiedSince <= cutoff;
+    if (!windowCovered) return unavailableMemberUsage();
+    return {
+      coverage: "ready",
+      knownTokens: 0,
+      estimatedCost: project([{ input: 0, output: 0, cacheRead: 0, models: [] }], "ready").estimatedCost,
+    };
+  }
   return {
     coverage: "partial",
     knownTokens,
@@ -379,8 +389,8 @@ export async function readAgySession(
       truncated,
       ...(historySource ? { historySource } : {}),
       usage: (verifiedSince: number) => ({
-        tokenUsage24h: agyWindowUsage(samples, now - DAY_MS, verifiedSince, project),
-        tokenUsage7d: agyWindowUsage(samples, now - 7 * DAY_MS, verifiedSince, project),
+        tokenUsage24h: agyWindowUsage(samples, now - DAY_MS, verifiedSince, sessionStartedAt, start, project),
+        tokenUsage7d: agyWindowUsage(samples, now - 7 * DAY_MS, verifiedSince, sessionStartedAt, start, project),
       }),
     };
   } finally {

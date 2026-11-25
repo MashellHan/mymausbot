@@ -60,11 +60,20 @@ function sample(row: Record<string, unknown>, now: number): Sample | null {
   return { startedAt, at: completed, tokens, observation: { ...amounts, models } };
 }
 
-function usage(samples: Sample[], cutoff: number, verifiedSince: number,
-  project: ReturnType<typeof createLocalTokenProjector>): LocalAgentMemberTokenUsageWindow {
+function usage(samples: Sample[], cutoff: number, verifiedSince: number, sessionStartedAt: number | null,
+  truncated: boolean, project: ReturnType<typeof createLocalTokenProjector>): LocalAgentMemberTokenUsageWindow {
   const observed = samples.filter(({ at, startedAt }) => at > cutoff && startedAt >= verifiedSince);
   const knownTokens = observed.reduce((sum, row) => sum + row.tokens, 0);
-  if (!knownTokens || !Number.isSafeInteger(knownTokens)) return unavailableMemberUsage();
+  if (!Number.isSafeInteger(knownTokens)) return unavailableMemberUsage();
+  if (!knownTokens) {
+    const windowCovered = !truncated && sessionStartedAt !== null && sessionStartedAt <= cutoff && verifiedSince <= cutoff;
+    if (!windowCovered) return unavailableMemberUsage();
+    return {
+      coverage: "ready",
+      knownTokens: 0,
+      estimatedCost: project([{ input: 0, output: 0, cacheRead: 0, models: [] }], "ready").estimatedCost,
+    };
+  }
   return {
     coverage: "partial", knownTokens,
     estimatedCost: project(observed.map(({ observation }) => observation), "partial").estimatedCost,
@@ -108,7 +117,9 @@ export function readOpenCodeMemberUsage(file: string | null, ids: Iterable<strin
       const meta = sessionMeta?.get(id) as Record<string, unknown> | undefined;
       const sessionDir = typeof meta?.directory === "string" && isAbsolute(meta.directory) ? meta.directory : null;
       const sessionStartedAt = whole(meta?.time_created) ? meta.time_created : null;
-      const observed = messages.all(id, now - 7 * DAY_MS, now).flatMap((row) => {
+      const rows = messages.all(id, now - 7 * DAY_MS, now);
+      const truncated = rows.length >= 10000;
+      const observed = rows.flatMap((row) => {
         const parsed = sample(row, now);
         return parsed ? [parsed] : [];
       });
@@ -116,8 +127,8 @@ export function readOpenCodeMemberUsage(file: string | null, ids: Iterable<strin
         sessionDir,
         sessionStartedAt,
         usage: (verifiedSince) => ({
-          tokenUsage24h: usage(observed, now - DAY_MS, verifiedSince, project),
-          tokenUsage7d: usage(observed, now - 7 * DAY_MS, verifiedSince, project),
+          tokenUsage24h: usage(observed, now - DAY_MS, verifiedSince, sessionStartedAt, truncated, project),
+          tokenUsage7d: usage(observed, now - 7 * DAY_MS, verifiedSince, sessionStartedAt, truncated, project),
         }),
       });
     }
