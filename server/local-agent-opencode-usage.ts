@@ -132,7 +132,12 @@ function readSingleOpenCodeMemberUsage(file: string, sessions: readonly string[]
       ORDER BY time_created DESC LIMIT 10000`);
     const current = tables.has("session_message") ? prepare("session_message") : null;
     const legacy = tables.has("message") ? prepare("message") : null;
-    const sessionMeta = tables.has("session_v2") ? db.prepare("SELECT directory, time_created, time_updated FROM session_v2 WHERE id = ? LIMIT 1") : null;
+    const sessionCols = tables.has("session_v2")
+      ? new Set(db.prepare("PRAGMA table_info(session_v2)").all().map(({ name }) => String(name)))
+      : null;
+    const sessionMeta = sessionCols
+      ? db.prepare(`SELECT directory, time_created, ${sessionCols.has("time_updated") ? "time_updated" : "NULL AS time_updated"} FROM session_v2 WHERE id = ? LIMIT 1`)
+      : null;
     // OpenCode 1.19 can have both stores. Use one store per session to avoid counting migrated messages twice.
     const hasCurrent = current && legacy ? db.prepare("SELECT 1 FROM session_message WHERE session_id = ? LIMIT 1") : null;
     for (const id of sessions) {

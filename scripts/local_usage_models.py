@@ -198,6 +198,7 @@ def _opencode_db_files(home, env):
         data_home = Path(home) / ".local/share"
     primary = data_home / "opencode" / (selected or "opencode.db")
     files = []
+    discovery_error = None
     try:
         if not stat.S_ISREG(primary.lstat().st_mode):
             return [], "InvalidDatabase"
@@ -210,31 +211,41 @@ def _opencode_db_files(home, env):
     if not selected:
         isolated_dir = primary.parent / "isolated"
         try:
-            if stat.S_ISDIR(isolated_dir.lstat().st_mode):
-                for entry in sorted(isolated_dir.iterdir(), key=lambda p: p.name)[:64]:
-                    if entry.suffix == ".db":
-                        try:
-                            if stat.S_ISREG(entry.lstat().st_mode):
-                                files.append(entry)
-                        except OSError:
-                            continue
+            isolated_stat = isolated_dir.lstat()
+        except FileNotFoundError:
+            isolated_stat = None
         except OSError:
-            pass
-    return files, None
+            isolated_stat = None
+            discovery_error = "DatabaseReadError"
+        if isolated_stat is not None and stat.S_ISDIR(isolated_stat.st_mode):
+            try:
+                regular_dbs = []
+                for entry in sorted(isolated_dir.iterdir(), key=lambda p: p.name):
+                    if entry.suffix != ".db":
+                        continue
+                    try:
+                        if stat.S_ISREG(entry.lstat().st_mode):
+                            regular_dbs.append(entry)
+                    except OSError:
+                        discovery_error = discovery_error or "DatabaseReadError"
+                if len(regular_dbs) > 64:
+                    discovery_error = discovery_error or "ReadLimit"
+                files.extend(regular_dbs[:64])
+            except OSError:
+                discovery_error = discovery_error or "DatabaseReadError"
+    return files, discovery_error
 
 
 def opencode_events(home, classify, start, end, *, env=None):
     """Return sanitized machine events and a coverage error code, if any."""
     env = os.environ if env is None else env
     files, discovery_error = _opencode_db_files(home, env)
-    if discovery_error is not None:
-        return [], discovery_error
     if not files:
-        return [], None
+        return [], discovery_error
 
     start_ms, end_ms = start.timestamp() * 1000, end.timestamp() * 1000
     deadline = time.monotonic() + MAX_OPENCODE_READ_SECONDS
-    events, seen, error, scanned = [], set(), None, 0
+    events, seen, error, scanned = [], set(), discovery_error, 0
     payload = "CASE WHEN typeof(msg.data) = 'text' AND length(CAST(msg.data AS BLOB)) <= :max_bytes THEN msg.data END"
     for file in files:
         if scanned >= MAX_OPENCODE_ROWS or time.monotonic() >= deadline:
@@ -249,8 +260,7 @@ def opencode_events(home, classify, start, end, *, env=None):
                     "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('session_message', 'message')"
                 )}
                 if not tables:
-                    if file == files[0]:
-                        error = error or "UnsupportedSchema"
+                    error = error or "UnsupportedSchema"
                     continue
                 for table in ("session_message", "message"):
                     if table not in tables:
@@ -292,6 +302,8 @@ def opencode_events(home, classify, start, end, *, env=None):
                             return events, "ReadLimit"
                         error = "DatabaseReadError"
         except (OSError, sqlite3.Error, ValueError):
+            if time.monotonic() >= deadline:
+                return events, "ReadLimit"
             error = "DatabaseReadError"
     return events, error
 
