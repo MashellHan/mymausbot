@@ -228,6 +228,28 @@ describe("a person and the bot sharing one browser", () => {
     expect((await call("agent_browser_status")).isError).toBeUndefined();
   });
 
+  it("ends the person's hold when the browser they hold dies, leaving other sessions' holds intact", async () => {
+    const { service, call, text, target, backend } = setup();
+    const other = { session: "bot-b", key: "bot:b" };
+    await call("agent_browser_open", { url: "https://example.com/form" });
+    const botAChrome = backend.chrome;
+    await call("agent_browser_open", { url: "https://example.com/form" }, other);
+    const viewerA = await service.attachViewer(target, { owner: "local-owner", canOperate: true, maxWidth: 2560, maxHeight: 1600 }, () => {});
+    const viewerB = await service.attachViewer(other, { owner: "other-owner", canOperate: true, maxWidth: 2560, maxHeight: 1600 }, () => {});
+    await viewerA.input({ type: "takeControl" });
+    await viewerB.input({ type: "takeControl" });
+    expect(service.heldBy("bot-a")).toBe("local-owner");
+    expect(service.heldBy("bot-b")).toBe("other-owner");
+    botAChrome.exit("killed");
+    await sleep(50);
+    expect(service.heldBy("bot-a")).toBeNull();
+    expect(service.heldBy("bot-b")).toBe("other-owner");
+    await expect(call("agent_browser_status", {}, other)).rejects.toThrow(BROWSER_CONTROL_REFUSAL);
+    const again = await call("agent_browser_status");
+    expect(again.isError).toBeUndefined();
+    expect(text(again)).toContain("stopped unexpectedly");
+  });
+
   it("waits for the bot's running action before the person's control starts, and turns that action's answer into the refusal", async () => {
     const { service, call, target, backend } = setup({ takeoverMs: 2_000 });
     await call("agent_browser_open", { url: "https://example.com/form" });
