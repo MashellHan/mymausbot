@@ -12,10 +12,12 @@ import { TurnNotStartedError } from "../../contracts.ts";
 import { recordEvents, type EventRecorder } from "../../testing/events.ts";
 import { publishedMessages } from "../../harness/text-items.testkit.ts";
 import { promptSplitFingerprints, writePromptSplitReceipt } from "../prompt-split.ts";
+import { classifyRoutineFailure } from "../../routine-recovery.ts";
 import { classifyError } from "../retry.ts";
 import { createAcpDriver, skipSubscriptionAuthForLocalInject, type AcpSupport } from "./core.ts";
+import { AcpReportedFailure, acpRuntimeFailure } from "./failure-words.ts";
 import { DEFAULT_ACP_PROMPT_IDLE_MS } from "./quiet-status.ts";
-import { GrokAgentDriver, grokAcceptsUnadvertisedImages } from "./grok.ts";
+import { GrokAgentDriver, grokAcceptsUnadvertisedImages, grokReportedFailure } from "./grok.ts";
 import { openCodePromptUnreachedModel } from "./opencode-go.ts";
 import { GeminiAgentDriver } from "./gemini.ts";
 import { KimiAgentDriver } from "./kimi.ts";
@@ -1955,6 +1957,80 @@ describe("ACP turns (fake CLI)", () => {
     } finally {
       delete process.env.FAKE_ACP_SESSION_MODELS;
     }
+  });
+
+  // grok 1.0.41 signed in to an account without grok-4.7 answers set_model "Invalid params: unknown model id".
+  it("says in plain words which models Grok offers when it refuses one it does not, and retires the process", async () => {
+    const launchCount = join(scratch, "grok-launch-count");
+    const rpcLog = join(scratch, "grok-rpc.jsonl");
+    process.env.FAKE_ACP_SESSION_MODELS = "grok-4.6|Grok 4.6,grok-4.5|Grok 4.5";
+    process.env.FAKE_ACP_LAUNCH_COUNT_FILE = launchCount;
+    process.env.FAKE_ACP_RPC_APPEND_FILE = rpcLog;
+    await create(GrokAgentDriver, "set-model-invalid-params");
+    const threadId = "t-grok-model-not-offered";
+    const ask = async (dumpName: string, model: string, resumeCursor?: string) => {
+      const dump = join(scratch, dumpName);
+      process.env.FAKE_ACP_DUMP = dump;
+      const { turnId } = await instance.adapter.sendTurn({ threadId, text: "hi", model, ...(resumeCursor ? { resumeCursor } : {}) });
+      const done = await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
+      return { done, seen: JSON.parse(readFileSync(dump, "utf8")) as { pid: number } };
+    };
+    try {
+      const first = await ask("first.json", "grok-4.6");
+      expect(first.done).toMatchObject({ ok: true });
+      expect(readFileSync(launchCount, "utf8").trim()).toBe("1");
+      recorder.events.length = 0;
+      const second = await ask("second.json", "grok-4.7", "fake-acp-session");
+      expect(second.done).toMatchObject({ ok: false });
+      expect(readFileSync(launchCount, "utf8").trim()).toBe("2");
+      const rpcs = readFileSync(rpcLog, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as { method: string });
+      expect(rpcs.filter((call) => call.method === "session/prompt")).toHaveLength(1);
+      const errors = recorder.events.filter((e) => e.type === "runtime.error").map((e) => (e as { message: string }).message);
+      expect(errors).toEqual(["Grok can't use the model grok-4.7 here: this Grok sign-in offers grok-4.6 and grok-4.5, so choose one of those for this bot."]);
+      // A routine does not spend its one retry on it: the next start would be refused the same way.
+      expect(classifyRoutineFailure(errors[0]!)).toEqual({ kind: "final" });
+      // The refusing process is retired: the next turn starts a new one, which reads the offered models afresh.
+      const third = await ask("third.json", "grok-4.7", "fake-acp-session");
+      expect(third.done).toMatchObject({ ok: false });
+      expect(third.seen.pid).not.toBe(second.seen.pid);
+      expect(readFileSync(launchCount, "utf8").trim()).toBe("3");
+    } finally {
+      delete process.env.FAKE_ACP_SESSION_MODELS;
+      delete process.env.FAKE_ACP_LAUNCH_COUNT_FILE;
+      delete process.env.FAKE_ACP_RPC_APPEND_FILE;
+    }
+  });
+
+  it("keeps Grok's own refusal words when session/set_model fails for another reason", async () => {
+    process.env.FAKE_ACP_SESSION_MODELS = "grok-4.6|Grok 4.6,grok-4.5|Grok 4.5";
+    await create(GrokAgentDriver, "set-model-internal-error");
+    const threadId = "t-grok-model-switch-failed";
+    try {
+      await instance.adapter.sendTurn({ threadId, text: "hi", model: "grok-4.6" });
+      await recorder.until((e) => e.type === "turn.completed");
+      recorder.events.length = 0;
+      const { turnId } = await instance.adapter.sendTurn({ threadId, text: "hi", model: "grok-4.7", resumeCursor: "fake-acp-session" });
+      expect(await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId)).toMatchObject({ ok: false });
+      const errors = recorder.events.filter((e) => e.type === "runtime.error").map((e) => (e as { message: string }).message);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toMatch(/^Grok rejected model "grok-4.7" via session\/set_model: Internal error: model switch failed/);
+    } finally {
+      delete process.env.FAKE_ACP_SESSION_MODELS;
+    }
+  });
+
+  it("retries Grok's transient sign-in check failure instead of reading it as a sign-out", () => {
+    const BLIP = "Internal error: Unauthorized (401) from https://cli-chat-proxy.grok.com/v1/responses: Authentication required\n\n"
+      + "  Model:     grok-4.6\n  Auth:      Oidc\n  Version:   1.0.41\n  Available: grok-4.6, grok-4.5\n\n"
+      + "Authentication is temporarily unavailable (often a network blip right after wake). Your session is still signed in and will "
+      + "recover automatically — retry in a few seconds; no need to run /login. (session/prompt)";
+    expect(classifyRoutineFailure(BLIP)).toMatchObject({ kind: "owner", cause: "signed_out" });
+    const reported = grokReportedFailure(Object.assign(new Error(BLIP), { code: -32603 }));
+    expect(reported).toBeInstanceOf(AcpReportedFailure);
+    expect(acpRuntimeFailure(reported, "Grok").message).toBe(
+      "Grok couldn't confirm its sign-in for a moment (often a network error right after waking). It is still signed in: try again in a few seconds.");
+    expect(classifyRoutineFailure(reported!.message)).toMatchObject({ kind: "retry" });
+    expect(grokReportedFailure(Object.assign(new Error("Internal error: Unauthorized (401): Authentication required. Run grok login."), { code: -32603 }))).toBeUndefined();
   });
 
   it.each([
