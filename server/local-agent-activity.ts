@@ -7,6 +7,7 @@ import type { LocalAgentActivityEvent, LocalAgentActivityHistoryRequest, LocalAg
 import { redactedAgentText as safeText, trackAgentToolCalls, visibleAgentMessage, visibleToolDetail } from "./local-agent-visible-message.ts";
 import { createActivityHistory, isToolActivity, MAX_ACTIVITY_EVENTS, MAX_ACTIVITY_HISTORY_EVENTS, MAX_ACTIVITY_TOOL_EVENTS,
   unavailableActivityHistory, type ActivityHistoryRead } from "./local-agent-activity-history.ts";
+import { agyHomeDir, agySessionId, readAgySession } from "./local-agent-agy.ts";
 import { codexSessionId, discoverCodexSessionFiles } from "./local-agent-session.ts";
 import { readOpenCodeMessages } from "./local-agent-opencode-message.ts";
 import { openCodeSessionId, openCodeUsageDatabase } from "./local-agent-opencode-usage.ts";
@@ -160,6 +161,10 @@ export function createLocalAgentActivityProvider({ run = runHerdr, read = readSe
         const sessionId = openCodeSessionId(agent);
         if (!sessionId) return missing;
         observed = readOpenCodeMessages(openCodeUsageDatabase(home), [sessionId], "history").get(sessionId);
+      } else if (agent.agent === "agy") {
+        const sessionId = agySessionId(agent);
+        if (!sessionId) return missing;
+        observed = await readAgySession(agyHomeDir(home), sessionId, now(), { history: true });
       } else if (agent.agent === "codex") {
         const sessionId = codexSessionId(agent);
         if (!sessionId) return missing;
@@ -199,6 +204,16 @@ export function createLocalAgentActivityProvider({ run = runHerdr, read = readSe
       const sessionId = openCodeSessionId(agent);
       if (!sessionId || !verifiedLocalAgentMembers(agents).includes(agent)) return unavailable(agentId);
       const observed = readOpenCodeMessages(openCodeUsageDatabase(home), [sessionId], "recent").get(sessionId);
+      const occupant = localAgentOccupantId(agent, agentId);
+      const live = observed && occupant && await historyAgent(agentId, occupant).catch(() => undefined);
+      if (!current() || !observed || !live || live.cwd !== agent.cwd) return unavailable(agentId);
+      return { agentId, status: "ready", updatedAt: now(), events: observed.events, truncated: observed.truncated };
+    }
+    if (agent.agent === "agy") {
+      clear();
+      const sessionId = agySessionId(agent);
+      if (!sessionId || !verifiedLocalAgentMembers(agents).includes(agent)) return unavailable(agentId);
+      const observed = await readAgySession(agyHomeDir(home), sessionId, now());
       const occupant = localAgentOccupantId(agent, agentId);
       const live = observed && occupant && await historyAgent(agentId, occupant).catch(() => undefined);
       if (!current() || !observed || !live || live.cwd !== agent.cwd) return unavailable(agentId);

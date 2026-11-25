@@ -11,6 +11,7 @@ const prices: Readonly<Record<string, ListPrice>> = {
   "openai/gpt-6.1-sol": { inputPerMillion: 2, cachedInputPerMillion: 0.1, outputPerMillion: 10, ...openai },
   "openai/gpt-6.2-sol": { inputPerMillion: 2, cachedInputPerMillion: 0.1, outputPerMillion: 10, ...openai },
   "google/gemini-4-hydrogen": { inputPerMillion: 1.5, cachedInputPerMillion: 0.075, outputPerMillion: 7.5, ...google },
+  "google/gemini-4-neon": { inputPerMillion: 2, cachedInputPerMillion: 0.1, outputPerMillion: 10, ...google },
   "google/gemini-4-carbon": {
     inputPerMillion: 2, cachedInputPerMillion: 0.1, outputPerMillion: 10, ...google,
     changes: [{ from: "2026-12-01", inputPerMillion: 4, cachedInputPerMillion: 0.2, outputPerMillion: 20 }],

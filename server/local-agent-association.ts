@@ -242,11 +242,13 @@ export function verifiedLocalAgentMembers(agents: Record<string, unknown>[]): Re
     const session = agent.agent_session as Record<string, unknown> | null;
     return JSON.stringify([session?.source, codexSessionId(agent) ?? session?.value]);
   };
+  const verifiedSource = (agent: Record<string, unknown>, source: unknown) =>
+    source === `herdr:${agent.agent}` || (agent.agent === "agy" && source === "herdr:antigravity_cli");
   return agents.filter((agent) => {
     const pane = agent.pane_id;
     const session = agent.agent_session as Record<string, unknown> | null;
     return typeof pane === "string" && PANE_ID.test(pane) && pane.startsWith(`${agent.workspace_id}:`) &&
-      typeof agent.agent === "string" && session?.source === `herdr:${agent.agent}` && localAgentOccupantId(agent, pane) &&
+      typeof agent.agent === "string" && verifiedSource(agent, session?.source) && localAgentOccupantId(agent, pane) &&
       agents.filter((row) => row.pane_id === pane || row.name === agent.name || key(row) === key(agent)).length === 1;
   });
 }
