@@ -164,6 +164,30 @@ class OpenCodeEventsTests(unittest.TestCase):
                     self.assertEqual(error, "ReadLimit")
                     self.assertEqual(limited, events[:1])
 
+    def test_completed_assistant_rows_without_tokens_do_not_mark_malformed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            db = self.database(home / ".local/share/opencode/opencode.db", legacy=False)
+            db.executemany("INSERT INTO session_message VALUES (?, ?, ?, ?, ?)", [
+                ("error-no-tokens", "test", "assistant", self.start_ms + 2,
+                 json.dumps({"time": {"created": self.start_ms, "completed": self.start_ms + 2}, "finish": "error", "error": {"name": "APIError"}})),
+                ("completed-no-tokens", "test", "assistant", self.start_ms + 2,
+                 json.dumps({"time": {"created": self.start_ms, "completed": self.start_ms + 2}, "model": {"id": "gemini-4-hydrogen"}})),
+                ("good", "test", "assistant", self.start_ms + 1, self.payload(self.start_ms + 1)),
+            ])
+            db.commit()
+            events, error = models.opencode_events(home, lambda _cwd: "personal", self.start, AT, env={})
+            self.assertIsNone(error)
+            self.assertEqual(len(events), 1)
+
+            db.execute("INSERT INTO session_message VALUES (?, ?, ?, ?, ?)",
+                       ("bad-tokens", "test", "assistant", self.start_ms + 3,
+                        json.dumps({"time": {"created": self.start_ms, "completed": self.start_ms + 3}, "tokens": "corrupt"})))
+            db.commit()
+            events, error = models.opencode_events(home, lambda _cwd: "personal", self.start, AT, env={})
+            self.assertEqual(error, "MalformedUsage")
+            self.assertEqual(len(events), 1)
+
 
 class ModelAggregationTests(unittest.TestCase):
     def test_calendar_cutoff_first_duplicate_and_provider_accounting(self):
