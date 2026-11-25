@@ -25,4 +25,5 @@ export type HongguoFrameReply = { mausMiniApp: 1; type: "hongguo-result"; id: st
 export type HongguoFrameNotice = { mausMiniApp: 1 } & (
   | { type: "hongguo-context"; context: HongguoFrameContext }
   | { type: "hongguo-player-event"; event: HongguoPlayerEvent }
+  | { type: "hongguo-fullscreen"; active: boolean }
 );

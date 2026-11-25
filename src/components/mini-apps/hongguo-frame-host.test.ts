@@ -204,3 +204,77 @@ it("exposes named SDK requests and cancels them on a local abort or host teardow
     await expect(outstanding).rejects.toMatchObject({ name: "AbortError" });
   } finally { await child.happyDOM.close(); }
 });
+
+it("preserves the player and SDK visibility across macOS fullscreen visibility transitions", async () => {
+  vi.useFakeTimers();
+  let visibility: DocumentVisibilityState = "visible";
+  let fullscreen: Element | null = null;
+  Object.defineProperty(window.document, "visibilityState", { configurable: true, get: () => visibility });
+  Object.defineProperty(window.document, "fullscreenElement", { configurable: true, get: () => fullscreen });
+  try {
+    fixture = mount();
+    await fixture.wait(fixture.send("series", { seriesId: "series" }));
+    const playbackId = readyId(await fixture.wait(fixture.send("playback", { seriesId: "series", episodeId: "episode" })));
+    await fixture.wait(fixture.send("player.attach", { playbackId, bounds: { x: 0, y: 0, width: 320, height: 180 } }));
+    const video = fixture.video()!;
+    video.requestFullscreen = vi.fn(async () => {
+      fullscreen = video;
+      window.document.dispatchEvent(new Event("fullscreenchange"));
+    });
+    await expect(fixture.wait(fixture.send("player.fullscreen", { playbackId }))).resolves.toMatchObject({ result: null });
+    expect(fixture.posted).toHaveBeenCalledWith({ mausMiniApp: 1, type: "hongguo-fullscreen", active: true }, "*");
+    expect(video.style.borderRadius).toBe("0px");
+    visibility = "hidden";
+    window.document.dispatchEvent(new Event("visibilitychange"));
+    expect(fixture.video()).toBe(video);
+    expect(video.parentElement?.hidden).toBe(false);
+    visibility = "visible";
+    window.document.dispatchEvent(new Event("visibilitychange"));
+    fullscreen = null;
+    window.document.dispatchEvent(new Event("fullscreenchange"));
+    expect(video.style.borderRadius).toBe("12px");
+    // Trailing visibility flicker on macOS exit does not retire the player.
+    visibility = "hidden";
+    window.document.dispatchEvent(new Event("visibilitychange"));
+    expect(fixture.video()).toBe(video);
+    visibility = "visible";
+    window.document.dispatchEvent(new Event("visibilitychange"));
+    expect(fixture.posted).toHaveBeenCalledWith({ mausMiniApp: 1, type: "hongguo-fullscreen", active: false }, "*");
+    // Genuine hide after transition still retires the player.
+    visibility = "hidden";
+    window.document.dispatchEvent(new Event("visibilitychange"));
+    expect(fixture.video()).toBe(null);
+  } finally {
+    vi.useRealTimers();
+    Reflect.deleteProperty(window.document, "visibilityState");
+    Reflect.deleteProperty(window.document, "fullscreenElement");
+  }
+});
+
+it("keeps child iframe visibilityState visible while host fullscreen guard is active", async () => {
+  const child = new HappyWindow({ settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
+  const parent = {};
+  let rawVis = "visible";
+  Object.defineProperty(child.Document.prototype, "visibilityState", { configurable: true, get: () => rawVis });
+  Object.defineProperty(child.Document.prototype, "hidden", { configurable: true, get: () => rawVis === "hidden" });
+  try {
+    Object.defineProperty(child, "parent", { value: parent });
+    child.eval(`var base = { markReady: function () {} }, ready = Promise.resolve(), sent = [], post = (value) => sent.push(value); ${HONGGUO_FRAME_SDK_SOURCE}`);
+    let seen = 0;
+    child.document.addEventListener("visibilitychange", () => { seen++; });
+    const { base, sent } = child as unknown as { sent: Array<{ id: string }>; base: { hongguo: { player: { fullscreen(input: unknown): Promise<unknown> } } } };
+    const reply = (data: unknown) => child.dispatchEvent(new child.MessageEvent("message", { source: parent as HappyWindow, data }));
+    const pending = base.hongguo.player.fullscreen({ playbackId: "p1" });
+    rawVis = "hidden";
+    child.document.dispatchEvent(new child.Event("visibilitychange"));
+    expect(child.document.visibilityState).toBe("visible");
+    expect(child.document.hidden).toBe(false);
+    expect(seen).toBe(0);
+    await vi.waitFor(() => expect(sent[0]).toBeDefined());
+    reply({ mausMiniApp: 1, type: "hongguo-result", id: sent[0]!.id, result: null });
+    await pending;
+    reply({ mausMiniApp: 1, type: "hongguo-fullscreen", active: false });
+    expect(child.document.visibilityState).toBe("hidden");
+    expect(seen).toBe(1);
+  } finally { await child.happyDOM.close(); }
+});

@@ -5,9 +5,48 @@ export const HONGGUO_FRAME_SDK_SOURCE = String.raw`
   var players = new Set();
   var lifetime = new AbortController();
   var sequence = 0;
+  var hostFullscreen = false;
+  var pendingFullscreen = false;
+  var visDesc = Object.getOwnPropertyDescriptor(Document.prototype, "visibilityState");
+  var hidDesc = Object.getOwnPropertyDescriptor(Document.prototype, "hidden");
+  var rawVisibility = function () {
+    return visDesc && typeof visDesc.get === "function" ? visDesc.get.call(document) : "visible";
+  };
+  var rawHidden = function () {
+    return hidDesc && typeof hidDesc.get === "function" ? hidDesc.get.call(document) : false;
+  };
+  var fullscreenGuarded = function () { return hostFullscreen || pendingFullscreen; };
+  if (visDesc && visDesc.configurable) {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: function () { return fullscreenGuarded() ? "visible" : rawVisibility(); }
+    });
+  }
+  if (hidDesc && hidDesc.configurable) {
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      get: function () { return fullscreenGuarded() ? false : rawHidden(); }
+    });
+  }
+  document.addEventListener("visibilitychange", function (event) {
+    if (fullscreenGuarded()) event.stopImmediatePropagation();
+  }, { capture: true, signal: lifetime.signal });
+  function syncVisibilityAfterGuard(wasGuarded) {
+    if (wasGuarded && !fullscreenGuarded() && rawVisibility() === "hidden") {
+      document.dispatchEvent(new Event("visibilitychange"));
+    }
+  }
+  function setHostFullscreen(active) {
+    var wasGuarded = fullscreenGuarded();
+    hostFullscreen = active === true;
+    pendingFullscreen = false;
+    syncVisibilityAfterGuard(wasGuarded);
+  }
   function aborted() { return new DOMException("The request was cancelled.", "AbortError"); }
   function stop() {
     lifetime.abort();
+    pendingFullscreen = false;
+    hostFullscreen = false;
     requests.forEach(function (request) { request.reject(aborted()); });
     requests.clear();
     listeners.clear();
@@ -60,6 +99,8 @@ export const HONGGUO_FRAME_SDK_SOURCE = String.raw`
       listeners.forEach(function (listener) { listener(message.context); });
     } else if (message.type === "hongguo-player-event") {
       players.forEach(function (listener) { listener(message.event); });
+    } else if (message.type === "hongguo-fullscreen") {
+      setHostFullscreen(message.active);
     }
   }, { signal: lifetime.signal });
   window.addEventListener("pagehide", stop, { signal: lifetime.signal });
@@ -70,7 +111,16 @@ export const HONGGUO_FRAME_SDK_SOURCE = String.raw`
     preferences: allow("preferences"), cover: allow("cover"),
     player: Object.freeze({
       attach: allow("player.attach"), setBounds: allow("player.setBounds"),
-      detach: allow("player.detach"), fullscreen: allow("player.fullscreen"),
+      detach: allow("player.detach"),
+      fullscreen: function (input, options) {
+        pendingFullscreen = true;
+        return call("player.fullscreen", input, options).catch(function (error) {
+          var wasGuarded = fullscreenGuarded();
+          pendingFullscreen = false;
+          syncVisibilityAfterGuard(wasGuarded);
+          throw error;
+        });
+      },
       onEvent: function (listener) { return subscribe(players, listener); }
     })
   });

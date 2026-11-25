@@ -294,6 +294,25 @@ def _collect_worker():
                 result = collector.collect(request["config"], request["device"],
                                            at=collector.instant(request["at"]),
                                            history_days=request["history_days"])
+                home_value = request["config"].get("home")
+                if home_value and callable(getattr(collector, "Classifier", None)) and callable(getattr(collector, "instant", None)):
+                    start_at = collector.instant(result.get("start"))
+                    end_at = collector.instant(result.get("capturedAt"))
+                    if start_at is not None and end_at is not None:
+                        classifier = collector.Classifier(request["repositories"], request["config"])
+                        agy_tokens, agy_error = local_usage_models.agy_events(
+                            Path(home_value).expanduser(), classifier.classify, start_at, end_at
+                        )
+                        if agy_tokens:
+                            result.setdefault("tokens", []).extend(agy_tokens)
+                            result["errors"] = [
+                                failure for failure in result.get("errors", [])
+                                if failure != {"source": "tokens", "code": "NoRetainedLogs"}
+                            ]
+                        if agy_error:
+                            result.setdefault("errors", []).append({"source": "agy", "code": agy_error})
+                        if agy_tokens or agy_error:
+                            result["status"] = "partial" if result.get("errors") else "ok"
         json.dump(result, sys.stdout)
     except Exception as error:
         print(f"usage stage=local-collect failed type={type(error).__name__}", file=sys.stderr, flush=True)
@@ -343,7 +362,7 @@ def _run_worker(request, timeout):
 
 
 def _is_opencode_error(error):
-    return isinstance(error, dict) and error.get("source") == "opencode"
+    return isinstance(error, dict) and error.get("source") in ("opencode", "agy")
 
 
 def collect_local(collector_path, config, device, at=None, history_days=30, *, cycle_deadline=None):

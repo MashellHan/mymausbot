@@ -13,8 +13,10 @@ import shutil
 import sqlite3
 import stat
 import subprocess
+import tempfile
 import time
 import types
+import urllib.parse
 
 FIELDS = ("input", "output", "cacheRead")
 MAX_DAILY_MODELS = 24
@@ -26,6 +28,12 @@ MAX_CODEX_SCAN_BYTES = 256 * 1024 * 1024
 MAX_OPENCODE_ROWS = 100_000
 MAX_OPENCODE_MESSAGE_BYTES = 1024 * 1024
 MAX_OPENCODE_READ_SECONDS = 12
+MAX_AGY_FILES = 1024
+MAX_AGY_FILE_BYTES = 64 * 1024 * 1024
+MAX_AGY_SCAN_BYTES = 256 * 1024 * 1024
+MAX_AGY_LINE_BYTES = 2 * 1024 * 1024
+MAX_AGY_READ_SECONDS = 12
+MAX_AGY_METADATA_BYTES = 16 * 1024 * 1024
 MAX_HEADER_BYTES = 256 * 1024
 MAX_CONTINUITY_BYTES = 2 * 1024 * 1024
 MAX_CLOSED_INTERVALS = 2048
@@ -33,7 +41,9 @@ CONTINUITY_RETENTION_DAYS = 65
 WRITER_CADENCE_SECONDS = 300
 MAX_CONTINUITY_GAP_SECONDS = 450
 MAX_SAMPLE_SPAN_SECONDS = 450
-PROVIDERS = {"codex", "copilot", "hermes", "opencode", "pi"}
+PROVIDERS = {"agy", "codex", "copilot", "hermes", "opencode", "pi"}
+AGY_BYOM_MODEL = "MODEL_GOOGLE_GEMINI_INTERNAL_BYOM"
+AGY_EFFORT_SUFFIX = re.compile(r"-(?:low|medium|high|xhigh|max)$", re.I)
 MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.+-]*(?:/[A-Za-z0-9][A-Za-z0-9_.+-]*)?")
 TOKEN_LIKE_MODEL = re.compile(
     r"(?i)\b(?:om[dg]_|sk[-_]|rk_(?:live|test)_|xai-|gsk_|csk-|hf_|gh[pousr]_|github_pat_|"
@@ -253,6 +263,262 @@ def opencode_events(home, classify, start, end, *, env=None):
                     error = "DatabaseReadError"
     except (OSError, sqlite3.Error, ValueError):
         return events, "DatabaseReadError"
+    return events, error
+
+
+def _agy_file_uri_path(uri):
+    if not isinstance(uri, str) or not uri.startswith("file://"):
+        return None
+    parsed = urllib.parse.urlsplit(uri)
+    if parsed.scheme != "file" or parsed.netloc not in ("", "localhost"):
+        return None
+    path = urllib.parse.unquote(parsed.path)
+    if not os.path.isabs(path) or len(path) > 4096 or "\0" in path:
+        return None
+    return path
+
+
+def _agy_open_regular(path):
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    fd = os.open(path, flags)
+    stream = os.fdopen(fd, "rb")
+    if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+        stream.close()
+        raise ValueError("Non-regular Antigravity file")
+    return stream
+
+
+def _agy_first_workspace(uris):
+    if not isinstance(uris, list):
+        return None
+    for uri in uris:
+        path = _agy_file_uri_path(uri)
+        if path is not None:
+            return path
+    return None
+
+
+def _agy_workspaces(agy_home):
+    workspaces = {}
+    meta_file = agy_home / "cache" / "conversation_metadata.json"
+    try:
+        if not meta_file.parent.is_symlink() and not meta_file.is_symlink():
+            with _agy_open_regular(meta_file) as stream:
+                raw = stream.read(MAX_AGY_METADATA_BYTES + 1)
+            if len(raw) <= MAX_AGY_METADATA_BYTES:
+                data = json.loads(raw)
+                conversations = data.get("conversations") if isinstance(data, dict) else None
+                if isinstance(conversations, dict):
+                    for sid, entry in conversations.items():
+                        if not isinstance(sid, str) or not UUID_RE.fullmatch(sid) or not isinstance(entry, dict):
+                            continue
+                        summary = entry.get("summary")
+                        workspace = _agy_first_workspace(summary.get("WorkspaceURIs") if isinstance(summary, dict) else None)
+                        if workspace is not None:
+                            workspaces[sid.lower()] = workspace
+    except (OSError, ValueError):
+        pass
+
+    db_file = agy_home / "conversation_summaries.db"
+    try:
+        info = db_file.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_AGY_METADATA_BYTES:
+            return workspaces
+    except OSError:
+        return workspaces
+
+    def load_db(target, *, uri=False):
+        connect_target = target.resolve().as_uri() + "?mode=ro" if uri else str(target)
+        with closing(sqlite3.connect(connect_target, uri=uri, timeout=1)) as db:
+            db.execute("PRAGMA query_only = ON")
+            db.execute("PRAGMA trusted_schema = OFF")
+            for sid, raw_uris in db.execute("SELECT conversation_id, workspace_uris FROM conversation_summaries"):
+                if not isinstance(sid, str) or not UUID_RE.fullmatch(sid) or not isinstance(raw_uris, str):
+                    continue
+                key = sid.lower()
+                if key in workspaces:
+                    continue
+                try:
+                    workspace = _agy_first_workspace(json.loads(raw_uris))
+                except ValueError:
+                    continue
+                if workspace is not None:
+                    workspaces[key] = workspace
+
+    try:
+        load_db(db_file, uri=True)
+    except sqlite3.Error:
+        try:
+            with tempfile.TemporaryDirectory(prefix="agy-summaries-") as temporary:
+                tmp_dir = Path(temporary)
+                for suffix in ("", "-wal", "-shm"):
+                    source = agy_home / f"conversation_summaries.db{suffix}"
+                    try:
+                        src_info = source.lstat()
+                    except OSError:
+                        continue
+                    if not stat.S_ISREG(src_info.st_mode) or src_info.st_size > MAX_AGY_METADATA_BYTES:
+                        continue
+                    with _agy_open_regular(source) as src, open(tmp_dir / source.name, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                load_db(tmp_dir / "conversation_summaries.db", uri=False)
+        except (OSError, sqlite3.Error, ValueError):
+            pass
+    return workspaces
+
+
+def _agy_model_name(raw):
+    cleaned = _clean_label(raw)
+    if cleaned is None or cleaned == AGY_BYOM_MODEL:
+        return "unknown"
+    normalized = AGY_EFFORT_SUFFIX.sub("", cleaned)
+    return normalized if model_label("agy", normalized) and not TOKEN_LIKE_MODEL.search(normalized) else "unknown"
+
+
+def _agy_event(session_id, line_no, payload, workspace, classify, start, end):
+    if not isinstance(payload, dict):
+        raise ValueError
+    if payload.get("type") != "PLANNER_RESPONSE":
+        return None
+    raw_at = payload.get("created_at")
+    if raw_at is None:
+        return None
+    at = _utc_instant(raw_at)
+    if at is None:
+        raise ValueError
+    if not start <= at < end:
+        return None
+    incoming = payload.get("input_tokens")
+    outgoing = payload.get("output_tokens")
+    if incoming is None and outgoing is None:
+        return None
+    cached = payload.get("cache_read_tokens", 0)
+    if cached is None:
+        cached = 0
+    counts = (incoming, outgoing, cached)
+    if any(type(value) is not int or value < 0 for value in counts) or sum(counts) > MAX_COUNT:
+        raise ValueError
+    if not any(counts):
+        return None
+    step_index = payload.get("step_index")
+    step_token = f"step:{step_index}" if type(step_index) is int and step_index >= 0 else f"line:{line_no}"
+    category = classify(workspace)
+    key = hashlib.sha256(f"agy\0{session_id}\0{step_token}".encode()).hexdigest()
+    return {
+        "key": key,
+        "at": _iso_utc(at),
+        "provider": "agy",
+        "category": category if category in ("personal", "work", "unclassified") else "unclassified",
+        "model": _agy_model_name(payload.get("model")),
+        "input": incoming,
+        "output": outgoing,
+        "cacheRead": cached,
+        "cacheWrite": 0,
+        "reasoning": 0,
+    }
+
+
+def agy_events(home, classify, start, end):
+    """Return sanitized Antigravity CLI (agy) token events and a coverage error code, if any."""
+    agy_home = Path(home) / ".gemini" / "antigravity-cli"
+    brain = agy_home / "brain"
+    try:
+        if agy_home.is_symlink():
+            return [], "InvalidLogPath"
+        if not agy_home.exists():
+            return [], None
+        if not agy_home.is_dir():
+            return [], "InvalidLogPath"
+        if brain.is_symlink():
+            return [], "InvalidLogPath"
+        if not brain.exists():
+            return [], None
+        if not brain.is_dir():
+            return [], "InvalidLogPath"
+    except OSError:
+        return [], "LogReadError"
+
+    candidates = []
+    error = None
+    try:
+        entries = list(brain.iterdir())
+    except OSError:
+        return [], "LogReadError"
+
+    for entry in entries:
+        if not UUID_RE.fullmatch(entry.name):
+            continue
+        try:
+            if entry.is_symlink() or not entry.is_dir():
+                continue
+            sys_dir = entry / ".system_generated"
+            logs_dir = sys_dir / "logs"
+            transcript = logs_dir / "transcript.jsonl"
+            if sys_dir.is_symlink() or logs_dir.is_symlink() or transcript.is_symlink():
+                error = error or "InvalidLogPath"
+                continue
+            if not transcript.exists():
+                continue
+            info = transcript.lstat()
+            if not stat.S_ISREG(info.st_mode):
+                error = error or "InvalidLogPath"
+                continue
+            if info.st_size > MAX_AGY_FILE_BYTES:
+                error = error or "FileBudget"
+                continue
+            candidates.append((info.st_mtime_ns, entry.name.lower(), transcript))
+        except OSError:
+            error = error or "LogReadError"
+
+    if not candidates:
+        return [], error
+
+    candidates.sort(key=lambda item: (-item[0], item[1]))
+    if len(candidates) > MAX_AGY_FILES:
+        candidates = candidates[:MAX_AGY_FILES]
+        error = error or "ReadLimit"
+
+    workspaces = _agy_workspaces(agy_home)
+    deadline = time.monotonic() + MAX_AGY_READ_SECONDS
+    events, seen, scanned_bytes = [], set(), 0
+    for _, sid, transcript in candidates:
+        if time.monotonic() >= deadline or scanned_bytes >= MAX_AGY_SCAN_BYTES:
+            return events, error or "ReadLimit"
+        workspace = workspaces.get(sid)
+        try:
+            with _agy_open_regular(transcript) as stream:
+                size = os.fstat(stream.fileno()).st_size
+                if size > MAX_AGY_FILE_BYTES:
+                    error = error or "FileBudget"
+                    continue
+                if scanned_bytes + size > MAX_AGY_SCAN_BYTES:
+                    return events, error or "ReadLimit"
+                scanned_bytes += size
+                line_no = 0
+                while True:
+                    if time.monotonic() >= deadline:
+                        return events, error or "ReadLimit"
+                    raw_line = stream.readline(MAX_AGY_LINE_BYTES + 1)
+                    if not raw_line:
+                        break
+                    line_no += 1
+                    if len(raw_line) > MAX_AGY_LINE_BYTES:
+                        error = error or "MalformedUsage"
+                        break
+                    text = raw_line.decode("utf-8", errors="strict").strip()
+                    if not text:
+                        continue
+                    try:
+                        row = json.loads(text)
+                        event = _agy_event(sid, line_no, row, workspace, classify, start, end)
+                    except (TypeError, ValueError, RecursionError):
+                        error = error or "MalformedUsage"
+                        continue
+                    if event and event["key"] not in seen:
+                        seen.add(event["key"])
+                        events.append(event)
+        except (OSError, UnicodeError, ValueError):
+            error = error or "LogReadError"
     return events, error
 
 

@@ -189,6 +189,105 @@ class OpenCodeEventsTests(unittest.TestCase):
             self.assertEqual(len(events), 1)
 
 
+class AgyEventsTests(unittest.TestCase):
+    start = dt.datetime.fromisoformat("2026-11-18T16:00:00+00:00")
+    sid_meta = "434a295d-b277-43f9-942c-8899d25c25c8"
+    sid_db = "9ece8e24-0fda-4418-a0e2-1039aff8cbd5"
+
+    def write_transcript(self, home, sid, lines, *, name="transcript.jsonl"):
+        logs_dir = home / ".gemini/antigravity-cli/brain" / sid / ".system_generated/logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        path = logs_dir / name
+        path.write_text("\n".join(line if isinstance(line, str) else json.dumps(line) for line in lines) + "\n")
+        return path
+
+    def test_transcript_normalization_dedup_and_workspace_classification(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            agy_home = home / ".gemini/antigravity-cli"
+            (agy_home / "cache").mkdir(parents=True, exist_ok=True)
+            (agy_home / "cache/conversation_metadata.json").write_text(json.dumps({
+                "conversations": {
+                    self.sid_meta: {"summary": {"WorkspaceURIs": ["file:///fixture/personal"]}},
+                }
+            }))
+            db = sqlite3.connect(agy_home / "conversation_summaries.db")
+            self.addCleanup(db.close)
+            db.execute("CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, workspace_uris TEXT NOT NULL)")
+            db.execute("INSERT INTO conversation_summaries VALUES (?, ?)",
+                       (self.sid_db, json.dumps(["file:///fixture/work"])))
+            db.commit()
+
+            t_before = "2026-11-18T15:59:59Z"
+            t_in = "2026-11-18T16:00:00Z"
+            t_in2 = "2026-11-18T16:00:30Z"
+            t_end = AT.isoformat().replace("+00:00", "Z")
+            rows_meta = [
+                {"step_index": 0, "type": "USER_INPUT", "created_at": t_in, "content": "Synthetic prompt"},
+                {"step_index": 1, "type": "PLANNER_RESPONSE", "created_at": t_before, "model": "gemini-4-neon-high",
+                 "input_tokens": 5, "output_tokens": 1, "cache_read_tokens": 0},
+                {"step_index": 2, "type": "PLANNER_RESPONSE", "created_at": t_in, "model": "gemini-4-neon-high",
+                 "input_tokens": 100, "output_tokens": 20, "cache_read_tokens": 50},
+                {"step_index": 3, "type": "PLANNER_RESPONSE", "created_at": t_in2, "model": "gemini-4-neon-medium",
+                 "input_tokens": 30, "output_tokens": 10, "cache_read_tokens": None},
+                {"step_index": 4, "type": "PLANNER_RESPONSE", "created_at": t_in2, "model": "gemini-4-neon-low",
+                 "input_tokens": None, "output_tokens": None, "cache_read_tokens": None},
+                {"step_index": 5, "type": "PLANNER_RESPONSE", "created_at": t_end, "model": "gemini-4-neon-high",
+                 "input_tokens": 999, "output_tokens": 1, "cache_read_tokens": 0},
+            ]
+            self.write_transcript(home, self.sid_meta, rows_meta)
+            # transcript_full.jsonl must never double-count turns already in transcript.jsonl.
+            self.write_transcript(home, self.sid_meta, rows_meta, name="transcript_full.jsonl")
+            self.write_transcript(home, self.sid_db, [
+                {"step_index": 1, "type": "PLANNER_RESPONSE", "created_at": t_in,
+                 "model": "MODEL_GOOGLE_GEMINI_INTERNAL_BYOM", "input_tokens": 40, "output_tokens": 5, "cache_read_tokens": 10},
+                {"step_index": 2, "type": "PLANNER_RESPONSE", "created_at": t_in2,
+                 "model": "gemini-4-carbon-xhigh", "input_tokens": 15, "output_tokens": 3, "cache_read_tokens": 2},
+            ])
+
+            classify = {"/fixture/personal": "personal", "/fixture/work": "work"}.get
+            events, error = models.agy_events(home, classify, self.start, AT)
+            self.assertIsNone(error)
+            self.assertEqual(len(events), 4)
+            by_key = {event["key"]: event for event in events}
+            self.assertEqual(by_key[hashlib.sha256(f"agy\0{self.sid_meta}\0step:2".encode()).hexdigest()], {
+                "key": hashlib.sha256(f"agy\0{self.sid_meta}\0step:2".encode()).hexdigest(),
+                "at": "2026-11-18T16:00:00Z", "provider": "agy", "category": "personal",
+                "model": "gemini-4-neon", "input": 100, "output": 20, "cacheRead": 50,
+                "cacheWrite": 0, "reasoning": 0,
+            })
+            self.assertEqual(by_key[hashlib.sha256(f"agy\0{self.sid_db}\0step:1".encode()).hexdigest()]["model"], "unknown")
+            self.assertEqual(by_key[hashlib.sha256(f"agy\0{self.sid_db}\0step:1".encode()).hexdigest()]["category"], "work")
+            self.assertEqual(by_key[hashlib.sha256(f"agy\0{self.sid_db}\0step:2".encode()).hexdigest()]["model"], "gemini-4-carbon")
+
+            snap = snapshot([daily(TODAY, input=185, output=38, cache=62)])
+            projected = models.daily_models(collector_fixture(), [{"tokens": events}], snap)
+            self.assertEqual(projected[TODAY], [
+                {"provider": "agy", "model": "gemini-4-neon", "input": 130, "output": 30, "cacheRead": 50},
+                {"provider": "agy", "model": "gemini-4-carbon", "input": 15, "output": 3, "cacheRead": 2},
+            ])
+            self.assertNotIn("Synthetic prompt", json.dumps(events))
+
+    def test_missing_symlinks_and_malformed_lines(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            self.assertEqual(models.agy_events(home, lambda _cwd: "unclassified", self.start, AT), ([], None))
+            self.write_transcript(home, self.sid_meta, [
+                "{bad json",
+                {"step_index": 1, "type": "PLANNER_RESPONSE", "created_at": "2026-11-18T16:00:00Z",
+                 "model": "gemini-4-neon-high", "input_tokens": 12, "output_tokens": 4, "cache_read_tokens": 0},
+            ])
+            events, error = models.agy_events(home, lambda _cwd: "unclassified", self.start, AT)
+            self.assertEqual(error, "MalformedUsage")
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]["model"], "gemini-4-neon")
+
+            bad_home = Path(temporary) / "symlinked"
+            (bad_home / ".gemini/antigravity-cli").mkdir(parents=True)
+            os.symlink(home / ".gemini/antigravity-cli/brain", bad_home / ".gemini/antigravity-cli/brain")
+            self.assertEqual(models.agy_events(bad_home, lambda _cwd: "unclassified", self.start, AT), ([], "InvalidLogPath"))
+
+
 class ModelAggregationTests(unittest.TestCase):
     def test_calendar_cutoff_first_duplicate_and_provider_accounting(self):
         collector = collector_fixture()
