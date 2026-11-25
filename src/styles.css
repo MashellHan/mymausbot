@@ -112,6 +112,7 @@
 
 @theme {
   --animate-panel-in: panel-in 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+  --animate-panel-beside-in: panel-beside-in 0.24s cubic-bezier(0.22, 1, 0.36, 1);
   --animate-sheet-in: sheet-in 0.26s cubic-bezier(0.22, 1, 0.36, 1);
   --animate-workspace-in: workspace-in 0.18s cubic-bezier(0.22, 1, 0.36, 1);
   --animate-view-enter: view-enter 0.2s cubic-bezier(0.22, 1, 0.36, 1);
@@ -2172,6 +2173,10 @@ body {
   from { transform: translateX(28px); opacity: 0; }
   to { transform: translateX(0); opacity: 1; }
 }
+/* A side panel's room grows from nothing as it slides in over the window's edge (bot-panel/side-panel.ts). */
+@keyframes panel-beside-in {
+  from { margin-inline-end: calc(-1 * var(--side-panel-w)); opacity: 0; }
+}
 @keyframes sheet-in {
   from { transform: translateY(32px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
@@ -2495,6 +2500,7 @@ html[data-cloud-intent-morph] [data-tour="composer"] { view-transition-name: clo
 :root[data-reduced-motion="true"] .animate-spot-in,
 :root[data-reduced-motion="true"] .animate-pop-in,
 :root[data-reduced-motion="true"] .animate-pop-out,
+:root[data-reduced-motion="true"] .md\:animate-panel-beside-in,
 :root[data-reduced-motion="true"] .animate-view-enter,
 :root[data-reduced-motion="true"] .animate-sheet-in,
 :root[data-reduced-motion="true"] .glass-popup-frame[data-settings-sheet] > .glass-popup,
