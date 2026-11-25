@@ -246,6 +246,14 @@ NOTIFICATION>internal</SYSTEM_NOTIFICATION>");`,
         text((await tools.exec_command({ cmd: "git diff --stat" })).output)
       ]);
     `)).toEqual({ text: "cmd: rg --files src; cmd: git diff --stat", clipped: false, detailStatus: "available" });
+    expect(show(`
+      const r = await Promise.allSettled([
+        tools.exec_command({ cmd: "sed -n '1,20p' /Users/fixture/workspace/OpenMausBot-very-long-worktree-name-20261125/server/local-agent-visible-message.ts" }),
+        tools.exec_command({ cmd: "git status --short" }),
+      ]);
+    `)).toEqual({ text: "cmd: sed -n '1,20p' [path]; cmd: git status --short", clipped: false, detailStatus: "available" });
+    expect(show(String.raw`text(await tools.exec_command({ cmd: "python3 -c 'print({\"author\": 1})' /Users/fixture/workspace/OpenMausBot-very-long-worktree-name-20261125/scripts/check.mjs" }));`))
+      .toEqual({ text: "cmd: python3 -c 'print({\"author\": 1})' [path]", clipped: false, detailStatus: "available" });
     const mixed = show(`
       await tools.exec_command({ cmd: "git status --short" });
       await tools.exec_command({ cmd: buildCommand() });
