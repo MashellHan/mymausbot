@@ -35,7 +35,9 @@ afterEach(() => {
 
 describe("the profile photo", () => {
   it("takes only a PNG, JPEG, GIF or WebP of at most 10 MB", () => {
+    expect(profilePhotoFileProblem({ type: "image/png", size: 2_000_000 })).toBeNull();
     expect(profilePhotoFileProblem({ type: "image/jpeg", size: 2_000_000 })).toBeNull();
+    expect(profilePhotoFileProblem({ type: "image/gif", size: 2_000_000 })).toBeNull();
     expect(profilePhotoFileProblem({ type: "image/webp; charset=binary", size: 10 * 1024 * 1024 })).toBeNull();
     expect(profilePhotoFileProblem({ type: "image/svg+xml", size: 900 })).toBe("settings.profile.avatar.invalidType");
     expect(profilePhotoFileProblem({ type: "image/heic", size: 900 })).toBe("settings.profile.avatar.invalidType");

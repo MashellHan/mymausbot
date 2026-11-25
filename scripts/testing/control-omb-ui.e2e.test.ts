@@ -158,11 +158,16 @@ describe("control-omb ui drives the real renderer", () => {
   run("shows the matched text inside a searched message", async () => {
     launched = await launch(["--simple"]);
     const { info } = launched;
+    await desktopViewport(info.ui);
     await ui("type", info.ui, "--name", "Message Pepper", "--text", "Find the striped zebra");
     await ui("press", info.ui, "--keys", "Enter");
     await ui("wait-settle", info.ui, "--timeout", "60");
     await ui("click", info.ui, "--name", "Open Pepper's profile");
-    await ui("click", info.ui, "--name", "Bot settings");
+    await expect.poll(async () => (await ui("eval", info.ui, "--js", `(() => {
+      const panel = document.querySelector('[data-computer-panel]');
+      return Boolean(panel && !panel.getAnimations().some(animation => animation.playState === 'running'));
+    })()`)).result, { timeout: 10_000 }).toBe(true);
+    await clickUiControl(info.ui, '[data-computer-panel] button[aria-label="Bot settings"]');
     await ui("click", info.ui, "--name", "Details");
     await ui("click", info.ui, "--name", "Find in conversation");
     await clickUiControl(info.ui, '#bot-panel button[aria-label="Close settings"]');

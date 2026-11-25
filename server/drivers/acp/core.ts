@@ -1463,7 +1463,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
               });
               settle(threadId, session, false, reason ?? "failed");
             }
-          } catch (raw) { const e = signIn.asked(raw) ?? raw;
+          } catch (raw) { const e = signIn.asked(raw) ?? support.reportedFailure?.(raw) ?? raw;
             if (pendingSplitReceipt && state.promptSent && state.usageCompacted) {
               deletePromptSplitReceipt(DRIVER_KIND, pendingSplitReceipt.key);
             }

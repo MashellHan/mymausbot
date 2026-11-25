@@ -5,7 +5,7 @@ import { avatarMarks } from "@/lib/avatar-marks";
 import { remoteFetch } from "@/lib/pwa-config";
 import { useRemoteMediaUrl } from "@/lib/use-remote-media";
 import { saveTeamProfile } from "@/lib/own-profile";
-import { IMAGE_MAX_BYTES, imageAttachmentFromFile, isImageFile } from "@/lib/composer-attachments";
+import { IMAGE_MAX_BYTES, imageAttachmentFromFile } from "@/lib/composer-attachments";
 import type { LocaleKey } from "@/locales";
 import { botAvatarUrlFromStoredPath } from "../../shared/bot-avatar";
 import { AboutMeSettings } from "./AboutMeSettings";
@@ -16,6 +16,7 @@ import { User } from "lucide-react";
 
 const PHOTO_MIN_SIDE = 64;
 const PHOTO_MAX_SIDE = 8192;
+const PROFILE_PHOTO_MIMES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 /** What is stored is always this square WebP, drawn fresh: the original's metadata (location, camera) never leaves the picker. */
 const PHOTO_STORED_SIDE = 512;
 
@@ -23,7 +24,8 @@ type PhotoDraft = { file: File; previewUrl: string; width: number; height: numbe
 
 /** Checked before the picture is even decoded; null when the file may become a draft. */
 export function profilePhotoFileProblem(file: { type: string; size: number }): LocaleKey | null {
-  if (!isImageFile(file)) return "settings.profile.avatar.invalidType";
+  const mime = file.type.split(";", 1)[0]!.trim().toLowerCase();
+  if (!PROFILE_PHOTO_MIMES.has(mime)) return "settings.profile.avatar.invalidType";
   if (file.size > IMAGE_MAX_BYTES) return "settings.profile.avatar.tooLarge";
   return null;
 }
