@@ -246,6 +246,27 @@ NOTIFICATION>internal</SYSTEM_NOTIFICATION>");`,
         text((await tools.exec_command({ cmd: "git diff --stat" })).output)
       ]);
     `)).toEqual({ text: "cmd: rg --files src; cmd: git diff --stat", clipped: false, detailStatus: "available" });
+    expect(show(`
+      const r = await Promise.allSettled([
+        tools.exec_command({ cmd: "sed -n '1,20p' /Users/fixture/workspace/OpenMausBot-very-long-worktree-name-20261125/server/local-agent-visible-message.ts" }),
+        tools.exec_command({ cmd: "git status --short" }),
+      ]);
+    `)).toEqual({ text: "cmd: sed -n '1,20p' [path]; cmd: git status --short", clipped: false, detailStatus: "available" });
+    expect(show(String.raw`text(await tools.exec_command({ cmd: "python3 -c 'print({\"author\": 1})' /Users/fixture/workspace/OpenMausBot-very-long-worktree-name-20261125/scripts/check.mjs" }));`))
+      .toEqual({ text: "cmd: python3 -c 'print({\"author\": 1})' [path]", clipped: false, detailStatus: "available" });
+    // Regression: authorization / proxy-authorization / authorization_code (including non-Bearer values) must stay withheld.
+    expect(redactedAgentToolArguments({ authorization: "Basic dXNlcjpwYXNz" }).text).toBeNull();
+    expect(redactedAgentToolArguments({ "proxy-authorization": "Basic dXNlcjpwYXNz" }).text).toBeNull();
+    expect(redactedAgentToolArguments({ authorization_code: "opaque-code-123" }).text).toBeNull();
+    expect(redactedAgentToolResult('{"authorization":"Basic dXNlcjpwYXNz"}').text).toBeNull();
+    expect(redactedAgentToolResult("Authorization: Basic dXNlcjpwYXNz").text).toBeNull();
+    // Regression: raw base64 payloads containing '/' or '+' (including JPEG /9j/...) must still withhold the whole call/result.
+    expect(redactedAgentToolResult("/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2w==").text).toBeNull();
+    expect(redactedAgentToolResult("prefix " + "A".repeat(40) + "/" + "B".repeat(40) + "==").text).toBeNull();
+    expect(redactedAgentToolResult("prefix " + "A".repeat(30) + "+" + "B".repeat(20) + "/" + "C".repeat(30) + "==").text).toBeNull();
+    expect(redactedAgentToolResult("'https://example.com'," + "A".repeat(80) + "==").text).toBeNull();
+    expect(show(`text(await tools.exec_command({ cmd: "echo /9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0a" }));`))
+      .toMatchObject({ detailStatus: "withheld", text: "[Arguments unavailable]" });
     const mixed = show(`
       await tools.exec_command({ cmd: "git status --short" });
       await tools.exec_command({ cmd: buildCommand() });

@@ -7,7 +7,7 @@ const record = (value: unknown): Record<string, unknown> => value && typeof valu
 const VISIBLE_PHASES = new Set(["commentary", "final_answer", "final"]);
 const INTERNAL_ENVELOPE = /<\/?(?:SYSTEM_(?:MESSAGE|NOTIFICATION)|(?:teammate|agent|task|coordinator)[_-](?:message|notification|envelope)|system[_-]reminder)\b/i;
 const TOOL_KEY = /^[A-Za-z][A-Za-z0-9_-]{0,40}$/;
-const PRIVATE_TOOL_KEY = /(?:auth|base64|binary|body|cookie|credential|data|env|header|image|key|passwd|password|private|secret|session|token)|^sid$/i;
+const PRIVATE_TOOL_KEY = /(?:auth(?!or(?:s?|ship)(?![A-Za-z]))|base64|binary|body|cookie|credential|data|env|header|image|key|passwd|password|private|secret|session|token)|^sid$/i;
 const TOOL_ASSIGNMENT = /"([^"\n]{1,128})"\s*[:=]|\b([A-Za-z][A-Za-z0-9_.-]*(?:[ \t]+(?:id|key|token|data|value))?)['"]?\s*[:=]/gi;
 const TOOL_FIELD_VALUE = /^\s*(?:"([^"]{1,256})"|'([^']{1,256})'|([A-Za-z0-9_-]+))/;
 const EXEC_COMPOUND_ASSIGNMENT = /(?:\?\?|\|\||&&|>>>?|<<|\*\*|[-+*/%&|^])=/;
@@ -40,13 +40,30 @@ const SHELL_MASK_PREFIX = "\0";
 const MASKED_SHELL_FIELD = /^\s*\0«redacted \d+ chars»(?=$|[\s"';&|<>()])/;
 const SHELL_LONG_BEARER = /(\bBearer\s+)([^\s"'`;&|]+)/gi;
 
-export function redactedAgentText(value: unknown, limit = 600): { text: string | null; clipped: boolean } {
-  if (typeof value !== "string") return { text: null, clipped: false };
-  const clean = redactSecretsInText(value)
+// Recognizable anchored filesystem path heuristic used only to avoid false-positive base64 hits on long workspace paths.
+// Requires an explicit path root (e.g. /Users/, ~/, ./, ../, or drive root) and forbids base64 '+'/'=' or >64-char segments.
+const RECOGNIZABLE_FS_PATH = /(^|[\s"'`=:(])(?:(?:\/(?:Users|home|var|tmp|private|opt|etc|usr|bin|sbin|Applications|Library|Volumes)\/|~\/|\.\.?\/|[A-Za-z]:[\\/])(?:[A-Za-z0-9._-]{1,64}[\\/])*[A-Za-z0-9._-]{1,64})(?=$|[\s"'`<>:,;)\]}])/gm;
+
+function maskLinksAndPaths(value: string): string {
+  return value
     .replace(/\b(?:https?|file):\/\/[^\s"'`<>]+/gi, "[link]")
     .replace(/(^|[\s"'`=:(])\/[^\s"'`<>]+/gm, (_match, lead: string) => `${lead}[path]`)
     .replace(/(^|[\s"'`=:(])(?:~[\\/]|\.{1,2}[\\/]|[A-Za-z]:[\\/])[^\s"'`<>]+/gm, (_match, lead: string) => `${lead}[path]`)
-    .replace(/\b[A-Za-z0-9._-]+(?:[\\/][A-Za-z0-9._-]+)+\b/g, "[path]")
+    .replace(/\b[A-Za-z0-9._-]+(?:[\\/][A-Za-z0-9._-]+)+\b/g, "[path]");
+}
+
+function hasEncodedToolPayload(value: string): boolean {
+  if (/data:[^\s,]{0,100};base64,/i.test(value)) return true;
+  // Strip only recognizable anchored filesystem paths and bounded URLs (strictly a subset of what maskLinksAndPaths masks: never crossing quotes/delimiters or swallowing base64).
+  const withoutSafePaths = value
+    .replace(/\b(?:https?|file):\/\/[A-Za-z0-9._~:/?#[\]@!$&*+=-]{1,256}(?=$|[\s"'`<>(),;])/gi, "[link]")
+    .replace(RECOGNIZABLE_FS_PATH, (_match, lead: string) => `${lead}[path]`);
+  return ENCODED_TOOL_TEXT.test(withoutSafePaths);
+}
+
+export function redactedAgentText(value: unknown, limit = 600): { text: string | null; clipped: boolean } {
+  if (typeof value !== "string") return { text: null, clipped: false };
+  const clean = maskLinksAndPaths(redactSecretsInText(value))
     .replace(/[\p{Cc}\p{Cf}]/gu, " ").replace(/\s+/g, " ").trim();
   const chars = Array.from(clean);
   return { text: chars.length ? chars.slice(0, limit).join("") : null, clipped: chars.length > limit };
@@ -100,7 +117,7 @@ function hasPrivateToolFields(labels: string, shell?: "source" | "redacted", cus
 function safeToolText(value: unknown, customExec = false): { text: string | null; clipped: boolean } {
   if (typeof value !== "string") return { text: null, clipped: false };
   if (value.length > MAX_TOOL_SOURCE) return { text: null, clipped: true };
-  if (ENCODED_TOOL_TEXT.test(value)) return { text: null, clipped: true };
+  if (hasEncodedToolPayload(value)) return { text: null, clipped: true };
   for (let index = 0; index < value.length; index++) {
     const code = value.charCodeAt(index);
     if (code < 9 || (code > 13 && code < 32)) return { text: null, clipped: true };
@@ -289,7 +306,7 @@ function redactShellCredentials(value: string): string | null {
 
 function safeShellCommandText(value: string): { text: string | null; clipped: boolean } {
   if (value.length > MAX_TOOL_SOURCE) return { text: null, clipped: true };
-  if (ENCODED_TOOL_TEXT.test(value) || INTERNAL_ENVELOPE.test(value.replace(/[\p{Cc}\p{Cf}]/gu, ""))) {
+  if (hasEncodedToolPayload(value) || INTERNAL_ENVELOPE.test(value.replace(/[\p{Cc}\p{Cf}]/gu, ""))) {
     return { text: null, clipped: true };
   }
   for (let index = 0; index < value.length; index++) {
@@ -297,7 +314,7 @@ function safeShellCommandText(value: string): { text: string | null; clipped: bo
     if (code < 9 || (code > 13 && code < 32)) return { text: null, clipped: true };
   }
   const labels = normalizedToolLabels(value);
-  if (labels.includes(SHELL_MASK_PREFIX) || ENCODED_TOOL_TEXT.test(labels)) return { text: null, clipped: true };
+  if (labels.includes(SHELL_MASK_PREFIX) || hasEncodedToolPayload(labels)) return { text: null, clipped: true };
   if (hasPrivateToolFields(labels, "source")) return { text: null, clipped: false };
 
   const credentials = redactShellCredentials(value);
@@ -444,7 +461,7 @@ function execCallsInExpression(node: Expression, env: StaticExecEnvironment,
     const isText = callee.type === "Identifier" && callee.name === "text" && !env.has("text");
     const isPromiseAll = callee.type === "MemberExpression" && !callee.computed && !callee.optional &&
       callee.object.type === "Identifier" && callee.object.name === "Promise" && !env.has("Promise") &&
-      callee.property.type === "Identifier" && callee.property.name === "all";
+      (callee.property.type === "Identifier" && (callee.property.name === "all" || callee.property.name === "allSettled"));
     if (isText && node.arguments.length === 1) {
       const argument = node.arguments[0];
       return argument && argument.type !== "SpreadElement" ? execCallsInExpression(argument, env, scan) : null;
