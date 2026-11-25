@@ -11,10 +11,14 @@ const SESSION_ID = /^ses_[A-Za-z0-9]{1,64}$/;
 const PROVIDER = /^[A-Za-z0-9_.-]{1,80}$/;
 const MODEL = /^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,119}$/;
 
-type MemberUsage = (verifiedSince: number) => {
-  tokenUsage24h: LocalAgentMemberTokenUsageWindow;
-  tokenUsage7d: LocalAgentMemberTokenUsageWindow;
-};
+export interface OpenCodeSessionUsage {
+  sessionDir: string | null;
+  sessionStartedAt: number | null;
+  usage: (verifiedSince: number) => {
+    tokenUsage24h: LocalAgentMemberTokenUsageWindow;
+    tokenUsage7d: LocalAgentMemberTokenUsageWindow;
+  };
+}
 
 interface Sample {
   startedAt: number;
@@ -67,16 +71,16 @@ function usage(samples: Sample[], cutoff: number, verifiedSince: number,
   };
 }
 
-export function readOpenCodeMemberUsage(file: string | null, ids: Iterable<string>, now: number): Map<string, MemberUsage> {
+export function readOpenCodeMemberUsage(file: string | null, ids: Iterable<string>, now: number): Map<string, OpenCodeSessionUsage> {
   const sessions = [...new Set(ids)].filter((id) => SESSION_ID.test(id));
-  const result = new Map<string, MemberUsage>();
+  const result = new Map<string, OpenCodeSessionUsage>();
   if (!file || !sessions.length) return result;
   let database: DatabaseSync | undefined;
   try {
     if (!lstatSync(file).isFile()) return result;
     const db = new DatabaseSync(file, { readOnly: true });
     database = db;
-    const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('session_message', 'message')").all().map(({ name }) => name));
+    const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('session_message', 'message', 'session_v2')").all().map(({ name }) => name));
     const prepare = (table: "session_message" | "message") => db.prepare(`SELECT
       time_created AS startedAt,
       json_extract(data, '$.time.completed') AS completed,
@@ -94,20 +98,28 @@ export function readOpenCodeMemberUsage(file: string | null, ids: Iterable<strin
       ORDER BY time_created DESC LIMIT 10000`);
     const current = tables.has("session_message") ? prepare("session_message") : null;
     const legacy = tables.has("message") ? prepare("message") : null;
+    const sessionMeta = tables.has("session_v2") ? db.prepare("SELECT directory, time_created FROM session_v2 WHERE id = ? LIMIT 1") : null;
     // OpenCode 1.19 can have both stores. Use one store per session to avoid counting migrated messages twice.
     const hasCurrent = current && legacy ? db.prepare("SELECT 1 FROM session_message WHERE session_id = ? LIMIT 1") : null;
     const project = createLocalTokenProjector(new Date(now));
     for (const id of sessions) {
       const messages = hasCurrent && !hasCurrent.get(id) ? legacy : current ?? legacy;
       if (!messages) continue;
+      const meta = sessionMeta?.get(id) as Record<string, unknown> | undefined;
+      const sessionDir = typeof meta?.directory === "string" && isAbsolute(meta.directory) ? meta.directory : null;
+      const sessionStartedAt = whole(meta?.time_created) ? meta.time_created : null;
       const observed = messages.all(id, now - 7 * DAY_MS, now).flatMap((row) => {
         const parsed = sample(row, now);
         return parsed ? [parsed] : [];
       });
-      result.set(id, (verifiedSince) => ({
-        tokenUsage24h: usage(observed, now - DAY_MS, verifiedSince, project),
-        tokenUsage7d: usage(observed, now - 7 * DAY_MS, verifiedSince, project),
-      }));
+      result.set(id, {
+        sessionDir,
+        sessionStartedAt,
+        usage: (verifiedSince) => ({
+          tokenUsage24h: usage(observed, now - DAY_MS, verifiedSince, project),
+          tokenUsage7d: usage(observed, now - 7 * DAY_MS, verifiedSince, project),
+        }),
+      });
     }
   } catch { return new Map(); }
   finally { database?.close(); }

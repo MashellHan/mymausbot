@@ -67,6 +67,13 @@ async function gitIdentity(root: string): Promise<{ common: string } | null> {
   try { return { common: await realpath(lines[1]) }; } catch { return null; }
 }
 
+export async function sameGitRepository(left: string, right: string): Promise<boolean> {
+  if (!isAbsolute(left) || !isAbsolute(right)) return false;
+  if (left === right) return true;
+  const [a, b] = await Promise.all([gitIdentity(left), gitIdentity(right)]);
+  return Boolean(a && b && a.common === b.common);
+}
+
 async function registeredWorktrees(root: string, candidates: string[]): Promise<Set<string>> {
   const matched = new Set<string>();
   if (!candidates.length || candidates.length > 20 || root !== resolve(root)) return matched;
