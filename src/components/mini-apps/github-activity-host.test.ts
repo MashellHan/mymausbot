@@ -166,5 +166,33 @@ it("validates and maps canonical edition/repo selections in both directions", ()
   for (const args of rejectedJsonschemaCases) {
     expect(selectionFromGithubPath(...args)).toEqual({ ok: false });
   }
+  expect(selectionFromGithubPath("/github/demo/deepdiff-order-audit/", "2026-11-25", "qlustered/deepdiff"))
+    .toEqual({ ok: true, selection: { editionKey: "2026-11-25", repo: "qlustered/deepdiff" } });
+  expect(selectionFromGithubPath("/github/demo/deepdiff-order-audit/#ignore-order", "2026-11-25", "qlustered/deepdiff"))
+    .toEqual({ ok: true, selection: { editionKey: "2026-11-25", repo: "qlustered/deepdiff" } });
+  expect(selectionFromGithubPath("/github/demo/deepdiff-order-audit/", undefined, undefined, "leaving"))
+    .toEqual({ ok: true, selection: { editionKey: "2026-11-25", repo: "qlustered/deepdiff" } });
+  expect(selectionFromGithubPath("/github/demo/deepdiff-order-audit/", "2026-11-25", "qlustered/deepdiff", "shown"))
+    .toEqual({ ok: true, selection: { editionKey: "2026-11-25", repo: "qlustered/deepdiff" } });
+  const rejectedDeepdiffCases: ReadonlyArray<Parameters<typeof selectionFromGithubPath>> = [
+    ["/github/demo/deepdiff-order-audit/"],
+    ["/github/demo/deepdiff-order-audit/", null, null],
+    ["/github/demo/deepdiff-order-audit/", "2026-11-25"],
+    ["/github/demo/deepdiff-order-audit/", "2026-11-25", null],
+    ["/github/demo/deepdiff-order-audit/", null, "qlustered/deepdiff"],
+    ["/github/demo/deepdiff-order-audit/", "2026-11-24", "qlustered/deepdiff"],
+    ["/github/demo/deepdiff-order-audit/", "2026-11-25", "seperman/deepdiff"],
+    ["/github/demo/deepdiff-order-audit/", "2026-11-25", "Qlustered/deepdiff"],
+    ["/github/demo/deepdiff-order-audit/", "2026-11-24", "qlustered/deepdiff", "leaving"],
+    ["/github/demo/deepdiff-order-audit/", "2026-11-25", undefined, "shown"],
+    ["/github/demo/deepdiff-order-audit-lab/", "2026-11-25", "qlustered/deepdiff"],
+    ["/github/demo/deepdiff-order-audit/deepdiff-order-audit-lab-source.zip", "2026-11-25", "qlustered/deepdiff"],
+    ["/github/demo/deepdiff-order-audit/results.json", "2026-11-25", "qlustered/deepdiff"],
+    ["/github/demo/deepdiff-order-audit/preview.png", "2026-11-25", "qlustered/deepdiff"],
+    ["/github/demo/deepdiff-order-audit", "2026-11-25", "qlustered/deepdiff"],
+  ];
+  for (const args of rejectedDeepdiffCases) {
+    expect(selectionFromGithubPath(...args)).toEqual({ ok: false });
+  }
   expect(selectionFromGithubPath("/github/media/demo.png")).toEqual({ ok: false });
 });
