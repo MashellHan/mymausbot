@@ -249,6 +249,7 @@ export class BrowserService {
       if (profile.tabs.remove(page.targetId)) profile.hub.tabsChanged();
     }));
     if (browser.downloads) run.offs.push(browser.downloads.onChange((download) => profile.hub.downloaded(download)));
+    if (opened.onPersonInput) run.offs.push(opened.onPersonInput(() => { profile.lastUsed = Date.now(); }));
     try {
       this.#stillWanted(profile, epoch);
       // A Chrome that dies before any tab runs says so at once, not when the wait ends.
