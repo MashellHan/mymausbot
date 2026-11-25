@@ -33,6 +33,11 @@ export const DEAD_COMPUTER = {
  * relay answers it for an account-wide refusal, which says nothing about one machine. */
 export const unansweredStatus = (status: number): boolean => status === 502 || status === 504 || (status >= 520 && status <= 524);
 
+/** A probe that took this much longer than its own timeout was not timed by the computer but by this process (its event
+ * loop stalled): it says nothing about the computer, so it counts neither way. */
+export const stalledProbe = (sample: ProbeSample): boolean => sample.elapsedMs > sample.timeoutMs * 2 + 5_000;
+export interface ProbeSample { elapsedMs: number; timeoutMs: number }
+
 interface BoxHealth {
   /** Probes in a row that got no answer, the first and last of them. */
   failures: number;
@@ -64,7 +69,9 @@ export function createBoatHealth(now: () => number = Date.now) {
     Object.assign(health, { failures: 0, firstFailureAt: null, lastFailureAt: null, lastAnsweredAt: now(), reportedAt: null });
   }
 
-  function unanswered(boxId: string): void {
+  /** A probe got no answer. A probe held far past its own timeout counts neither way. */
+  function unanswered(boxId: string, sample?: ProbeSample): void {
+    if (sample && stalledProbe(sample)) return;
     const health = entry(boxId), at = now();
     health.failures += 1;
     health.firstFailureAt ??= at;
@@ -80,11 +87,11 @@ export function createBoatHealth(now: () => number = Date.now) {
     const health = entry(boxId);
     if (health.probing || now() - health.lastProbeAt < DEAD_COMPUTER.probeGapMs) return;
     health.probing = true;
-    health.lastProbeAt = now();
+    const started = health.lastProbeAt = now();
     void probe().catch(() => false).then((ok) => {
       health.probing = false;
       if (boxes.get(boxId) !== health || ok === null) return;
-      if (ok) answered(boxId); else unanswered(boxId);
+      if (ok) answered(boxId); else unanswered(boxId, { elapsedMs: now() - started, timeoutMs: DEAD_COMPUTER.probeTimeoutMs });
     });
   }
 
