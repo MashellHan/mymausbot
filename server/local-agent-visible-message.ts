@@ -7,7 +7,7 @@ const record = (value: unknown): Record<string, unknown> => value && typeof valu
 const VISIBLE_PHASES = new Set(["commentary", "final_answer", "final"]);
 const INTERNAL_ENVELOPE = /<\/?(?:SYSTEM_(?:MESSAGE|NOTIFICATION)|(?:teammate|agent|task|coordinator)[_-](?:message|notification|envelope)|system[_-]reminder)\b/i;
 const TOOL_KEY = /^[A-Za-z][A-Za-z0-9_-]{0,40}$/;
-const PRIVATE_TOOL_KEY = /(?:auth(?!or)|base64|binary|body|cookie|credential|data|env|header|image|key|passwd|password|private|secret|session|token)|^sid$/i;
+const PRIVATE_TOOL_KEY = /(?:auth(?!or(?:s?|ship)(?![A-Za-z]))|base64|binary|body|cookie|credential|data|env|header|image|key|passwd|password|private|secret|session|token)|^sid$/i;
 const TOOL_ASSIGNMENT = /"([^"\n]{1,128})"\s*[:=]|\b([A-Za-z][A-Za-z0-9_.-]*(?:[ \t]+(?:id|key|token|data|value))?)['"]?\s*[:=]/gi;
 const TOOL_FIELD_VALUE = /^\s*(?:"([^"]{1,256})"|'([^']{1,256})'|([A-Za-z0-9_-]+))/;
 const EXEC_COMPOUND_ASSIGNMENT = /(?:\?\?|\|\||&&|>>>?|<<|\*\*|[-+*/%&|^])=/;
@@ -40,6 +40,10 @@ const SHELL_MASK_PREFIX = "\0";
 const MASKED_SHELL_FIELD = /^\s*\0«redacted \d+ chars»(?=$|[\s"';&|<>()])/;
 const SHELL_LONG_BEARER = /(\bBearer\s+)([^\s"'`;&|]+)/gi;
 
+// Recognizable filesystem path heuristic used only to avoid false-positive base64 hits on long workspace paths.
+// Requires an explicit path root (or multiple hyphen/dot-separated path segments without base64 '+'/'=') and forbids base64-length segments.
+const RECOGNIZABLE_FS_PATH = /(^|[\s"'`=:(])(?:(?:\/(?:Users|home|var|tmp|private|opt|etc|usr|bin|sbin|Applications|Library|Volumes)\/|~\/|\.\.?\/|[A-Za-z]:[\\/])(?:[A-Za-z0-9._-]{1,64}[\\/])*[A-Za-z0-9._-]{1,64})(?=$|[\s"'`<>:,;)\]}])/gm;
+
 function maskLinksAndPaths(value: string): string {
   return value
     .replace(/\b(?:https?|file):\/\/[^\s"'`<>]+/gi, "[link]")
@@ -50,8 +54,11 @@ function maskLinksAndPaths(value: string): string {
 
 function hasEncodedToolPayload(value: string): boolean {
   if (/data:[^\s,]{0,100};base64,/i.test(value)) return true;
-  // Mask filesystem paths and URLs first so long absolute workspace paths do not trip the 64-char base64 heuristic.
-  return ENCODED_TOOL_TEXT.test(maskLinksAndPaths(value));
+  // Strip only recognizable anchored filesystem paths and URLs (never arbitrary '/' runs or '+'/'=' base64 blobs).
+  const withoutSafePaths = value
+    .replace(/\b(?:https?|file):\/\/[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=-]{1,256}(?=$|[\s"'`<>])/gi, "[link]")
+    .replace(RECOGNIZABLE_FS_PATH, (_match, lead: string) => `${lead}[path]`);
+  return ENCODED_TOOL_TEXT.test(withoutSafePaths);
 }
 
 export function redactedAgentText(value: unknown, limit = 600): { text: string | null; clipped: boolean } {
