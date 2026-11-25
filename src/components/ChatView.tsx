@@ -1097,7 +1097,7 @@ export const ChatView = memo(function ChatView({ bot: profile, inForkPanel = fal
           )}
           <ThreadContextWarning bot={bot} messages={messages} />
           {phone && <UsageAlert engine={bot.modelSelection?.instanceId} />}
-          {!isRemotePwaMode() && (!phone || remoteClient) && (!raw || remoteClient) && <ModelPicker key={bot.threadId} bot={bot} threadId={bot.threadId} />}
+          {!isRemotePwaMode() && (!phone || remoteClient) && (!raw || remoteClient) && <ModelPicker key={bot.threadId} bot={bot} threadId={bot.threadId} folded={state.settingsOpen || state.computerOpen} />}
           <LiveCallChip currentBotId={bot.id} onOpen={(botId, threadId) => openThread(dispatch, { botId, threadId }, store.state(), showThreads)} />{!phoneMenu && !isRemotePwaMode() && <WatchScreenButton botId={bot.id} messages={messages} liveTools={liveTools} place={place} />}
           <PinnedMessagesMenu
             pins={pinnedPreview(messages, bot.pinnedMessageId, bot.name)}

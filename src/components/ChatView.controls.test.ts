@@ -13,13 +13,13 @@ import { RawPresentation } from "@/lib/raw-presentation";
 const fixture = vi.hoisted(() => {
   vi.stubGlobal("window", {});
   vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {} });
-  return { showThreads: true, advanced: true, raw: false, needsInputStop: false, menus: [] as { ariaLabel: string; items: { key: string; disabled?: boolean; heading?: string; active?: boolean }[] }[], dispatch: vi.fn(), canWrite: null as boolean | null, showToolCalls: false, platform: "other", localReasonCode: "cua-driver-unavailable", localMessage: "", model: null as ComponentProps<typeof ModelPicker> | null,
+  return { showThreads: true, advanced: true, raw: false, needsInputStop: false, settingsOpen: false, computerOpen: false, menus: [] as { ariaLabel: string; items: { key: string; disabled?: boolean; heading?: string; active?: boolean }[] }[], dispatch: vi.fn(), canWrite: null as boolean | null, showToolCalls: false, platform: "other", localReasonCode: "cua-driver-unavailable", localMessage: "", model: null as ComponentProps<typeof ModelPicker> | null,
     approval: null as ComponentProps<typeof ApprovalModeSelector> | null };
 });
 vi.mock("@/state/store", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/state/store")>();
   return { ...original, useStore: () => ({
-    state: { ...original.initialState, config: fixture.showToolCalls ? { features: { showToolCalls: true } } : null,
+    state: { ...original.initialState, settingsOpen: fixture.settingsOpen, computerOpen: fixture.computerOpen, config: fixture.showToolCalls ? { features: { showToolCalls: true } } : null,
       instances: [{ instanceId: "test", driverKind: "codex", displayName: "Test" } as InstanceInfo] },
     dispatch: fixture.dispatch,
   }) };
@@ -85,7 +85,19 @@ describe("the header's right side", () => {
     try {
       const { markup, controls } = header();
       expect(controls).toContain("data-test-model-control");
-      expect(fixture.model).toMatchObject({ threadId: "selected" });
+      expect(fixture.model).toMatchObject({ threadId: "selected", folded: false });
+      try {
+        fixture.settingsOpen = true;
+        header();
+        expect(fixture.model).toMatchObject({ threadId: "selected", folded: true });
+        fixture.settingsOpen = false;
+        fixture.computerOpen = true;
+        header();
+        expect(fixture.model).toMatchObject({ threadId: "selected", folded: true });
+      } finally {
+        fixture.settingsOpen = false;
+        fixture.computerOpen = false;
+      }
       const computer = controls.match(/<button[^>]*data-tour="computer"[^>]*>/)?.[0] ?? "";
       expect(computer.split(" ")).toEqual(expect.arrayContaining(["rounded-full", "size-8"]));
       expect(markup).not.toContain('data-testid="chat-more"');
