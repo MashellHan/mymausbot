@@ -9,7 +9,7 @@ import { OwnedFile } from "./atomic.ts";
 import { augmentedPath } from "./env-path.ts";
 import { agyModelFromArgv, agySessionId, readAgySessions } from "./local-agent-agy.ts";
 import { readOpenCodeMessages } from "./local-agent-opencode-message.ts";
-import { openCodeSessionId, openCodeUsageDatabase, readOpenCodeMemberUsage } from "./local-agent-opencode-usage.ts";
+import { openCodeSessionId, openCodeUsageDatabases, readOpenCodeMemberUsage } from "./local-agent-opencode-usage.ts";
 import { codexSessionId, createLocalAgentSessionReader, dashboardText, unavailableMemberUsage } from "./local-agent-session.ts";
 import { PI_CONTEXT_KEY, parsePiContext, readPiProcessStart, type PiProcessStart } from "./local-agent-pi-context.ts";
 import { createPiSessionReader, type PiSessionView } from "./local-agent-pi-message.ts";
@@ -180,8 +180,8 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         return id ? [[String(agent.pane_id), id] as const] : [];
       }));
       const openCodeIds = [...openCodeSessions.values()];
-      const openCodeFile = openCodeUsageDatabase(home);
-      const openCodeUsage = readOpenCodeMemberUsage(openCodeFile, openCodeIds, sampledAt);
+      const openCodeFiles = openCodeUsageDatabases(home);
+      const openCodeUsage = readOpenCodeMemberUsage(openCodeFiles, openCodeIds, sampledAt);
       const [observations, roles, piSessions, agyModels] = await Promise.all([
         observationsFor(agents), localAgentRoles(verified, home), piSessionsFor(verified),
         observeAgyModels([...agySessions.keys()], run),
@@ -192,7 +192,7 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         observePiContexts(verified, piSessions, run, readProcessStart, now),
         readAgySessions(home, agyInput, sampledAt),
       ]);
-      const openCodeMessages = readOpenCodeMessages(openCodeFile, openCodeIds, "preview");
+      const openCodeMessages = readOpenCodeMessages(openCodeFiles, openCodeIds, "preview");
       const liveUsageMembers = openCodeIds.length || agySessions.size || verified.some(codexSessionId)
         ? verifiedLocalAgentMembers(herdrRows(await run(["--session", "default", "agent", "list"]), "agents")) : [];
       const liveByPane = new Map(liveUsageMembers.map((agent) => [agent.pane_id, agent] as const));

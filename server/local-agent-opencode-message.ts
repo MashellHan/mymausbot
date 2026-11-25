@@ -15,7 +15,7 @@ const MODEL = /^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,119}$/;
 const object = (value: unknown) => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 
 type View = "preview" | "recent" | "history";
-type MessageRead = ActivityHistoryRead & { preview: string | null; model: string | null; reasoningEffort: string | null };
+type MessageRead = ActivityHistoryRead & { preview: string | null; model: string | null; reasoningEffort: string | null; latestAt?: number };
 type MessageStore = { messages: StatementSync; hasSession?: StatementSync; parts?: StatementSync };
 
 function messageStores(db: DatabaseSync) {
@@ -64,7 +64,7 @@ function readMessages(store: MessageStore, sessionId: string, view: View): Messa
   const scanLimit = store.parts ? limit : MAX_ACTIVITY_HISTORY_EVENTS;
   const budget = view === "history" ? HISTORY_BYTES : RECENT_BYTES;
   const events: LocalAgentActivityEvent[] = [];
-  let bytes = 0, rows = 0, truncated = false;
+  let bytes = 0, rows = 0, truncated = false, latestAt = 0;
   let preview: string | null = null, model: string | null = null, reasoningEffort: string | null = null;
   const parse = (data: unknown): Record<string, unknown> | null => {
     if (typeof data !== "string") { truncated = true; return null; }
@@ -75,6 +75,7 @@ function readMessages(store: MessageStore, sessionId: string, view: View): Messa
   };
   for (const row of store.messages.iterate(ROW_BYTES, sessionId, scanLimit + 1)) {
     if (++rows > scanLimit) { truncated = true; break; }
+    if (typeof row.at === "number" && Number.isSafeInteger(row.at) && row.at > latestAt) latestAt = row.at;
     const data = parse(row.data);
     if (!data) { if (bytes > budget) break; continue; }
     const kind = store.parts ? data.role : row.kind;
@@ -114,13 +115,11 @@ function readMessages(store: MessageStore, sessionId: string, view: View): Messa
     events.push({ id: `e${id}`, at, kind, tool: null, text: visible.text });
   }
   if (!rows && !store.hasSession?.get(sessionId)) return null;
-  return { preview, model, reasoningEffort, events: events.reverse(), truncated };
+  return { preview, model, reasoningEffort, latestAt, events: events.reverse(), truncated };
 }
 
-export function readOpenCodeMessages(file: string | null, ids: Iterable<string>, view: View): Map<string, MessageRead> {
+function readSingleOpenCodeMessages(file: string, sessions: Set<string>, view: View): Map<string, MessageRead> {
   const result = new Map<string, MessageRead>();
-  const sessions = new Set(ids);
-  if (!file || !sessions.size) return result;
   let database: DatabaseSync | undefined;
   try {
     const before = lstatSync(file, { bigint: true });
@@ -146,4 +145,22 @@ export function readOpenCodeMessages(file: string | null, ids: Iterable<string>,
     return result;
   } catch { return new Map(); }
   finally { database?.close(); }
+}
+
+export function readOpenCodeMessages(fileOrFiles: string | readonly string[] | null, ids: Iterable<string>, view: View): Map<string, MessageRead> {
+  const result = new Map<string, MessageRead>();
+  const sessions = new Set(ids);
+  const files = typeof fileOrFiles === "string" ? [fileOrFiles] : Array.isArray(fileOrFiles) ? fileOrFiles : [];
+  if (!files.length || !sessions.size) return result;
+  for (const file of files) {
+    for (const [id, read] of readSingleOpenCodeMessages(file, sessions, view)) {
+      const prev = result.get(id);
+      const readAt = read.latestAt ?? 0;
+      const prevAt = prev?.latestAt ?? 0;
+      if (!prev || readAt > prevAt || (readAt === prevAt && read.events.length > prev.events.length)) {
+        result.set(id, read);
+      }
+    }
+  }
+  return result;
 }

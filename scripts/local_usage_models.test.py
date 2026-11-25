@@ -188,6 +188,55 @@ class OpenCodeEventsTests(unittest.TestCase):
             self.assertEqual(error, "MalformedUsage")
             self.assertEqual(len(events), 1)
 
+    def test_isolated_databases_deduplicate_skip_symlinks_and_sidecars(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            opencode_dir = home / ".local/share/opencode"
+            isolated_dir = opencode_dir / "isolated"
+            isolated_dir.mkdir(parents=True)
+            shared = sqlite3.connect(opencode_dir / "opencode.db")
+            iso = sqlite3.connect(isolated_dir / "seat-a.db")
+            self.addCleanup(shared.close)
+            self.addCleanup(iso.close)
+            schema = "CREATE TABLE session_message (id TEXT, session_id TEXT, type TEXT, time_created INTEGER, data TEXT)"
+            shared.execute(schema)
+            iso.execute(schema)
+            payload_dup = json.dumps({
+                "time": {"created": self.start_ms, "completed": self.start_ms + 5},
+                "model": {"id": "gemini-4-hydrogen"},
+                "tokens": {"input": 100, "output": 20, "reasoning": 0, "cache": {"read": 50, "write": 0}},
+            })
+            payload_new = json.dumps({
+                "time": {"created": self.start_ms + 10, "completed": self.start_ms + 15},
+                "model": {"id": "gpt-6.2-sol"},
+                "tokens": {"input": 200, "output": 30, "reasoning": 5, "cache": {"read": 100, "write": 0}},
+            })
+            shared.execute("INSERT INTO session_message VALUES (?, ?, 'assistant', ?, ?)", ("m-dup", "ses_1", self.start_ms, payload_dup))
+            iso.execute("INSERT INTO session_message VALUES (?, ?, 'assistant', ?, ?)", ("m-dup", "ses_1", self.start_ms, payload_dup))
+            iso.execute("INSERT INTO session_message VALUES (?, ?, 'assistant', ?, ?)", ("m-new", "ses_2", self.start_ms + 10, payload_new))
+            shared.commit()
+            iso.commit()
+            # Create WAL/SHM sidecars and a symlinked .db; neither should count or be followed.
+            for idx in range(70):
+                (isolated_dir / f"a-{idx:03d}.db-wal").write_bytes(b"")
+                (isolated_dir / f"a-{idx:03d}.db-shm").write_bytes(b"")
+            os.symlink(opencode_dir / "opencode.db", isolated_dir / "link.db")
+
+            events, error = models.opencode_events(home, lambda _cwd: "personal", self.start, AT, env={})
+            self.assertIsNone(error)
+            self.assertEqual(len(events), 2)
+            models_seen = {ev["model"] for ev in events}
+            self.assertEqual(models_seen, {"gemini-4-hydrogen", "gpt-6.2-sol"})
+
+            # An isolated DB with no supported schema should consistently report UnsupportedSchema.
+            empty_iso = sqlite3.connect(isolated_dir / "seat-empty.db")
+            self.addCleanup(empty_iso.close)
+            empty_iso.execute("CREATE TABLE unrelated (id TEXT)")
+            empty_iso.commit()
+            events_with_bad, error_with_bad = models.opencode_events(home, lambda _cwd: "personal", self.start, AT, env={})
+            self.assertEqual(error_with_bad, "UnsupportedSchema")
+            self.assertEqual(len(events_with_bad), 2)
+
 
 class AgyEventsTests(unittest.TestCase):
     start = dt.datetime.fromisoformat("2026-11-18T16:00:00+00:00")

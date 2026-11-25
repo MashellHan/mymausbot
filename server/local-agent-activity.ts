@@ -10,7 +10,7 @@ import { createActivityHistory, isToolActivity, MAX_ACTIVITY_EVENTS, MAX_ACTIVIT
 import { agyHomeDir, agySessionId, readAgySession } from "./local-agent-agy.ts";
 import { codexSessionId, discoverCodexSessionFiles } from "./local-agent-session.ts";
 import { readOpenCodeMessages } from "./local-agent-opencode-message.ts";
-import { openCodeSessionId, openCodeUsageDatabase } from "./local-agent-opencode-usage.ts";
+import { openCodeSessionId, openCodeUsageDatabases } from "./local-agent-opencode-usage.ts";
 import { createPiSessionReader } from "./local-agent-pi-message.ts";
 import { verifiedLocalAgentMembers } from "./local-agent-association.ts";
 import { localAgentOccupantId } from "./local-agent-occupant.ts";
@@ -160,7 +160,7 @@ export function createLocalAgentActivityProvider({ run = runHerdr, read = readSe
       else if (agent.agent === "opencode") {
         const sessionId = openCodeSessionId(agent);
         if (!sessionId) return missing;
-        observed = readOpenCodeMessages(openCodeUsageDatabase(home), [sessionId], "history").get(sessionId);
+        observed = readOpenCodeMessages(openCodeUsageDatabases(home), [sessionId], "history").get(sessionId);
       } else if (agent.agent === "agy") {
         const sessionId = agySessionId(agent);
         if (!sessionId) return missing;
@@ -203,7 +203,7 @@ export function createLocalAgentActivityProvider({ run = runHerdr, read = readSe
       clear();
       const sessionId = openCodeSessionId(agent);
       if (!sessionId || !verifiedLocalAgentMembers(agents).includes(agent)) return unavailable(agentId);
-      const observed = readOpenCodeMessages(openCodeUsageDatabase(home), [sessionId], "recent").get(sessionId);
+      const observed = readOpenCodeMessages(openCodeUsageDatabases(home), [sessionId], "recent").get(sessionId);
       const occupant = localAgentOccupantId(agent, agentId);
       const live = observed && occupant && await historyAgent(agentId, occupant).catch(() => undefined);
       if (!current() || !observed || !live || live.cwd !== agent.cwd) return unavailable(agentId);
