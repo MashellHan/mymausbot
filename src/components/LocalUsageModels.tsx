@@ -25,10 +25,11 @@ function costText(estimate?: Cost) {
   return formatUsd(bound);
 }
 
-export function CostAmount({ estimate }: { estimate?: Cost }) {
+export function CostAmount({ estimate, className }: { estimate?: Cost; className?: string }) {
   const coverage = estimate?.coverage === "partial" && estimate.usd !== null
     ? t("computer.usage.coverage.partial") : undefined;
-  return <span title={coverage} aria-description={coverage}>{costText(estimate)}</span>;
+  const priced = usableCost(estimate) !== null;
+  return <span data-usage-cost-amount className={cn(priced ? "font-medium text-warning" : "text-ink-secondary", className)} title={coverage} aria-description={coverage}>{costText(estimate)}</span>;
 }
 
 function usableCost(estimate?: Cost): number | null {
@@ -89,6 +90,8 @@ export function UsageModelPanel({ windows }: { windows: Record<ShortPeriod, Usag
             const estimatedShare = costShare === null ? null : percent.format(costShare);
             const costShareLabel = estimatedShare === null ? undefined : t(estimate?.coverage === "partial"
               ? "computer.usage.recordedCostShare" : "computer.usage.estimatedCostShare", { share: estimatedShare });
+            const cacheDenominator = row.cacheRead + row.input;
+            const cacheRate = cacheDenominator > 0 ? percent.format(row.cacheRead / cacheDenominator) : null;
             return <tr key={row.model}>
               <th scope="row" dir="auto" className={cn(tableCell, "w-[22%] min-w-40 font-medium [overflow-wrap:anywhere]")}>{row.model}</th>
               <td className={numericCell}>
@@ -100,7 +103,7 @@ export function UsageModelPanel({ windows }: { windows: Record<ShortPeriod, Usag
                   </>}
                 </div>
               </td>
-              <td className={numericCell}>{compactMetricText(row.cacheRead)}</td>
+              <td className={numericCell}>{compactMetricText(row.cacheRead)}{cacheRate === null ? null : <span data-usage-cache-rate className="text-ink-secondary"> ({cacheRate})</span>}</td>
               <td className={numericCell}>{metricText(row.input)}</td>
               <td className={numericCell}>{metricText(row.output)}</td>
               <td className={numericCell}>

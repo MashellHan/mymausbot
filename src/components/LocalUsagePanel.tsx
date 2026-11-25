@@ -99,9 +99,9 @@ function WindowCard({ window }: { window: UsageWindow }) {
             <div key={key} data-usage-category-row={key} className="grid grid-cols-[1fr_1fr_1fr] gap-2 py-0.5">
               <span className="text-ink-secondary">{t(`computer.usage.category.${key}`)}</span>
               <span className="text-right text-ink"><span className="sr-only">{t("computer.usage.metric.prs")}: </span><UsageCount value={window.categories[key].prs} known={window.categories[key].knownPrs} />
-                <UsageChange value={prs.value} known={prs.known} periodDays={window.days} startDay={window.comparison.startDay} endDay={window.comparison.endDay} metric="prs" className="block text-[13px] text-ink-secondary" /></span>
+                <UsageChange value={prs.value} known={prs.known} periodDays={window.days} startDay={window.comparison.startDay} endDay={window.comparison.endDay} metric="prs" className="block text-[13px]" /></span>
               <span className="text-right text-ink"><span className="sr-only">{t("computer.usage.metric.commits")}: </span><UsageCount value={window.categories[key].commits} known={window.categories[key].knownCommits} />
-                <UsageChange value={commits.value} known={commits.known} periodDays={window.days} startDay={window.comparison.startDay} endDay={window.comparison.endDay} metric="commits" className="block text-[13px] text-ink-secondary" /></span>
+                <UsageChange value={commits.value} known={commits.known} periodDays={window.days} startDay={window.comparison.startDay} endDay={window.comparison.endDay} metric="commits" className="block text-[13px]" /></span>
             </div>
           );
         })}
@@ -426,10 +426,10 @@ export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | nu
           <div className="mt-2 grid grid-cols-1 gap-3">
             {metrics.map((metric) => <TrendChart key={metric} days={chartDays} metric={metric} weekly={range === "6m"} range={range} tokenDays={metric === "totalTokens" ? view.trend : undefined} />)}
           </div>
-          <UsageDailyTable days={view.trend} />
         </section>
         <UsageModelPanel windows={windows} />
         <UsageRepositoryTable key={range} windows={windows} historyWindow={view.sixtyDayRepositories} defaultPeriod={range === "60" ? "60" : "1"} />
+        <UsageDailyTable days={view.trend} />
       </>}
     </div>
     </UsageSourceContext.Provider>
