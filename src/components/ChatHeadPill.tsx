@@ -56,9 +56,9 @@ export function ChatHeadPill({ bot, avatar, privacy, remoteClient = false, onTog
       aria-label={conversation ? `${label}, ${conversation}` : label}
       aria-expanded={open}
       aria-controls={open ? remoteClient ? BOT_PANEL_ID : COMPUTER_PANEL_ID : undefined}
-      className={cn("group flex min-w-0 max-w-full items-center gap-2 rounded-full py-[7.5px] pl-[7.5px] pr-[13.5px] text-ink", ELEVATED_FLOAT, ELEVATED_HOVER)}
+      className={cn("group flex min-w-0 max-w-full items-center gap-2 rounded-full py-[5.5px] pl-[5.5px] pr-[13.5px] text-ink", ELEVATED_FLOAT, ELEVATED_HOVER)}
     >
-      <BotAvatar bot={bot} size={24} {...avatar} />
+      <BotAvatar bot={bot} size={28} {...avatar} />
       <span dir="auto" className="min-w-0 truncate text-[14px] font-medium leading-5">{bot.name}</span>
       {conversation && (
         <>
