@@ -104,7 +104,7 @@ export class McpOAuthStore {
 
   // Read through on every call: another process may have changed the file.
   private read(): StoreFile {
-    if (appSessionCredentials()) return { servers: {} };
+    if (appSessionCredentials()) return { servers: {}, spentRefresh: {} };
     try {
       const parsed = fileSchema.safeParse(JSON.parse(readFileSync(this.file, "utf8")));
       if (parsed.success) return parsed.data;
