@@ -189,80 +189,122 @@ def _opencode_event(message_id, session_id, started, payload, current, classify,
     }
 
 
-def opencode_events(home, classify, start, end, *, env=None):
-    """Return sanitized machine events and a coverage error code, if any."""
-    env = os.environ if env is None else env
+def _opencode_db_files(home, env):
     selected = env.get("OPENCODE_DB")
     if selected == ":memory:":
         return [], None
     data_home = Path(env.get("XDG_DATA_HOME") or "")
     if not data_home.is_absolute():
         data_home = Path(home) / ".local/share"
-    file = data_home / "opencode" / (selected or "opencode.db")
+    primary = data_home / "opencode" / (selected or "opencode.db")
+    files = []
+    discovery_error = None
     try:
-        if not stat.S_ISREG(file.lstat().st_mode):
+        if not stat.S_ISREG(primary.lstat().st_mode):
             return [], "InvalidDatabase"
+        files.append(primary)
     except FileNotFoundError:
-        return [], "MissingDatabase" if selected else None
+        if selected:
+            return [], "MissingDatabase"
     except OSError:
         return [], "DatabaseReadError"
+    if not selected:
+        isolated_dir = primary.parent / "isolated"
+        try:
+            isolated_stat = isolated_dir.lstat()
+        except FileNotFoundError:
+            isolated_stat = None
+        except OSError:
+            isolated_stat = None
+            discovery_error = "DatabaseReadError"
+        if isolated_stat is not None and stat.S_ISDIR(isolated_stat.st_mode):
+            try:
+                regular_dbs = []
+                for entry in sorted(isolated_dir.iterdir(), key=lambda p: p.name):
+                    if entry.suffix != ".db":
+                        continue
+                    try:
+                        if stat.S_ISREG(entry.lstat().st_mode):
+                            regular_dbs.append(entry)
+                    except OSError:
+                        discovery_error = discovery_error or "DatabaseReadError"
+                if len(regular_dbs) > 64:
+                    discovery_error = discovery_error or "ReadLimit"
+                files.extend(regular_dbs[:64])
+            except OSError:
+                discovery_error = discovery_error or "DatabaseReadError"
+    return files, discovery_error
+
+
+def opencode_events(home, classify, start, end, *, env=None):
+    """Return sanitized machine events and a coverage error code, if any."""
+    env = os.environ if env is None else env
+    files, discovery_error = _opencode_db_files(home, env)
+    if not files:
+        return [], discovery_error
 
     start_ms, end_ms = start.timestamp() * 1000, end.timestamp() * 1000
     deadline = time.monotonic() + MAX_OPENCODE_READ_SECONDS
-    events, seen, error, scanned = [], set(), None, 0
+    events, seen, error, scanned = [], set(), discovery_error, 0
     payload = "CASE WHEN typeof(msg.data) = 'text' AND length(CAST(msg.data AS BLOB)) <= :max_bytes THEN msg.data END"
-    try:
-        with closing(sqlite3.connect(file.resolve().as_uri() + "?mode=ro", uri=True, timeout=1)) as db:
-            db.execute("PRAGMA query_only = ON")
-            db.execute("PRAGMA trusted_schema = OFF")
-            db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 10_000)
-            db.execute("BEGIN")
-            tables = {name for name, in db.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('session_message', 'message')"
-            )}
-            if not tables:
-                return [], "UnsupportedSchema"
-            for table in ("session_message", "message"):
-                if table not in tables:
+    for file in files:
+        if scanned >= MAX_OPENCODE_ROWS or time.monotonic() >= deadline:
+            return events, "ReadLimit"
+        try:
+            with closing(sqlite3.connect(file.resolve().as_uri() + "?mode=ro", uri=True, timeout=1)) as db:
+                db.execute("PRAGMA query_only = ON")
+                db.execute("PRAGMA trusted_schema = OFF")
+                db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 10_000)
+                db.execute("BEGIN")
+                tables = {name for name, in db.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('session_message', 'message')"
+                )}
+                if not tables:
+                    error = error or "UnsupportedSchema"
                     continue
-                current = table == "session_message"
-                if current:
-                    predicate = "AND msg.type = 'assistant'"
-                elif "session_message" in tables:
-                    predicate = ("AND NOT EXISTS (SELECT 1 FROM session_message AS migrated "
-                                 "WHERE migrated.session_id = msg.session_id AND migrated.id = msg.id)")
-                else:
-                    predicate = ""
-                try:
-                    rows = db.execute(f"""
-                        SELECT msg.id, msg.session_id, msg.time_created, CAST({payload} AS BLOB)
-                        FROM {table} AS msg
-                        WHERE msg.time_created < :end {predicate}
-                          AND (msg.time_created >= :start OR CASE WHEN json_valid({payload})
-                               THEN json_extract({payload}, '$.time.completed') >= :start END)
-                        ORDER BY msg.time_created DESC, msg.id
-                        LIMIT :limit
-                    """, {"start": start_ms, "end": end_ms, "max_bytes": MAX_OPENCODE_MESSAGE_BYTES,
-                          "limit": MAX_OPENCODE_ROWS - scanned + 1})
-                    for message_id, session_id, started, data in rows:
-                        if scanned >= MAX_OPENCODE_ROWS or time.monotonic() >= deadline:
+                for table in ("session_message", "message"):
+                    if table not in tables:
+                        continue
+                    current = table == "session_message"
+                    if current:
+                        predicate = "AND msg.type = 'assistant'"
+                    elif "session_message" in tables:
+                        predicate = ("AND NOT EXISTS (SELECT 1 FROM session_message AS migrated "
+                                     "WHERE migrated.session_id = msg.session_id AND migrated.id = msg.id)")
+                    else:
+                        predicate = ""
+                    try:
+                        rows = db.execute(f"""
+                            SELECT msg.id, msg.session_id, msg.time_created, CAST({payload} AS BLOB)
+                            FROM {table} AS msg
+                            WHERE msg.time_created < :end {predicate}
+                              AND (msg.time_created >= :start OR CASE WHEN json_valid({payload})
+                                   THEN json_extract({payload}, '$.time.completed') >= :start END)
+                            ORDER BY msg.time_created DESC, msg.id
+                            LIMIT :limit
+                        """, {"start": start_ms, "end": end_ms, "max_bytes": MAX_OPENCODE_MESSAGE_BYTES,
+                              "limit": MAX_OPENCODE_ROWS - scanned + 1})
+                        for message_id, session_id, started, data in rows:
+                            if scanned >= MAX_OPENCODE_ROWS or time.monotonic() >= deadline:
+                                return events, "ReadLimit"
+                            scanned += 1
+                            try:
+                                event = _opencode_event(message_id, session_id, started, json.loads(data),
+                                                        current, classify, start_ms, end_ms)
+                            except (TypeError, ValueError, RecursionError):
+                                error = error or "MalformedUsage"
+                                continue
+                            if event and event["key"] not in seen:
+                                seen.add(event["key"])
+                                events.append(event)
+                    except sqlite3.Error:
+                        if time.monotonic() >= deadline:
                             return events, "ReadLimit"
-                        scanned += 1
-                        try:
-                            event = _opencode_event(message_id, session_id, started, json.loads(data),
-                                                    current, classify, start_ms, end_ms)
-                        except (TypeError, ValueError, RecursionError):
-                            error = error or "MalformedUsage"
-                            continue
-                        if event and event["key"] not in seen:
-                            seen.add(event["key"])
-                            events.append(event)
-                except sqlite3.Error:
-                    if time.monotonic() >= deadline:
-                        return events, "ReadLimit"
-                    error = "DatabaseReadError"
-    except (OSError, sqlite3.Error, ValueError):
-        return events, "DatabaseReadError"
+                        error = "DatabaseReadError"
+        except (OSError, sqlite3.Error, ValueError):
+            if time.monotonic() >= deadline:
+                return events, "ReadLimit"
+            error = "DatabaseReadError"
     return events, error
 
 
