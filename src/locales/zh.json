@@ -7321,6 +7321,8 @@
   "room.bulletin.none": "没有群组说明",
   "room.bulletin.placeholder": "群组说明——这个群组里的每个机器人都会遵守（谁做什么、语气、目标、任务列表…）",
   "room.bulletin.title": "群组公告——这里所有机器人的共享说明",
+  "room.computer.target": "目标电脑",
+  "room.computer.targetSelectAria": "选择要查看电脑的机器人",
   "room.fallbackBot": "机器人",
   "room.folder.chipTitle": "群组的工作文件夹",
   "room.folder.choose": "选择…",

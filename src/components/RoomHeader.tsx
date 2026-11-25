@@ -7,7 +7,7 @@ import { roomContextWarnings } from "@/lib/context-warning";
 import { effectiveDefaultResponder, jevRoomRoutingOn } from "@/lib/group-routing";
 import { t } from "@/lib/i18n";
 import { normalizeState } from "@/lib/mascot";
-import { effectivePlace, placeLabelKey } from "@/lib/place";
+import { effectivePlace, isComputerPlace, placeLabelKey } from "@/lib/place";
 import { isRemoteClientSession } from "@/lib/pwa-transport";
 import { closeRoomPanel, openRoomPanel } from "@/lib/room-panel";
 import { chosenResponder, responderChoice, responderTitle } from "@/lib/room-responder";
@@ -167,6 +167,11 @@ export function RoomHeader({
   const membersLabel = members.length === 1
     ? t("room.members.ariaOne")
     : t("room.members.ariaMany", { count: members.length });
+  const busyBot = group.busyBotId ? members.find((member) => member.id === group.busyBotId) : undefined;
+  const busyTask = busyBot?.tasks?.find((candidate) => candidate.threadId === group.threadId);
+  const busyEffective = busyBot ? effectivePlace(busyBot, busyTask) : "off";
+  const computerLive = Boolean(busyBot && (isComputerPlace(busyEffective) || busyEffective === "browser"));
+  const computerLabel = t("botPanel.tab.computer");
   const computerButton = !remote && (
     <button
       type="button"
@@ -180,14 +185,15 @@ export function RoomHeader({
       }}
       style={headerNoDragStyle}
       className={cn(
-        "flex size-8 shrink-0 items-center justify-center rounded-full", ELEVATED_FLOAT, ELEVATED_HOVER,
+        "relative flex size-8 shrink-0 items-center justify-center rounded-full", ELEVATED_FLOAT, ELEVATED_HOVER,
         state.computerOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
       )}
-      title={t("botPanel.tab.computer")}
-      aria-label={t("botPanel.tab.computer")}
+      title={computerLabel}
+      aria-label={computerLive ? `${computerLabel}, ${t("place.live")}` : computerLabel}
       aria-pressed={state.computerOpen}
     >
       <Monitor size={16} aria-hidden="true" />
+      {computerLive && <span aria-hidden="true" className="absolute right-1 top-1 size-1.5 animate-pulse rounded-full bg-success" data-testid="computer-button-live" />}
     </button>
   );
   if (simple) {

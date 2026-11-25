@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { appendFile, chmod, mkdtemp, mkdir, rename, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -874,5 +875,65 @@ describe("local Agent Team provider", () => {
       expect(member.tokenUsage7d).toEqual({ coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null } });
     }
     expect(team.tokenUsage24h).toEqual({ coverage: "partial", knownTokens: 130 });
+  });
+
+  it("retains same-origin workspace session history across legacy v1 upgrade and transient misses while still gating moves", async () => {
+    const home = await mkdtemp(join(tmpdir(), "mausbot-same-origin-"));
+    folders.push(home);
+    const repo = join(home, "repo");
+    const directory = join(home, "sessions", "2026", "11", "01");
+    await mkdir(repo, { recursive: true });
+    await mkdir(directory, { recursive: true });
+    const file = join(directory, `rollout-2026-11-01-${SESSION}.jsonl`);
+    await writeFile(file, [
+      JSON.stringify({ type: "session_meta", timestamp: "2026-11-01T10:00:00Z", payload: { id: SESSION, timestamp: "2026-11-01T10:00:00Z", cwd: repo } }),
+      JSON.stringify({ type: "turn_context", timestamp: "2026-11-08T09:00:00Z", payload: { model: "gpt-6.2-astra" } }),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-11-08T09:05:00Z", payload: {
+        type: "token_count", info: {
+          total_token_usage: { total_tokens: 130 },
+          last_token_usage: { input_tokens: 120, cached_input_tokens: 100, output_tokens: 10, total_tokens: 130 },
+        },
+      } }),
+    ].join("\n") + "\n");
+    let time = Date.UTC(2026, 10, 9, 10);
+    const bindingFile = join(home, "bindings.json");
+    const legacyRaw = JSON.stringify(["w6:p1", "codex", "o000", SESSION, repo, "term_a"]);
+    const legacyHash = createHash("sha256").update(legacyRaw).digest("hex");
+    await writeFile(bindingFile, JSON.stringify([[legacyHash, Date.UTC(2026, 10, 9, 9)]]), { mode: 0o600 });
+
+    let present = true;
+    let pane = "w6:p1";
+    const provider = createLocalAgentTeamsProvider({
+      codexHome: home,
+      bindingCachePath: bindingFile,
+      now: () => time,
+      run: async (args) => args.at(-2) === "workspace" ? workspaces : JSON.stringify({
+        result: {
+          agents: present ? [{
+            pane_id: pane, workspace_id: "w6", name: "origin-seat", agent: "codex", agent_status: "done",
+            cwd: repo, terminal_id: "term_a",
+            agent_session: { kind: "id", agent: "codex", source: "herdr:codex", value: SESSION },
+          }] : [],
+        },
+      }),
+    });
+
+    const first = (await provider.get()).teams[0]!.agents[0]!;
+    expect(first.tokenUsage7d).toMatchObject({ coverage: "ready", knownTokens: 130 });
+
+    present = false;
+    time += 2_000;
+    expect((await provider.get()).teams[0]!.agents).toHaveLength(0);
+    present = true;
+    time += 2_000;
+    const afterMiss = (await provider.get()).teams[0]!.agents[0]!;
+    expect(afterMiss.tokenUsage7d).toMatchObject({ coverage: "ready", knownTokens: 130 });
+
+    pane = "w6:p2";
+    time += 2_000;
+    const afterMove = (await provider.get()).teams[0]!.agents[0]!;
+    expect(afterMove.tokenUsage7d).toEqual({
+      coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null },
+    });
   });
 });
