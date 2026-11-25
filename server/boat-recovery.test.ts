@@ -25,6 +25,7 @@ let deleteCompletes = true;
 let resumeAnswers = new Set<string>();
 let deleteDelayMs = 0;
 let autoOn = true;
+let stalledLoop = false;
 const teamOwners = new Set<string>();
 const watched = new Set<string>();
 const deleteSpans: Array<{ boxId: string; start: number; end: number }> = [];
@@ -144,7 +145,7 @@ function start() {
   told = [];
   health = healthModule.createBoatHealth(now);
   recovery = recoveryModule.createBoatRecovery({ cfg: () => cfg, tell: (owner, line) => told.push([owner, line]), log: () => {}, file, now, health, pollMs: 5, recheckMs: 20,
-    autoReplace: () => autoOn, eligible: (owner) => !teamOwners.has(owner), personActive: (owner) => watched.has(owner),
+    stalled: () => stalledLoop, autoReplace: () => autoOn, eligible: (owner) => !teamOwners.has(owner), personActive: (owner) => watched.has(owner),
     // One probe stands for the wait, so a restart that does not help is judged at once.
     readiness: { awaitAnswer: async (_cfg, boxId) => ((await boat.probeBoat(cfg, boxId)) === true ? { ok: true, waitedMs: 0 } : { ok: false, phase: "waking", waitedMs: 0 }) } });
 }
@@ -152,7 +153,7 @@ function start() {
 beforeEach(async () => {
   boxes = []; requests = []; commandStatus = new Map(); boxReadStatus = new Map(); listStatus = 200; deleteCompletes = true; resumeAnswers = new Set();
   pendingDeletes.clear();
-  deleteDelayMs = 0; autoOn = true; deleteSpans.length = 0; teamOwners.clear(); watched.clear();
+  deleteDelayMs = 0; autoOn = true; stalledLoop = false; deleteSpans.length = 0; teamOwners.clear(); watched.clear();
   at += 24 * 60 * 60_000;
   file = join(mkdtempSync(join(tmpdir(), "omb-repl-")), "boat-replacements.json");
   await load();
@@ -348,6 +349,29 @@ describe("a cloud computer that says it is ready but does not answer", () => {
     expect(boxes.some((candidate) => candidate.id === witness.box.id)).toBe(true);
   });
 
+  it("does not restart from a fresh probe that ran far past its timeout here", async () => {
+    const { botId, box } = await botWith("ready");
+    const witness = await botWith("ready");
+    commandStatus.set(box.id, 502);
+    await boat.findBoat(cfg, botId);
+    const realProbe = boat.probeBoat;
+    const probe = vi.spyOn(boat, "probeBoat").mockImplementation(async (...args) => {
+      const answer = await realProbe(...args);
+      at += healthModule.DEAD_COMPUTER.probeTimeoutMs * 2 + 5_001;
+      return answer;
+    });
+    try {
+      stopsAnswering(box.id);
+      health.answered(witness.box.id);
+      await until(() => requests.some((request) => request.path === `/boxes/${box.id}/commands`));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(stops()).toHaveLength(0);
+      expect(deletes()).toHaveLength(0);
+    } finally {
+      probe.mockRestore();
+    }
+  });
+
   it("is kept when the restart brings it back, and the bot hears that once", async () => {
     const { botId, box } = await botWith("ready");
     const witness = await botWith("ready");
@@ -374,6 +398,25 @@ describe("a cloud computer that says it is ready but does not answer", () => {
     await until(() => recovery.status(botId) === null && requests.some((request) => request.path === `/boxes/${box.id}/commands`));
     expect(stops()).toHaveLength(0);
     expect(deletes()).toHaveLength(0);
+  });
+
+  it("does not restart or replace while this process reports an event-loop stall", async () => {
+    const { botId, box } = await botWith("ready");
+    const witness = await botWith("ready");
+    commandStatus.set(box.id, 502);
+    resumeAnswers.add(box.id);
+    await boat.findBoat(cfg, botId);
+    stopsAnswering(box.id);
+    health.answered(witness.box.id);
+    stalledLoop = true;
+    await until(() => requests.some((request) => request.path === `/boxes/${box.id}/commands`));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(stops()).toHaveLength(0);
+    expect(deletes()).toHaveLength(0);
+    expect(recovery.status(botId)?.state).toBe("not-responding");
+    stalledLoop = false;
+    await until(() => recovery.status(botId)?.state === "restarted");
+    expect(stops()).toHaveLength(1);
   });
 
   it("is restarted, which keeps its files, but never deleted when no other computer answers: it then waits for the person", async () => {
