@@ -2898,6 +2898,7 @@
   "server.runs.handoffApart": "{bot} konnte das nicht an {target} übergeben, weil sie mit unterschiedlichen Personen geteilt sind. Es wurde nichts gesendet.",
   "server.runs.handoffNotListed": "{bot} konnte das nicht an {target} übergeben, weil dieser Bot nicht mit ihm sprechen darf. Es wurde nichts gesendet.",
   "server.runs.handoffRefusedTitle": "Die Routine von {bot} konnte ihre Arbeit nicht übergeben",
+  "server.runs.lentComputerUnconfirmed": "„{name}“ kann deinen {device} nicht benutzen, weil die Routine nicht als deine bestätigt ist: Sie wurde zuletzt außerhalb deiner eigenen Chats geändert oder erstellt. Öffne sie und speichere sie, damit sie wieder deine ist.",
   "server.runs.partlyDoneWhy": "Diese Ausführung wurde teilweise erledigt: {detail}",
   "server.runs.recovered": "Wieder in Ordnung: {name} wurde um {time} erfolgreich beendet",
   "server.runs.state.blocked": "wurde blockiert",
