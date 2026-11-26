@@ -2,6 +2,8 @@ import type { ModelCatalog } from "./contracts.ts";
 import { modelContextWindow } from "./model-context-window.ts";
 
 export const DEFAULT_CONTEXT_WINDOW = 128_000;
+/** Default ceiling for automatic harness compaction on huge-window (e.g. 1M) models unless `context.compactAt` overrides it. */
+export const DEFAULT_AUTO_COMPACT_CAP = 200_000;
 const positive = (n: number | null | undefined): n is number => typeof n === "number" && Number.isFinite(n) && n > 0;
 
 export function contextWindowFor(model: string | undefined, catalog?: ModelCatalog, reported?: number): number {
@@ -20,7 +22,9 @@ export function compactionReading<T>(capabilities: { contextReading?: "meter" } 
 /** Leave headroom even for a small local model: an 8k floor would make compaction unreachable on an 8k window. */
 export function compactBudget(window: number, compactAt?: number, nativeCompactAt?: number): number {
   if (!positive(window)) throw new Error("invalid model context window");
-  const configured = positive(compactAt) ? (compactAt < 1 ? window * compactAt : compactAt) : window * 0.8;
+  const configured = positive(compactAt)
+    ? (compactAt < 1 ? window * compactAt : compactAt)
+    : Math.min(window * 0.8, DEFAULT_AUTO_COMPACT_CAP);
   return Math.max(1, Math.floor(Math.min(configured, window * 0.9, positive(nativeCompactAt) ? nativeCompactAt * 0.9 : Infinity)));
 }
 

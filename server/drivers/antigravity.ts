@@ -135,6 +135,7 @@ const support: AcpSupport = {
   sessionScopedApproval: true,
   resumeMethod: "resume",
   clientFileSystem: true,
+  trustedContextReading: true,
   clientReadRoots: (turn) => (turn.skillFiles ?? []).map(dirname),
   sanitizeToolPayload: true,
 

@@ -15,6 +15,7 @@ import { promptSplitFingerprints, writePromptSplitReceipt } from "../prompt-spli
 import { classifyRoutineFailure } from "../../routine-recovery.ts";
 import { classifyError } from "../retry.ts";
 import { createAcpDriver, skipSubscriptionAuthForLocalInject, type AcpSupport } from "./core.ts";
+import { acpCapabilities } from "./capabilities.ts";
 import { AcpReportedFailure, acpRuntimeFailure } from "./failure-words.ts";
 import { DEFAULT_ACP_PROMPT_IDLE_MS } from "./quiet-status.ts";
 import { GrokAgentDriver, grokAcceptsUnadvertisedImages, grokReportedFailure } from "./grok.ts";
@@ -3667,5 +3668,10 @@ describe("ACP snapshot", () => {
     } finally {
       await instance.dispose();
     }
+  });
+
+  it("omits contextReading only when trustedContextReading is enabled", () => {
+    expect(acpCapabilities(SELECT_MODEL_SUPPORT).contextReading).toBe("meter");
+    expect(acpCapabilities({ ...SELECT_MODEL_SUPPORT, trustedContextReading: true })).not.toHaveProperty("contextReading");
   });
 });

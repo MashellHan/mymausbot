@@ -181,6 +181,9 @@ export interface AcpSupport extends AcpDriverHooks {
   resumeMethod?: "load" | "resume";
   /** Some agents acknowledge a live load without applying new MCP credentials. */
   restartOnMcpChange?: boolean; /** The turn's MCP servers come from launcher-owned configuration, not ACP session parameters. */ mcpServersFromLaunch?: boolean;
+  /** True when the ACP agent's `usage_update` context reading is accurate enough to time auto-compaction
+   *  (e.g. Antigravity's live token meter) rather than being display-only. */
+  trustedContextReading?: boolean;
   /** How the agent takes a person's message into its running turn; without it a message sent mid-turn waits for the next. */
   steer?: AcpSteerSupport;
   /** hermes-agent 0.22.4 re-sends a streamed reply whole under its messageId, as its `💭` reasoning block, a blank line,
