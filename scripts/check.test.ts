@@ -186,6 +186,7 @@ describe("shared local and CI check policy", () => {
 
   it("refuses a passing local receipt when source changes during the command", () => {
     const directory = mkdtempSync(join(tmpdir(), "mausbot-check-receipt-")); temporary.push(directory);
+    const lockDir = mkdtempSync(join(tmpdir(), "mausbot-check-locks-")); temporary.push(lockDir);
     const git = (...args: string[]) => execFileSync("git", args, { cwd: directory, encoding: "utf8" }).trim();
     git("init", "-q"); git("config", "user.name", "Fixture"); git("config", "user.email", "fixture@example.invalid"); git("config", "commit.gpgsign", "false");
     for (const dir of ["server", "scripts/testing", "node_modules/vitest"]) mkdirSync(join(directory, dir), { recursive: true });
@@ -200,7 +201,7 @@ describe("shared local and CI check policy", () => {
       if (process.env.FIXTURE_CHANGE === "1") writeFileSync("server/core.test.ts", "changed");`);
     git("add", "."); git("commit", "-qm", "fixture");
     const script = fileURLToPath(new URL("./check.mjs", import.meta.url));
-    const run = (action: string, change: string) => spawnSync(process.execPath, [script, action, "--base", "HEAD", "--test", "server/core.test.ts"], { cwd: directory, encoding: "utf8", env: { ...process.env, FIXTURE_CHANGE: change } });
+    const run = (action: string, change: string) => spawnSync(process.execPath, [script, action, "--base", "HEAD", "--test", "server/core.test.ts"], { cwd: directory, encoding: "utf8", env: { ...process.env, FIXTURE_CHANGE: change, OMB_LOCAL_LOCK_DIR: lockDir } });
     const stable = run("edit", "0");
     expect(stable.status, stable.stderr).toBe(0);
     expect(stable.stdout).toContain("fixture-workers:1");

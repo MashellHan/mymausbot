@@ -17,8 +17,14 @@ before proceeding. A missing file in that checkout is not a missing policy.
   packaging; GitHub CI runs `typecheck + lint` and full checks in the cloud, and
   one dedicated build owner (`mausbot-front`, coordinated by Lead) batches merged
   `origin/main` PRs into a single serialized desktop build (never per-PR). During
-  iteration, run only the 1–3 affected test files and never poll `manage_task()`
-  in a loop. Retain the normal push hook.
+  iteration, run only the 1–2 lightweight pure unit test files for your direct
+  change; leave heavy `*.e2e.test.ts` suites that boot real `server/index.ts`
+  and `server/index.test.ts` to GitHub CI unless debugging a specific E2E
+  failure. Local test runners share cross-worktree concurrency slot locks
+  (`scripts/local-concurrency.mjs`, max 2 host slots, dropping to 1 while a
+  desktop build lock is active), and Lead pauses heavy test dispatches during
+  batched packaging so App builds finish in 2–3 minutes. Never poll
+  `manage_task()` in a loop. Retain the normal push hook.
 - Keep PR handoffs lean: put Acceptance, Scope and Checks as 3–5 bullets inside
   the PR description instead of standalone multi-page briefs, and open small
   ready PRs early. Update when scope changes; do not add an approval stage.

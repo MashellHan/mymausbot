@@ -46,6 +46,13 @@ it does not launch a full platform matrix on a developer's laptop.
 Targets are 5–30 seconds for ordinary edit feedback and 1–2 minutes for ordinary
 local completion. Record a costly required step rather than dropping it to meet
 the target. A cold browser or dependency setup is part of the measured cost.
+During local development iteration, run only the 1–2 lightweight pure unit test
+files for the direct change; defer heavy `*.e2e.test.ts` suites that boot real
+`server/index.ts` and `server/index.test.ts` to GitHub CI unless debugging an
+E2E failure. Cross-worktree local test runners acquire bounded host slots via
+`scripts/local-concurrency.mjs` (default 2 slots, yielding to 1 slot whenever a
+desktop build lock or active build process is present), and Lead suspends heavy
+test dispatches during batched desktop builds so packaging completes cleanly.
 
 Read this policy from the actual task checkout. Preserve an older dirty
 coordination root and inspect `git show origin/main:docs/MAUSBOT-VALIDATION.md`
