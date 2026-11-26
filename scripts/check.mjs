@@ -5,6 +5,7 @@ import { availableParallelism, loadavg, totalmem } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { changedCodeLines, readCheckPolicy, SAFE_TEST_PATH, selectCheckPlan } from "./ci-scope.mjs";
+import { acquireLocalTestSlot } from "./local-concurrency.mjs";
 
 const git = (args, cwd) => execFileSync("git", args, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 const digest = (value) => createHash("sha256").update(value).digest("hex");
@@ -56,58 +57,64 @@ function main() {
   const nativePwaRelay = plan.nativePwaRelay || extra.some((file) => file.startsWith("pwa-relay/test/"));
   const files = [...new Set([...plan[action], ...extra.filter((file) => !file.startsWith("relay/test/") && !file.startsWith("pwa-relay/test/"))])].sort();
   if (!files.length && !nativeRelay && !nativePwaRelay) throw new Error("No mapped contract test: supply --test <file>, then record the mapping for review");
-  const startedAt = new Date().toISOString();
-  const directory = join(".omb-scratch", "validation", `${startedAt.replace(/[:.]/g, "-")}-${action}`);
-  mkdirSync(directory, { recursive: true });
-  const resultFile = join(directory, "vitest.json");
-  const command = ["node_modules/vitest/vitest.mjs", "run", ...files, "--reporter=default", "--reporter=json", `--outputFile.json=${resultFile}`];
-  const env = { OMB_VITEST_WORKERS: String(localVitestWorkers(action)), OMB_VITEST_E2E: "all", OMB_DASHBOARD_UI: files.includes("scripts/testing/local-dashboard-ui.e2e.test.ts") ? "1" : "0" };
-  const result = files.length ? spawnSync(process.execPath, command, { stdio: "inherit", env: { ...process.env, ...env } }) : null;
-  const nativeCommand = nativeRelay ? ["pnpm", "--dir", "relay", "test"] : null;
-  const nativeResult = nativeCommand ? spawnSync(nativeCommand[0], nativeCommand.slice(1), { encoding: "utf8", env: process.env }) : null;
-  const nativeOutput = `${nativeResult?.stdout ?? ""}${nativeResult?.stderr ?? ""}`;
-  if (nativeResult) {
-    process.stdout.write(nativeOutput);
-    writeFileSync(join(directory, "relay.tap"), nativeOutput);
+  const slot = acquireLocalTestSlot({ label: `check:${action}`, detectBuildProcess: process.env.OMB_LOCAL_LOCK_DIR ? () => false : undefined });
+  try {
+    const startedAt = new Date().toISOString();
+    const directory = join(".omb-scratch", "validation", `${startedAt.replace(/[:.]/g, "-")}-${action}`);
+    mkdirSync(directory, { recursive: true });
+    const resultFile = join(directory, "vitest.json");
+    const command = ["node_modules/vitest/vitest.mjs", "run", ...files, "--reporter=default", "--reporter=json", `--outputFile.json=${resultFile}`];
+    const workers = slot.buildActive ? 1 : localVitestWorkers(action);
+    const env = { OMB_VITEST_WORKERS: String(workers), OMB_VITEST_E2E: "all", OMB_DASHBOARD_UI: files.includes("scripts/testing/local-dashboard-ui.e2e.test.ts") ? "1" : "0" };
+    const result = files.length ? spawnSync(process.execPath, command, { stdio: "inherit", env: { ...process.env, ...env } }) : null;
+    const nativeCommand = nativeRelay ? ["pnpm", "--dir", "relay", "test"] : null;
+    const nativeResult = nativeCommand ? spawnSync(nativeCommand[0], nativeCommand.slice(1), { encoding: "utf8", env: process.env }) : null;
+    const nativeOutput = `${nativeResult?.stdout ?? ""}${nativeResult?.stderr ?? ""}`;
+    if (nativeResult) {
+      process.stdout.write(nativeOutput);
+      writeFileSync(join(directory, "relay.tap"), nativeOutput);
+    }
+    const nativePwaCommand = nativePwaRelay ? ["pnpm", "--dir", "pwa-relay", "test"] : null;
+    const nativePwaResult = nativePwaCommand ? spawnSync(nativePwaCommand[0], nativePwaCommand.slice(1), { encoding: "utf8", env: process.env }) : null;
+    const nativePwaOutput = `${nativePwaResult?.stdout ?? ""}${nativePwaResult?.stderr ?? ""}`;
+    if (nativePwaResult) {
+      process.stdout.write(nativePwaOutput);
+      writeFileSync(join(directory, "pwa-relay.tap"), nativePwaOutput);
+    }
+    const durationMs = Date.now() - Date.parse(startedAt);
+    const budgetMs = action === "edit" ? 30_000 : 120_000;
+    const endSource = localChange(base);
+    const inputsStable = ["head", "base", "sourceHash", "lockHash"].every((key) => source[key] === endSource[key]);
+    let counts = null;
+    if (existsSync(resultFile)) {
+      const report = JSON.parse(readFileSync(resultFile, "utf8"));
+      counts = Object.fromEntries(["numTotalTests", "numPassedTests", "numFailedTests", "numPendingTests"].map((key) => [key, report[key]]));
+    }
+    const nativeSummary = [...nativeOutput.matchAll(/^ℹ (tests|pass|fail|cancelled|skipped|todo) (\d+)$/gm)];
+    const nativeCounts = nativeSummary.length ? Object.fromEntries(nativeSummary.map((match) => [match[1], Number(match[2])])) : null;
+    const nativePwaSummary = [...nativePwaOutput.matchAll(/^ℹ (tests|pass|fail|cancelled|skipped|todo) (\d+)$/gm)];
+    const nativePwaCounts = nativePwaSummary.length ? Object.fromEntries(nativePwaSummary.map((match) => [match[1], Number(match[2])])) : null;
+    const exitCode = [result, nativeResult, nativePwaResult].every((item) => !item || item.status === 0) ? 0 : 1;
+    const receipt = {
+      version: 1, action, source, endSource, inputsStable, plan, command: result ? [process.execPath, ...command] : null,
+      nativeCommand, nativeCounts, nativeResultFile: nativeResult ? join(directory, "relay.tap") : null,
+      nativePwaCommand, nativePwaCounts, nativePwaResultFile: nativePwaResult ? join(directory, "pwa-relay.tap") : null,
+      env: { ...env, CI: process.env.CI ?? "", TZ: Intl.DateTimeFormat().resolvedOptions().timeZone, LANG: process.env.LANG ?? "" },
+      node: process.version, platform: process.platform, arch: process.arch,
+      startedAt, finishedAt: new Date().toISOString(), durationMs, budgetMs, overBudget: durationMs > budgetMs,
+      exitCode, signal: result?.signal ?? nativeResult?.signal ?? nativePwaResult?.signal,
+      error: result?.error?.message ?? nativeResult?.error?.message ?? nativePwaResult?.error?.message, counts, resultFile,
+    };
+    writeFileSync(join(directory, "receipt.json"), JSON.stringify(receipt, null, 2) + "\n");
+    console.log(`Validation receipt: ${directory}/receipt.json`);
+    console.log(`Local ${action}: ${(durationMs / 1000).toFixed(1)}s; target ${budgetMs / 1000}s. Global typecheck belongs in CI; pnpm build includes its own typecheck.`);
+    if (durationMs > budgetMs) console.error("Local feedback exceeded its target; record and fix the expensive phase instead of repeating unchanged checks.");
+    console.log(`Local validation: ${files.length} Vitest files${nativeRelay ? " and the Relay native suite" : ""}${nativePwaRelay ? " and the PWA Relay native suite" : ""}; ordinary PR and focused integration CI run the Ubuntu core and bounded affected tests; scheduled, manual and release lanes retain full validation. Normal push hooks and independent review still apply.`);
+    if (!inputsStable) console.error("Source inputs changed during validation; this receipt cannot mark the current source ready.");
+    process.exitCode = inputsStable ? exitCode : 1;
+  } finally {
+    slot.release();
   }
-  const nativePwaCommand = nativePwaRelay ? ["pnpm", "--dir", "pwa-relay", "test"] : null;
-  const nativePwaResult = nativePwaCommand ? spawnSync(nativePwaCommand[0], nativePwaCommand.slice(1), { encoding: "utf8", env: process.env }) : null;
-  const nativePwaOutput = `${nativePwaResult?.stdout ?? ""}${nativePwaResult?.stderr ?? ""}`;
-  if (nativePwaResult) {
-    process.stdout.write(nativePwaOutput);
-    writeFileSync(join(directory, "pwa-relay.tap"), nativePwaOutput);
-  }
-  const durationMs = Date.now() - Date.parse(startedAt);
-  const budgetMs = action === "edit" ? 30_000 : 120_000;
-  const endSource = localChange(base);
-  const inputsStable = ["head", "base", "sourceHash", "lockHash"].every((key) => source[key] === endSource[key]);
-  let counts = null;
-  if (existsSync(resultFile)) {
-    const report = JSON.parse(readFileSync(resultFile, "utf8"));
-    counts = Object.fromEntries(["numTotalTests", "numPassedTests", "numFailedTests", "numPendingTests"].map((key) => [key, report[key]]));
-  }
-  const nativeSummary = [...nativeOutput.matchAll(/^ℹ (tests|pass|fail|cancelled|skipped|todo) (\d+)$/gm)];
-  const nativeCounts = nativeSummary.length ? Object.fromEntries(nativeSummary.map((match) => [match[1], Number(match[2])])) : null;
-  const nativePwaSummary = [...nativePwaOutput.matchAll(/^ℹ (tests|pass|fail|cancelled|skipped|todo) (\d+)$/gm)];
-  const nativePwaCounts = nativePwaSummary.length ? Object.fromEntries(nativePwaSummary.map((match) => [match[1], Number(match[2])])) : null;
-  const exitCode = [result, nativeResult, nativePwaResult].every((item) => !item || item.status === 0) ? 0 : 1;
-  const receipt = {
-    version: 1, action, source, endSource, inputsStable, plan, command: result ? [process.execPath, ...command] : null,
-    nativeCommand, nativeCounts, nativeResultFile: nativeResult ? join(directory, "relay.tap") : null,
-    nativePwaCommand, nativePwaCounts, nativePwaResultFile: nativePwaResult ? join(directory, "pwa-relay.tap") : null,
-    env: { ...env, CI: process.env.CI ?? "", TZ: Intl.DateTimeFormat().resolvedOptions().timeZone, LANG: process.env.LANG ?? "" },
-    node: process.version, platform: process.platform, arch: process.arch,
-    startedAt, finishedAt: new Date().toISOString(), durationMs, budgetMs, overBudget: durationMs > budgetMs,
-    exitCode, signal: result?.signal ?? nativeResult?.signal ?? nativePwaResult?.signal,
-    error: result?.error?.message ?? nativeResult?.error?.message ?? nativePwaResult?.error?.message, counts, resultFile,
-  };
-  writeFileSync(join(directory, "receipt.json"), JSON.stringify(receipt, null, 2) + "\n");
-  console.log(`Validation receipt: ${directory}/receipt.json`);
-  console.log(`Local ${action}: ${(durationMs / 1000).toFixed(1)}s; target ${budgetMs / 1000}s. Global typecheck belongs in CI; pnpm build includes its own typecheck.`);
-  if (durationMs > budgetMs) console.error("Local feedback exceeded its target; record and fix the expensive phase instead of repeating unchanged checks.");
-  console.log(`Local validation: ${files.length} Vitest files${nativeRelay ? " and the Relay native suite" : ""}${nativePwaRelay ? " and the PWA Relay native suite" : ""}; ordinary PR and focused integration CI run the Ubuntu core and bounded affected tests; scheduled, manual and release lanes retain full validation. Normal push hooks and independent review still apply.`);
-  if (!inputsStable) console.error("Source inputs changed during validation; this receipt cannot mark the current source ready.");
-  process.exitCode = inputsStable ? exitCode : 1;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
