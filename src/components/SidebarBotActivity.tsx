@@ -8,6 +8,7 @@ import { isArchived, orderedSidebarThreads, orderedThreadList, threadRecency, th
 import type { SidebarDensity } from "@/lib/sidebar-preferences";
 import { localizedTaskTitle } from "@/lib/task-title";
 import { endedOnFailure } from "@/lib/mascot";
+import { handoffStatusText } from "./HandoffStatusChip";
 
 export function sidebarBotActivityTasks(bot: Bot, queued: Record<string, unknown[]>, archivedApprovals = false): Array<Task & { queued: boolean }> {
   const tasks = bot.tasks ?? [{
@@ -111,7 +112,8 @@ export function attentionRowStatus(task: AttentionThread["task"]): { active: boo
   const teammateWait = !waiting && task.waitingForTeammates === true;
   const working = !waiting && !teammateWait && (task.busy || task.activity === "working");
   const active = waiting || teammateWait || working || task.queued || task.unread === true;
-  const label = waiting ? t("task.waiting") : working ? t("chat.activity.working") : teammateWait ? t("task.waitingOnTeammate") : task.queued ? t("task.queued") : t("task.unread");
+  const handoff = task.handoff && (waiting ? task.handoff.state === "waiting" : true) ? handoffStatusText(task.handoff) : undefined;
+  const label = handoff ?? (waiting ? t("task.waiting") : working ? t("chat.activity.working") : teammateWait ? t("task.waitingOnTeammate") : task.queued ? t("task.queued") : t("task.unread"));
   const Icon = waiting ? CircleAlert : working ? Loader2 : teammateWait || task.queued ? Clock3 : BellDot;
   const colorClass = cn(working && "animate-spin text-success", (waiting || teammateWait) && "text-warning");
   return { active, Icon, colorClass, label };
