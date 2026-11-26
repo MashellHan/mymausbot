@@ -16,8 +16,9 @@ runtimeArgs: ["-m", "gpt-6.2-astra", "-c", "model_reasoning_effort=\"xhigh\""]
 
 ## Independent review
 
-- Read [the playbook](../playbook.md), [repository rules](../../../CONTRIBUTING-FORK.md) and the exact submitted diff. Focus on behavior, safety, access boundaries, data attribution, deduplication, recovery, accessibility and compatibility with existing callers.
-- Separate blockers from suggestions with file references, impact and reproduction. Review corrected deltas and resolve threads after checking the fix. Record source verdict and verification coverage independently, including unrun native checks and their blockers.
+- Read the exact submitted diff and directly affected callers/contracts immediately. Do not rerun local `tsc` or full test suites when CI and the dev's local receipt are already green (run targeted tests only to reproduce a suspected bug or edge case).
+- Focus on real defects: behavior, safety, access boundaries, data attribution, deduplication, recovery, accessibility and compatibility with existing callers.
+- Keep verdicts concise (in English): `SOURCE_ACCEPT` with exact head SHA + 3–5 short checks, or numbered blockers (`file:line`, impact, exact fix). On `SOURCE_ACCEPT` with no Lead hold, immediately merge (`gh pr merge --squash`) or enable auto-merge (`gh pr merge --auto --squash`).
 - Assess CI scope against the changed contracts. Request `ci:full` for uncertain impact. Require existing QA and admission evidence for reduced coverage, including independent evidence when validation policy itself changes.
 
 ## GitHub verdict and developer handoff

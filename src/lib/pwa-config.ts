@@ -1,8 +1,16 @@
 // Remote PWA pairing, IndexedDB (`omb-pwa-v1`) auth store, authenticated fetch wrappers, and blob media cache.
 import type { PwaPairingPayload } from "../../shared/pwa-bridge.ts";
 import { clearPwaMemoryCaches } from "./pwa-cache.ts";
+import {
+  OMB_PWA_DPOP_STORE,
+  exportDpopPublicJwk,
+  generateDpopKeyPair,
+  prepareDpopSignedFetch,
+  type GeneratedDpopKey,
+} from "./pwa-dpop.ts";
 import { randomUuid } from "./random-uuid.ts";
 import {
+  getActiveDpopKey,
   getPwaAuth,
   isElectronDesktop,
   isJsonResponse,
@@ -13,11 +21,14 @@ import {
   remoteFetch,
   remoteFetchInit,
   remoteUrl,
+  setActiveDpopKey,
   setActivePwaAuth,
   type PwaAuthRecord,
 } from "./pwa-transport.ts";
 
 export {
+  OMB_PWA_DPOP_STORE,
+  getActiveDpopKey,
   getPwaAuth,
   isJsonResponse,
   isRelayMediaPath,
@@ -27,6 +38,7 @@ export {
   remoteFetch,
   remoteFetchInit,
   remoteUrl,
+  setActiveDpopKey,
   type PwaAuthRecord,
 };
 
@@ -37,7 +49,7 @@ export function defaultDeviceLabel(userAgent: string = typeof navigator !== "und
 }
 
 export const OMB_PWA_DB_NAME = "omb-pwa-v1";
-export const OMB_PWA_DB_VERSION = 3;
+export const OMB_PWA_DB_VERSION = 4;
 export const OMB_PWA_AUTH_STORE = "auth";
 export const OMB_PWA_PREFS_STORE = "prefs";
 export const OMB_PWA_SNAPSHOT_STORE = "snapshot";
@@ -317,6 +329,9 @@ export function openPwaDb(
       if (!db.objectStoreNames.contains(OMB_PWA_OUTBOX_LEASES_STORE)) {
         db.createObjectStore(OMB_PWA_OUTBOX_LEASES_STORE);
       }
+      if (!db.objectStoreNames.contains(OMB_PWA_DPOP_STORE)) {
+        db.createObjectStore(OMB_PWA_DPOP_STORE);
+      }
     };
     req.onblocked = () => {
       if (blockedTimer !== null || settled) return;
@@ -359,7 +374,8 @@ function isValidStoredAuth(value: unknown): value is PwaAuthRecord {
     r.sessionId.length > 0 &&
     typeof r.serverName === "string" &&
     Array.isArray(r.scopes) &&
-    typeof r.pairedAt === "number"
+    typeof r.pairedAt === "number" &&
+    (r.dpopBound === undefined || typeof r.dpopBound === "boolean")
   );
 }
 
@@ -423,7 +439,7 @@ async function readStoredAuth(idbFactory?: IDBFactory): Promise<PwaAuthRecord | 
   }
   if (idbFactory !== undefined) return null;
   const backup = readBackupAuth();
-  if (backup) {
+  if (backup && !backup.dpopBound) {
     void writeStoredAuth(backup)
       .then((ok) => {
         if (ok) deleteBackupAuth();
@@ -460,6 +476,7 @@ async function clearAllStoredPwaData(idbFactory?: IDBFactory): Promise<void> {
       OMB_PWA_OUTBOX_STORE,
       OMB_PWA_OUTBOX_LEASES_STORE,
       OMB_PWA_PREFS_STORE,
+      OMB_PWA_DPOP_STORE,
     ].filter((name) => {
       try {
         return db.objectStoreNames?.contains?.(name) !== false;
@@ -500,6 +517,94 @@ async function clearAllStoredPwaData(idbFactory?: IDBFactory): Promise<void> {
   }
 }
 
+function isCryptoKeyPair(value: unknown): value is CryptoKeyPair {
+  if (!value || typeof value !== "object") return false;
+  const pair = value as { privateKey?: unknown; publicKey?: unknown };
+  return Boolean(
+    pair.privateKey &&
+      typeof pair.privateKey === "object" &&
+      pair.publicKey &&
+      typeof pair.publicKey === "object",
+  );
+}
+
+async function runDpopStoreTx<T>(
+  mode: IDBTransactionMode,
+  fallback: T,
+  idbFactory: IDBFactory | undefined,
+  run: (store: IDBObjectStore, tx: IDBTransaction, finish: (val: T) => void) => void,
+): Promise<T> {
+  const db = await openPwaDb(idbFactory).catch(() => null);
+  if (!db) return fallback;
+  try {
+    if (!db.objectStoreNames.contains(OMB_PWA_DPOP_STORE)) return fallback;
+    return await new Promise<T>((resolve) => {
+      let done = false;
+      const finish = (val: T) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(val);
+      };
+      const timer = setTimeout(() => finish(fallback), 3000);
+      try {
+        const tx = db.transaction(OMB_PWA_DPOP_STORE, mode);
+        tx.onerror = () => finish(fallback);
+        tx.onabort = () => finish(fallback);
+        run(tx.objectStore(OMB_PWA_DPOP_STORE), tx, finish);
+      } catch {
+        // Some runtimes reject structured clone of non-extractable CryptoKey objects.
+        finish(fallback);
+      }
+    });
+  } finally {
+    db.close();
+  }
+}
+
+export function readDpopKey(ownerKey: string, idbFactory?: IDBFactory): Promise<CryptoKeyPair | null> {
+  if (!ownerKey) return Promise.resolve(null);
+  return runDpopStoreTx<CryptoKeyPair | null>("readonly", null, idbFactory, (store, _tx, finish) => {
+    const req = store.get(ownerKey);
+    req.onsuccess = () => finish(isCryptoKeyPair(req.result) ? req.result : null);
+    req.onerror = () => finish(null);
+  });
+}
+
+export function writeDpopKey(
+  ownerKey: string,
+  keyPair: CryptoKeyPair,
+  idbFactory?: IDBFactory,
+): Promise<boolean> {
+  if (!ownerKey) return Promise.resolve(false);
+  return runDpopStoreTx("readwrite", false, idbFactory, (store, tx, finish) => {
+    const req = store.put(keyPair, ownerKey);
+    req.onerror = () => finish(false);
+    tx.oncomplete = () => finish(true);
+  });
+}
+
+export function deleteDpopKey(ownerKey: string, idbFactory?: IDBFactory): Promise<void> {
+  if (!ownerKey) return Promise.resolve();
+  return runDpopStoreTx("readwrite", undefined, idbFactory, (store, tx, finish) => {
+    const req = store.delete(ownerKey);
+    req.onerror = () => finish(undefined);
+    tx.oncomplete = () => finish(undefined);
+  });
+}
+
+function clearStoredDpopKeys(idbFactory?: IDBFactory): Promise<void> {
+  return runDpopStoreTx("readwrite", undefined, idbFactory, (store, tx, finish) => {
+    if (typeof store.clear !== "function") {
+      finish(undefined);
+      return;
+    }
+    const req = store.clear();
+    req.onerror = () => finish(undefined);
+    tx.oncomplete = () => finish(undefined);
+  });
+}
+
 export function revokeMediaBlobCache(): void {
   if (typeof URL !== "undefined" && typeof URL.revokeObjectURL === "function") {
     for (const blobUrl of mediaBlobCache.values()) {
@@ -513,7 +618,11 @@ export function revokeMediaBlobCache(): void {
   mediaInFlight.clear();
 }
 
-export async function setPwaAuth(record: PwaAuthRecord, idbFactory?: IDBFactory): Promise<void> {
+export async function setPwaAuth(
+  record: PwaAuthRecord,
+  idbFactory?: IDBFactory,
+  dpopPrivateKey?: CryptoKey | null,
+): Promise<void> {
   if (getPwaAuth()?.ownerKey !== record.ownerKey) {
     revokeMediaBlobCache();
   }
@@ -527,18 +636,25 @@ export async function setPwaAuth(record: PwaAuthRecord, idbFactory?: IDBFactory)
     if (persistedInIdb) deleteBackupAuth();
     else writeBackupAuth(record);
   }
-  setActivePwaAuth(record);
+  setActivePwaAuth(record, dpopPrivateKey ?? null);
   initPromise = Promise.resolve(record);
 }
 
 export async function clearPwaAuth(idbFactory?: IDBFactory): Promise<void> {
+  const activeOwnerKey = getPwaAuth()?.ownerKey ?? null;
   setActivePwaAuth(null);
+  setActiveDpopKey(null);
   initPromise = Promise.resolve(null);
   revokeMediaBlobCache();
   clearPwaMemoryCaches();
   if (idbFactory === undefined) {
     deleteBackupAuth();
   }
+  const storedOwnerKey = activeOwnerKey ?? (await readStoredAuth(idbFactory))?.ownerKey ?? null;
+  if (storedOwnerKey) {
+    await deleteDpopKey(storedOwnerKey, idbFactory);
+  }
+  await clearStoredDpopKeys(idbFactory);
   await clearAllStoredPwaData(idbFactory);
 }
 
@@ -549,8 +665,17 @@ export function initPwaAuth(idbFactory?: IDBFactory): Promise<PwaAuthRecord | nu
   }
   if (initPromise) return initPromise;
   initPromise = readStoredAuth(idbFactory)
-    .then((record) => {
-      setActivePwaAuth(record);
+    .then(async (record) => {
+      if (record?.dpopBound === true) {
+        const pair = await readDpopKey(record.ownerKey, idbFactory);
+        if (!pair?.privateKey) {
+          await clearPwaAuth(idbFactory);
+          return null;
+        }
+        setActivePwaAuth(record, pair.privateKey);
+        return record;
+      }
+      setActivePwaAuth(record, null);
       return record;
     })
     .catch(() => {
@@ -571,6 +696,7 @@ export function pwaReady(): Promise<PwaAuthRecord | null> {
 
 export function resetPwaConfigForTests(): void {
   setActivePwaAuth(null);
+  setActiveDpopKey(null);
   initPromise = null;
   memoryPairRequests.clear();
   revokeMediaBlobCache();
@@ -585,111 +711,178 @@ export async function activatePwaPairing(
   const fetchImpl = options.fetchImpl ?? fetch;
   const pairRequestId = await getOrCreatePairRequestId(relay.origin, payload.credential);
   const deviceName = options.deviceName ?? defaultDeviceLabel();
-
-  let pairRes: Response;
-  try {
-    pairRes = await fetchImpl(`${relay.origin}/api/pair`, {
-      method: "POST",
-      credentials: "omit",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        credential: payload.credential,
-        deviceName,
-        pairRequestId,
-      }),
-    });
-  } catch (error) {
-    return {
-      ok: false,
-      error: error instanceof Error ? error.message : "Could not reach relay.",
-    };
-  }
-
-  const pairBody = isJsonResponse(pairRes)
-    ? ((await pairRes.json().catch(() => null)) as Record<string, unknown> | null)
-    : null;
-  if (!pairRes.ok) {
-    if (pairRes.status === 400 || pairRes.status === 401 || pairRes.status === 403 || pairRes.status === 415) {
-      await clearPairRequestId(relay.origin, payload.credential);
+  const stagingKey = `pending:${pairRequestId}`;
+  let generated: GeneratedDpopKey | null = null;
+  const stagedPair = await readDpopKey(stagingKey, options.idb);
+  if (stagedPair) {
+    const publicJwk = await exportDpopPublicJwk(stagedPair.publicKey);
+    if (publicJwk) {
+      generated = { keyPair: stagedPair, publicJwk };
+    } else {
+      await deleteDpopKey(stagingKey, options.idb);
     }
-    const errText =
-      typeof pairBody?.error === "string"
-        ? pairBody.error
-        : `Pairing failed (${pairRes.status})`;
-    return {
-      ok: false,
-      error: errText,
-      status: pairRes.status,
-      ...(typeof pairBody?.code === "string" ? { code: pairBody.code } : {}),
-    };
+  }
+  if (!generated) {
+    const fresh = await generateDpopKeyPair();
+    if (fresh && (await writeDpopKey(stagingKey, fresh.keyPair, options.idb))) {
+      generated = fresh;
+    }
   }
 
-  const token = typeof pairBody?.token === "string" ? pairBody.token : "";
-  const device = pairBody?.device && typeof pairBody.device === "object" ? (pairBody.device as Record<string, unknown>) : null;
-  const deviceId = typeof device?.id === "string" ? device.id : "";
-  const serverName = typeof pairBody?.serverName === "string" ? pairBody.serverName : "";
-  if (!token || !deviceId) {
-    return { ok: false, error: "Relay returned an invalid pairing response." };
-  }
-
-  const authHeaders = { authorization: `Bearer ${token}` };
-  let sessionRes: Response;
-  let envRes: Response;
+  let cleanupStaging = false;
   try {
-    [sessionRes, envRes] = await Promise.all([
-      fetchImpl(`${relay.origin}/api/auth/session`, { credentials: "omit", headers: authHeaders }),
-      fetchImpl(`${relay.origin}/.well-known/openmausbot/environment`, { credentials: "omit", headers: authHeaders }),
-    ]);
-  } catch (error) {
-    return {
-      ok: false,
-      error: error instanceof Error ? error.message : "Could not verify paired session.",
+    let pairRes: Response;
+    try {
+      pairRes = await fetchImpl(`${relay.origin}/api/pair`, {
+        method: "POST",
+        credentials: "omit",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          credential: payload.credential,
+          deviceName,
+          pairRequestId,
+          ...(generated ? { dpopPublicKey: generated.publicJwk } : {}),
+        }),
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : "Could not reach relay.",
+      };
+    }
+
+    const pairBody = isJsonResponse(pairRes)
+      ? ((await pairRes.json().catch(() => null)) as Record<string, unknown> | null)
+      : null;
+    if (!pairRes.ok) {
+      if (pairRes.status === 400 || pairRes.status === 401 || pairRes.status === 403 || pairRes.status === 415) {
+        cleanupStaging = true;
+        await clearPairRequestId(relay.origin, payload.credential);
+      }
+      const errText =
+        typeof pairBody?.error === "string"
+          ? pairBody.error
+          : `Pairing failed (${pairRes.status})`;
+      return {
+        ok: false,
+        error: errText,
+        status: pairRes.status,
+        ...(typeof pairBody?.code === "string" ? { code: pairBody.code } : {}),
+      };
+    }
+
+    const token = typeof pairBody?.token === "string" ? pairBody.token : "";
+    const device = pairBody?.device && typeof pairBody.device === "object" ? (pairBody.device as Record<string, unknown>) : null;
+    const deviceId = typeof device?.id === "string" ? device.id : "";
+    const serverName = typeof pairBody?.serverName === "string" ? pairBody.serverName : "";
+    if (!token || !deviceId) {
+      cleanupStaging = true;
+      await clearPairRequestId(relay.origin, payload.credential);
+      return { ok: false, error: "Relay returned an invalid pairing response." };
+    }
+
+    const sessionUrl = `${relay.origin}/api/auth/session`;
+    const envUrl = `${relay.origin}/.well-known/openmausbot/environment`;
+    const baseVerifyInit: RequestInit = {
+      credentials: "omit",
+      headers: { authorization: `Bearer ${token}` },
     };
+    let sessionRes: Response;
+    let envRes: Response;
+    try {
+      const [sessionInit, envInit] = generated
+        ? await Promise.all([
+            prepareDpopSignedFetch({
+              privateKey: generated.keyPair.privateKey,
+              url: sessionUrl,
+              init: baseVerifyInit,
+            }),
+            prepareDpopSignedFetch({
+              privateKey: generated.keyPair.privateKey,
+              url: envUrl,
+              init: baseVerifyInit,
+            }),
+          ])
+        : [baseVerifyInit, baseVerifyInit];
+      [sessionRes, envRes] = await Promise.all([
+        fetchImpl(sessionUrl, sessionInit),
+        fetchImpl(envUrl, envInit),
+      ]);
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : "Could not verify paired session.",
+      };
+    }
+
+    if (!sessionRes.ok || !isJsonResponse(sessionRes)) {
+      if (sessionRes.status === 400 || sessionRes.status === 401 || sessionRes.status === 403) {
+        cleanupStaging = true;
+        await clearPairRequestId(relay.origin, payload.credential);
+      }
+      return { ok: false, error: "Paired session verification failed.", status: sessionRes.status };
+    }
+    if (!envRes.ok || !isJsonResponse(envRes)) {
+      if (envRes.status === 400 || envRes.status === 401 || envRes.status === 403) {
+        cleanupStaging = true;
+        await clearPairRequestId(relay.origin, payload.credential);
+      }
+      return { ok: false, error: "Server environment verification failed.", status: envRes.status };
+    }
+
+    const sessionBody = (await sessionRes.json().catch(() => null)) as Record<string, unknown> | null;
+    const envBody = (await envRes.json().catch(() => null)) as Record<string, unknown> | null;
+    const sessionId = typeof sessionBody?.id === "string" ? sessionBody.id : "";
+    const sessionEnvId = typeof sessionBody?.environmentId === "string" ? sessionBody.environmentId : "";
+    const envId = typeof envBody?.environmentId === "string" ? envBody.environmentId : "";
+    const scopes = Array.isArray(sessionBody?.scopes)
+      ? sessionBody.scopes.filter((s): s is string => typeof s === "string")
+      : [];
+
+    if (
+      sessionBody?.kind !== "session" ||
+      !sessionId ||
+      !scopes.includes("client") ||
+      !sessionEnvId ||
+      !envId ||
+      sessionEnvId !== envId
+    ) {
+      cleanupStaging = true;
+      await clearPairRequestId(relay.origin, payload.credential);
+      return { ok: false, error: "Server returned an unexpected session or environment identity." };
+    }
+
+    const record: PwaAuthRecord = {
+      ownerKey: makePwaOwnerKey(relay.origin, envId, sessionId),
+      relayUrl: relay.origin,
+      token,
+      deviceId,
+      environmentId: envId,
+      sessionId,
+      serverName: serverName || (typeof envBody?.label === "string" ? envBody.label : "OpenMausBot"),
+      scopes,
+      ...(payload.defaultBotId ? { defaultBotId: payload.defaultBotId } : {}),
+      dpopBound: Boolean(generated),
+      pairedAt: (options.now ?? Date.now)(),
+    };
+
+    if (generated) {
+      const persisted = await writeDpopKey(record.ownerKey, generated.keyPair, options.idb);
+      if (!persisted) {
+        cleanupStaging = true;
+        await clearPairRequestId(relay.origin, payload.credential);
+        return { ok: false, error: "Could not persist device signing key in browser storage." };
+      }
+    }
+    cleanupStaging = true;
+    await setPwaAuth(record, options.idb, generated?.keyPair.privateKey ?? null);
+    await clearPairRequestId(relay.origin, payload.credential);
+    return { ok: true, auth: record };
+  } finally {
+    if (cleanupStaging && generated) {
+      await deleteDpopKey(stagingKey, options.idb);
+    }
   }
-
-  if (!sessionRes.ok || !isJsonResponse(sessionRes)) {
-    return { ok: false, error: "Paired session verification failed.", status: sessionRes.status };
-  }
-  if (!envRes.ok || !isJsonResponse(envRes)) {
-    return { ok: false, error: "Server environment verification failed.", status: envRes.status };
-  }
-
-  const sessionBody = (await sessionRes.json().catch(() => null)) as Record<string, unknown> | null;
-  const envBody = (await envRes.json().catch(() => null)) as Record<string, unknown> | null;
-  const sessionId = typeof sessionBody?.id === "string" ? sessionBody.id : "";
-  const sessionEnvId = typeof sessionBody?.environmentId === "string" ? sessionBody.environmentId : "";
-  const envId = typeof envBody?.environmentId === "string" ? envBody.environmentId : "";
-  const scopes = Array.isArray(sessionBody?.scopes)
-    ? sessionBody.scopes.filter((s): s is string => typeof s === "string")
-    : [];
-
-  if (
-    sessionBody?.kind !== "session" ||
-    !sessionId ||
-    !scopes.includes("client") ||
-    !sessionEnvId ||
-    !envId ||
-    sessionEnvId !== envId
-  ) {
-    return { ok: false, error: "Server returned an unexpected session or environment identity." };
-  }
-
-  const record: PwaAuthRecord = {
-    ownerKey: makePwaOwnerKey(relay.origin, envId, sessionId),
-    relayUrl: relay.origin,
-    token,
-    deviceId,
-    environmentId: envId,
-    sessionId,
-    serverName: serverName || (typeof envBody?.label === "string" ? envBody.label : "OpenMausBot"),
-    scopes,
-    ...(payload.defaultBotId ? { defaultBotId: payload.defaultBotId } : {}),
-    pairedAt: (options.now ?? Date.now)(),
-  };
-
-  await setPwaAuth(record, options.idb);
-  await clearPairRequestId(relay.origin, payload.credential);
-  return { ok: true, auth: record };
 }
 
 export async function bootstrapPwaConfig(options: ActivatePairingOptions = {}): Promise<PwaPairingBootResult> {

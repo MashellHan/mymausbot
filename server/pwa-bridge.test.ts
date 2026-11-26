@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, generateKeyPairSync, randomBytes, randomUUID, sign as signBytes, type KeyObject } from "node:crypto";
 import { mkdtempSync, statSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { createServer as createNetServer, type AddressInfo } from "node:net";
@@ -11,6 +11,13 @@ import { launchVerificationServer, type VerificationServer } from "../scripts/co
 import { startBridge } from "../pwa-relay/src/bridge.ts";
 import { loadConfig as loadRelayConfig } from "../pwa-relay/src/config.ts";
 import type { PwaPairingPayload } from "../shared/pwa-bridge.ts";
+import {
+  DPOP_VERSION,
+  EMPTY_BODY_SHA256,
+  canonicalDpopInput,
+  encodeDpopProof,
+  type DpopPublicJwk,
+} from "../shared/pwa-dpop.ts";
 import { json, readBody } from "./harness/http.ts";
 import { PWA_BRIDGE_SUBPROTOCOL, isPwaBridgeRequest, pwaBridgePairingRefusal, startPwaBridge } from "./pwa-bridge.ts";
 import { isBridgeRouteAllowed } from "./pwa-bridge-wire.ts";
@@ -1403,6 +1410,192 @@ describe("PWA bridge real handleRequest integration", () => {
     const oversizedPair = JSON.stringify({ code: "ABCD-EFGH-JK23", pad: "x".repeat(9_000) });
     expect((await rawHttp("POST", "/api/auth/pair", targetHost(base), oversizedPair)).status).toBe(413);
     expect((await rawHttp("POST", "/api/pair", targetHost(base), oversizedPair)).status).toBe(413);
+  });
+
+  it("enforces DPoP request signing end-to-end across POST /api/pair and bridge GET/POST/SSE requests", async () => {
+    const makeKey = (): { privateKey: KeyObject; publicJwk: DpopPublicJwk } => {
+      const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+      const jwk = publicKey.export({ format: "jwk" }) as Record<string, unknown>;
+      return {
+        privateKey,
+        publicJwk: { kty: "EC", crv: "P-256", x: String(jwk.x), y: String(jwk.y) },
+      };
+    };
+    const signDpop = (
+      privateKey: KeyObject,
+      method: string,
+      target: string,
+      body?: string,
+      ts = Math.floor(Date.now() / 1000),
+    ): string => {
+      const bodySha256 = body !== undefined ? createHash("sha256").update(body, "utf8").digest("hex") : EMPTY_BODY_SHA256;
+      const payload = { v: DPOP_VERSION, ts, nonce: randomBytes(16).toString("base64url"), bodySha256 };
+      const sig = signBytes(
+        "sha256",
+        Buffer.from(canonicalDpopInput({ method, target, ts: payload.ts, nonce: payload.nonce, bodySha256 }), "utf8"),
+        { key: privateKey, dsaEncoding: "ieee-p1363" },
+      );
+      return encodeDpopProof(payload, new Uint8Array(sig));
+    };
+
+    const createdBot = await admin("POST", "/api/bots", { name: "DPoP Bot" });
+    expect(createdBot.status).toBe(201);
+    const botId = String(createdBot.body.bot.id);
+
+    const pwaInvite = await admin("POST", "/api/pwa-bridge/invite", { label: "DPoP iPhone", defaultBotId: botId });
+    expect(pwaInvite.status).toBe(200);
+    const payload = JSON.parse(
+      Buffer.from(String(pwaInvite.body.inviteUrl).split("#pair=")[1]!, "base64url").toString("utf8"),
+    ) as PwaPairingPayload;
+
+    const deviceKey = makeKey();
+    const attackerKey = makeKey();
+
+    // Invalid dpopPublicKey (private field `d`, off-curve point, or null) returns 400 without consuming the invite.
+    for (const badKey of [
+      deviceKey.privateKey.export({ format: "jwk" }),
+      { kty: "EC", crv: "P-256", x: Buffer.alloc(32, 0).toString("base64url"), y: Buffer.alloc(32, 0).toString("base64url") },
+      null,
+    ]) {
+      const badPair = await relay.request({
+        method: "POST",
+        path: "/api/pair",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          credential: payload.credential,
+          deviceName: "Bad DPoP",
+          dpopPublicKey: badKey,
+        }),
+      });
+      expect(badPair.status).toBe(400);
+      expect(badPair.json.code).toBe("pairing_bad_request");
+    }
+
+    // Valid dpopPublicKey succeeds and binds the session.
+    const paired = await relay.request({
+      method: "POST",
+      path: "/api/pair",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        credential: payload.credential,
+        deviceName: "DPoP Safari",
+        pairRequestId: randomUUID(),
+        dpopPublicKey: deviceKey.publicJwk,
+      }),
+    });
+    expect(paired.status).toBe(200);
+    const token = String(paired.json.token);
+    expect(token.startsWith("omb_sess_")).toBe(true);
+
+    // Missing DPoP header is rejected with 401.
+    const missingProof = await relay.request({
+      method: "GET",
+      path: "/api/auth/session",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(missingProof.status).toBe(401);
+
+    // Valid DPoP proof succeeds on GET.
+    const getProof = signDpop(deviceKey.privateKey, "GET", "/api/auth/session");
+    const authedSession = await relay.request({
+      method: "GET",
+      path: "/api/auth/session",
+      headers: { authorization: `Bearer ${token}`, dpop: getProof },
+    });
+    expect(authedSession.status).toBe(200);
+    expect(authedSession.json.kind).toBe("session");
+    expect(authedSession.json.scopes).toEqual(["client"]);
+
+    // Replaying the exact same DPoP proof fails with 401.
+    const replayGet = await relay.request({
+      method: "GET",
+      path: "/api/auth/session",
+      headers: { authorization: `Bearer ${token}`, dpop: getProof },
+    });
+    expect(replayGet.status).toBe(401);
+
+    // Wrong key is rejected with 401.
+    const wrongKeyRes = await relay.request({
+      method: "GET",
+      path: "/api/bots",
+      headers: { authorization: `Bearer ${token}`, dpop: signDpop(attackerKey.privateKey, "GET", "/api/bots") },
+    });
+    expect(wrongKeyRes.status).toBe(401);
+
+    // Tampered query string is rejected with 401.
+    const tamperedQuery = await relay.request({
+      method: "GET",
+      path: "/api/search?q=evil",
+      headers: {
+        authorization: `Bearer ${token}`,
+        dpop: signDpop(deviceKey.privateKey, "GET", "/api/search?q=safe"),
+      },
+    });
+    expect(tamperedQuery.status).toBe(401);
+
+    // Tampered POST body is rejected with 401 (relay cannot swap body bytes).
+    const signedBody = JSON.stringify({ text: "legit message", sendId: randomUUID() });
+    const swappedBody = JSON.stringify({ text: "attacker prompt injection", sendId: randomUUID() });
+    const tamperedBody = await relay.request({
+      method: "POST",
+      path: `/api/bots/${botId}/messages`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        dpop: signDpop(deviceKey.privateKey, "POST", `/api/bots/${botId}/messages`, signedBody),
+      },
+      body: swappedBody,
+    });
+    expect(tamperedBody.status).toBe(401);
+
+    // Valid DPoP-signed POST succeeds (202).
+    const validBody = JSON.stringify({ text: "DPoP verified message", sendId: randomUUID() });
+    const sent = await relay.request({
+      method: "POST",
+      path: `/api/bots/${botId}/messages`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        dpop: signDpop(deviceKey.privateKey, "POST", `/api/bots/${botId}/messages`, validBody),
+      },
+      body: validBody,
+    });
+    expect(sent.status).toBe(202);
+    expect(sent.json.message?.text).toBe("DPoP verified message");
+
+    // GET /api/search (which runs a post-await resolveRequestAuth recheck) succeeds with a valid DPoP proof.
+    const searchRes = await relay.request({
+      method: "GET",
+      path: "/api/search?q=DPoP",
+      headers: {
+        authorization: `Bearer ${token}`,
+        dpop: signDpop(deviceKey.privateKey, "GET", "/api/search?q=DPoP"),
+      },
+    });
+    expect(searchRes.status).toBe(200);
+    expect(Array.isArray(searchRes.json.hits)).toBe(true);
+
+    // Stream ticket acquisition requires DPoP, while redeeming the ticket on SSE /api/events does not.
+    const ticketRes = await relay.request({
+      method: "POST",
+      path: "/api/auth/stream-ticket",
+      headers: {
+        authorization: `Bearer ${token}`,
+        dpop: signDpop(deviceKey.privateKey, "POST", "/api/auth/stream-ticket"),
+      },
+    });
+    expect(ticketRes.status).toBe(200);
+    const ticket = String(ticketRes.json.ticket);
+
+    const sse = relay.openStream({
+      method: "GET",
+      path: `/api/events?ticket=${encodeURIComponent(ticket)}`,
+    });
+    const sseHead = await sse.head;
+    expect(sseHead.status).toBe(200);
+    const sseBody = await sse.readUntil((txt) => txt.includes("hello"));
+    expect(sseBody).toContain("hello");
+    sse.cancel();
   });
 });
 

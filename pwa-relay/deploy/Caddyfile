@@ -49,7 +49,7 @@
 		header Access-Control-Allow-Origin {$PWA_ORIGIN}
 		header Vary Origin
 		header Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-		header Access-Control-Allow-Headers "Authorization, Content-Type, x-omb-background"
+		header Access-Control-Allow-Headers "Authorization, Content-Type, DPoP, x-omb-background"
 		header Access-Control-Expose-Headers "Retry-After"
 		header Access-Control-Max-Age "86400"
 		header Cache-Control "no-store"

@@ -17,6 +17,7 @@ import {
   type PairingErrorCode,
 } from "../shared/pairing-code.ts";
 import { userError, type UserError } from "./user-errors.ts";
+import type { DpopPublicJwk } from "../shared/pwa-dpop.ts";
 
 export type Scope = "admin" | "client";
 export const SCOPES: readonly Scope[] = ["admin", "client"];
@@ -91,6 +92,13 @@ const sessionSchema = z.object({
   moveIn: z.string().regex(/^[\w-]{1,128}$/).optional(),
   /** An access token for a script (`openmausbot token create`): it ends at expiresAt and never renews. */
   token: z.literal(true).optional(),
+  /** Public P-256 JWK bound to this session for DPoP request proof verification. */
+  dpopJwk: z.object({
+    kty: z.literal("EC"),
+    crv: z.literal("P-256"),
+    x: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+    y: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  }).strict().optional(),
 });
 
 const fileSchema = z.object({ version: z.literal(1), sessions: z.array(sessionSchema) });
@@ -111,6 +119,7 @@ export interface PublicSession {
   token?: true;
   pwa?: true;
   browser?: true;
+  dpopBound?: true;
   /** Who this device belongs to, when the server can tell and it is not just the device's own label. */
   person?: string;
 }
@@ -200,6 +209,7 @@ function publicSession(record: SessionRecord, personName?: (record: SessionRecor
   if (record.token) view.token = true;
   if (record.pwa) view.pwa = true;
   if (record.cookieOnly) view.browser = true;
+  if (record.dpopJwk) view.dpopBound = true;
   const person = personName?.(record).trim();
   if (person && person !== record.label) view.person = person;
   return view;
@@ -249,7 +259,7 @@ export class SessionRegistry {
   private tickets = new Map<string, { sessionId: string; expiresAt: number }>();
   private failures: Failures = new Map();
   private codeFailures: Failures = new Map();
-  private replays: Array<{ codeHash: string; attemptId: string; browser: boolean; pwa: boolean; result: ExchangeResult; expiresAt: number }> = [];
+  private replays: Array<{ codeHash: string; attemptId: string; browser: boolean; pwa: boolean; dpopKeyId: string; result: ExchangeResult; expiresAt: number }> = [];
   private readonly onRevoked = new Set<(sessionId: string) => void>();
   private readonly onIssued = new Set<(session: Pick<SessionRecord, "id" | "scopes" | "email" | "teamRole" | "membershipAuthority">) => void>();
   private lastSeenWrites = new Map<string, number>();
@@ -460,7 +470,7 @@ export class SessionRegistry {
     this.codeFailures.delete(UNNAMED_SOURCES);
   }
 
-  exchange(input: { code: string; label: string; source: string; fallbackLabel?: string; attemptId?: string; browser?: boolean; pwa?: boolean }): ExchangeResult {
+  exchange(input: { code: string; label: string; source: string; fallbackLabel?: string; attemptId?: string; browser?: boolean; pwa?: boolean; dpopJwk?: DpopPublicJwk }): ExchangeResult {
     this.prune();
     const now = this.now();
     const browser = input.browser === true;
@@ -476,7 +486,8 @@ export class SessionRegistry {
     // A credential is hashed as presented: normalizePairingCode folds 0 to O and 1 to I, which would merge distinct secrets.
     const presented = sha256(read.kind === "credential" ? read.credential : read.kind === "code" ? read.code : normalizePairingCode(input.code));
     const attemptId = typeof input.attemptId === "string" && /^[\w-]{8,64}$/.test(input.attemptId) ? input.attemptId : null;
-    const replay = attemptId ? this.replays.find((r) => r.attemptId === attemptId && r.browser === browser && r.pwa === pwa && sameDigest(r.codeHash, presented)) : undefined;
+    const dpopKeyId = input.dpopJwk ? `${input.dpopJwk.x}.${input.dpopJwk.y}` : "";
+    const replay = attemptId ? this.replays.find((r) => r.attemptId === attemptId && r.browser === browser && r.pwa === pwa && r.dpopKeyId === dpopKeyId && sameDigest(r.codeHash, presented)) : undefined;
     if (replay) return replay.result;
     const unnamed = unnamedSource(input.source);
     const lock = unnamed ? { locked: false, retryAfterMs: 0 } : this.lockState(this.codeFailures, input.source);
@@ -510,6 +521,7 @@ export class SessionRegistry {
       ...(pairing.browser ? { cookieOnly: true as const, ...(pairing.owner ? { owner: pairing.owner } : {}) } : {}),
       ...(pairing.member ? { email: pairing.member.email, teamRole: pairing.member.role, membershipAuthority: "team" as const } : {}),
       ...(pairing.member && pairing.memberCheckedAt !== undefined ? { memberCheckedAt: pairing.memberCheckedAt } : {}),
+      ...(input.dpopJwk ? { dpopJwk: { kty: input.dpopJwk.kty, crv: input.dpopJwk.crv, x: input.dpopJwk.x, y: input.dpopJwk.y } } : {}),
     };
     if (pairing.member && pairing.memberCheckedAt === undefined) this.memberChecked(pairing.member, now);
     this.sessions.push(record);
@@ -517,7 +529,7 @@ export class SessionRegistry {
     this.persist();
     for (const listener of this.onIssued) listener(record);
     const result: ExchangeResult = { ok: true, token, session: publicSession(record) };
-    if (attemptId) this.replays.push({ codeHash: presented, attemptId, browser, pwa, result, expiresAt: now + EXCHANGE_REPLAY_MS });
+    if (attemptId) this.replays.push({ codeHash: presented, attemptId, browser, pwa, dpopKeyId, result, expiresAt: now + EXCHANGE_REPLAY_MS });
     return result;
   }
 

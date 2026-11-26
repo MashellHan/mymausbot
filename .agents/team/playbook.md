@@ -7,6 +7,23 @@ personal repository `MashellHan/mymausbot` (`fork=false`) in
 `legacy-fork` names the old `MashellHan/openmausbot` repository and its historical
 PR, issue, review and CI records. Preserve upstream license and notices.
 
+## Fast-path PR workflow (Lean & Direct)
+
+Every team member must optimize for fast, clean, merged PRs without ceremony overhead:
+
+1. **No verbose ceremony**: Skip standalone multi-page briefs, long status essays, or multi-round pre-approvals. Put Acceptance + Scope + Checks in 3–5 bullets inside the PR description.
+2. **Strict No-Build / No-`tsc` rule for Feature Devs**:
+   - Feature devs (`mausbot-back`, `mausbot-dev1`, `mausbot-dev2`, `mausbot-dev3`, `mausbot-upstream`) do **not** run local `pnpm build`, `pnpm typecheck`, `tsc`, `vite build`, or App packaging. GitHub CI runs `typecheck + lint` in the cloud.
+   - During iteration, run only the 1–3 affected test files (`./node_modules/.bin/vitest run <file>`). Run `pnpm check:ready` once before pushing when required. Never poll `manage_task()` in a loop or spawn duplicate test processes.
+3. **Single Dedicated Build & Delivery Owner with Batched Builds**:
+   - `mausbot-front` is the sole Build & App Delivery owner (`pnpm build`, `electron-builder`, `codesign`, isolated startup check, `~/Applications/mymausbot.app` switch, max-3 backup pruning under `.omb-scratch/*-delivery-*`).
+   - **Never rebuild per-PR**: `mausbot-lead` accumulates merged `origin/main` PRs and dispatches one serialized batch build only when a milestone/task group finishes, the user requests an App update, an urgent P0 hotfix lands, or `>= 3` merged PRs are ready.
+   - While `mausbot-front` is building/delivering, Lead routes frontend feature PRs to other devs (e.g. `mausbot-dev3`).
+4. **Ship small ready PRs fast & direct review/merge**:
+   - Open a ready (non-draft) PR as soon as the first coherent slice passes focused checks, then ping an idle Reviewer directly with 3 lines (PR #, exact head SHA, scope + test count).
+   - Reviewer inspects the exact diff + affected callers directly (no redundant local `tsc` or full-suite reruns when CI is green), posts a concise English verdict (`SOURCE_ACCEPT` or numbered `file:line` blockers), and immediately merges (`gh pr merge --squash` / `--auto --squash`) on `SOURCE_ACCEPT` when no Lead hold applies.
+5. **Health monitoring**: Run `pnpm team:health` (read-only) to audit team latency, `manage_task()` poll loops, unauthorized dev `tsc`/build runs, CPU saturation, stale worktree bloat, and delivery backup caps.
+
 ## Roles and launch defaults
 
 | Herdr name | Role | Runtime | Model | Effort | Context requested | Role file |
