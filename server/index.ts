@@ -339,7 +339,7 @@ import { turnStartLogLine } from "./turn-log.ts";
 import { TurnStops, logFailedTurn, outwardActions, stoppedTurnOutcome, turnEvidence } from "./turn-outcome.ts";
 import { buildRecoveryText, buildTurnContext, replaysNatively } from "./turn-context.ts"; import { resumePlan } from "./resume-plan.ts";
 import { Handoffs, isContextMessage, recordHanded, renderUnseen, sessionStart, withUnseenMessages, type ContextMessage } from "./delta-context.ts"; import { isFreshStart, sinceFreshStart } from "./fresh-start.ts";
-import { extractReplayImages, extractTurnImages, videoFramesWithin } from "./turn-images.ts";
+import { extractReplayImages, extractTurnImages, nativeClips, turnMedia, videoFramesWithin } from "./turn-images.ts";
 import { callTitleExcerpt } from "./thread-title.ts";
 import { generateThreadTitle } from "./thread-title-generate.ts"; import { createHandedThreadTitle } from "./host/handed-thread-title.ts";
 import { engineCommandCpuMs, engineProcessExited, engineProcessGone, ENGINE_EXIT_STALL_MS, stallLimitMs, stallNotice, TurnWatchdog } from "./turn-watchdog.ts"; import { createIdleThreads } from "./host/idle-threads.ts"; import { createDispatchClaims } from "./host/dispatch-claims.ts";
@@ -7211,8 +7211,8 @@ async function acceptDirectSend(
         let instance = runningTurnInstance(currentAtStart, threadId);
         let steered: SteerOutcome = "refused";
         const humanTrigger = trigger.kind === "user" || trigger.kind === "owner";
-        const steerInput = extractTurnImages(text), carriesImages = steerInput.images.length > 0, steerTarget = handoffs.current(threadId), delegatedTargets = !app ? coordinator.outstandingDirect(threadId) : [];
-        const intakeClass = classifyBusyIntake({ text, carriesImages, engineCanSteerImages: engineSteersImages(instance), pendingComputerSelection: Boolean(computerSelectionTurns.get(threadId)?.selected), engineCanSteer: Boolean(instance?.adapter.capabilities.queueing && instance.adapter.steer), followUp, hasActiveDelegation: delegatedTargets.length > 0, fromApp: Boolean(app), allowSoftRedirect: humanTrigger });
+        const steerInput = extractTurnImages(text), carriesVideos = steerInput.videos.length > 0, carriesImages = steerInput.images.length > 0 || carriesVideos, steerTarget = handoffs.current(threadId), delegatedTargets = !app ? coordinator.outstandingDirect(threadId) : [];
+        const intakeClass = classifyBusyIntake({ text, carriesImages, engineCanSteerImages: !carriesVideos && engineSteersImages(instance), pendingComputerSelection: Boolean(computerSelectionTurns.get(threadId)?.selected), engineCanSteer: Boolean(instance?.adapter.capabilities.queueing && instance.adapter.steer), followUp, hasActiveDelegation: delegatedTargets.length > 0, fromApp: Boolean(app), allowSoftRedirect: humanTrigger });
         const activeTurnId = liveTurnByThread.get(threadId);
         if (intakeClass.allowDelegationForward && delegatedTargets.length > 0 && followUp !== "restart") {
           const sourceLevel = cloudGuestDriven(threadId) || botApiThread(threadId) ? "ask" : liveApprovalMode(currentAtStart, threadId, false);
@@ -7544,7 +7544,7 @@ async function beginTurn(
   const resolvedImages = extractTurnImages(text);
   const usesNativeImageInput = instance.adapter.capabilities.nativeImageInput === true;
   let providerText = promptWithDataContext(usesNativeImageInput ? resolvedImages.text : text, opts?.dataContext);
-  const turnImages = usesNativeImageInput ? resolvedImages.images : [];
+  const turnImages = usesNativeImageInput ? resolvedImages.images : [], turnVideos = opts?.compactOnly ? [] : nativeClips(resolvedImages.videos, instance.adapter.capabilities, turnImages);
   const commsDepth = opts?.commsDepth ?? 0;
   if (commsDepth > 0) markInternalTurn(threadId);
   else { clearInternalTurn(threadId); doneNotice.personTurnStarted(threadId); }
@@ -7711,7 +7711,7 @@ async function beginTurn(
       }
       await warmSummaries.beforeTurn(threadId, () => directTurnClaimIsCurrent(bot.id, dispatchClaimId, threadId));
       setup.lap("summaries");
-      if (usesNativeImageInput && !opts?.compactOnly) turnImages.push(...await videoFramesWithin(turnImages.length, resolvedImages.videos));
+      if (usesNativeImageInput && !opts?.compactOnly) turnImages.push(...await videoFramesWithin(turnImages.length, resolvedImages.videos, turnVideos, turnImages));
       setup.lap("videoFrames");
       await compactConversation({ bot, threadId, generation: dispatchClaimId, instance, model,
         excludedIds: new Set([userMessage.id, ...(opts?.excludeMessageIds ?? [])]), manual: opts?.compactOnly === true });
@@ -7764,7 +7764,7 @@ async function beginTurn(
         userNameFor(threadId),
       ), personLine ? activeMessages : [], skipTranscript, userNameFor(threadId)), lineLabels(threadId));
       const replay = usesNativeImageInput
-        ? extractReplayImages(selection.inline, turnImages)
+        ? extractReplayImages(selection.inline, turnImages, {}, turnVideos)
         : { transcript: selection.inline, images: [] };
       const decideContext = (config: string) => {
         const handedStale = resuming.stale(config);
@@ -7788,7 +7788,7 @@ async function beginTurn(
         const windowIds = selection.representedIds;
         return {
           turnText: withUnseenMessages(unseenBlock, contextTurnText),
-          images: contextTurnText !== userTurnText ? [...replay.images, ...turnImages] : turnImages,
+          images: contextTurnText !== userTurnText ? [...replay.images, ...turnImages] : turnImages, videos: turnVideos,
           resumeCursor, sessionReset: !resume, recoveryText,
           handoff: strictResume ? {
             botId: bot.id, instanceId, config, resumeCursor: typeof resumeCursor === "string" ? resumeCursor : undefined,
@@ -8360,7 +8360,7 @@ async function beginTurn(
         startupRecovery,
         text: withTurnClock(clock, withRecalled(recalled, (posted?.text ?? "") + attachmentsForBox(dispatchContext.turnText, cwd, { botId: bot.id, threadId }) + shareNote.text + devsReports.note(threadId, Boolean(integrations.agents)) + settingNudges.note(threadId, { tools: Boolean(integrations.agents) && personLine && !opts?.unattended, owner: phones.turnOwner({ botId: bot.id, threadId, generation: dispatchClaimId }) !== null && !cloudGuestDriven(threadId), model: `${instanceId}/${model}` }))),
         ...(recalled ? { recalled } : {}),
-        images: dispatchContext.images,
+        images: dispatchContext.images, videos: dispatchContext.videos,
         approvalMode: approvalModeForTurn(bot, commsDepth > 0, threadId),
         approvalModeNow: () => liveApprovalMode(bot, threadId, commsDepth > 0),
         toolScope,
@@ -9673,14 +9673,14 @@ async function runClaimedGroupMemberTurn(
   // A drained burst runs as one turn: recover its lines by queueId, not position.
   const burstIds = new Set(operation?.queuedQueueIds ?? []);
   const burstOverrides: Array<{ messageId: string; text: string }> = [];
-  const burstImages: ReturnType<typeof extractTurnImages>["images"] = [];
+  const burstLines: Array<ReturnType<typeof extractTurnImages>> = [];
   if (usesNativeImageInput && !cardContinuation) {
     for (const message of store.activePath(threadId)) {
       if (message.role !== "user" || message.kind !== "text" || !message.text) continue;
       if (!message.queueId || !burstIds.has(message.queueId)) continue;
       const resolved = extractTurnImages(message.text);
       burstOverrides.push({ messageId: message.id, text: resolved.text });
-      burstImages.push(...resolved.images, ...await videoFramesWithin(burstImages.length + resolved.images.length, resolved.videos));
+      burstLines.push(resolved);
     }
   }
   // The latest line is usually the burst's last: extracting it again would double-count its attachments.
@@ -9699,7 +9699,7 @@ async function runClaimedGroupMemberTurn(
     bot.id,
   );
   const roomContext = roomWindow.text;
-  const turnImages = usesNativeImageInput ? [...burstImages, ...resolvedLatestImages.images, ...await videoFramesWithin(burstImages.length + resolvedLatestImages.images.length, resolvedLatestImages.videos)] : [];
+  const { images: turnImages, videos: turnVideos } = usesNativeImageInput ? await turnMedia([...burstLines, resolvedLatestImages], instance.adapter.capabilities) : { images: [], videos: [] };
   const skills = availableSkills(), phoneOffered = HAS_USB_PORT && usbPhoneOffered(instance, skills);
   const selectedSkills = mergeSkills(
     selectBundledSkills(
@@ -10250,7 +10250,7 @@ async function runClaimedGroupMemberTurn(
         botId: readyBot.id,
         text: roomSession.text,
         ...(roomRecalled ? { recalled: roomRecalled } : {}),
-        images: turnImages,
+        images: turnImages, videos: turnVideos,
         approvalMode: turnApprovalMode,
         toolScope: roomToolScope,
         ...(roomGuestConfined ? { guestConfined: true, confinedWhy: confinedWhy(threadId) } : {}),

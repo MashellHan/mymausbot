@@ -342,9 +342,9 @@ export function MermaidDiagram({ code }: MermaidDiagramProps) {
 // Security: no href at all, since an <a href="file://…"> reaches setWindowOpenHandler on a middle or modifier click,
 // which calls shell.openExternal without main's containment check.
 // source: the original a delivered copy came from, offered on right-click (Show in Finder) like in the gallery.
-function LocalFileLink({ filePath, shownPath, name, source, children, message }: { filePath: string; shownPath: string; name?: string; source?: string; children?: ReactNode; message?: MessageAttachmentContext }) {
+function LocalFileLink({ filePath, shownPath, shownName, name, source, children, message }: { filePath: string; shownPath: string; shownName: string; name?: string; source?: string; children?: ReactNode; message?: MessageAttachmentContext }) {
   const save = useLocalFileSave(filePath, name, message);
-  const preview = useFilePreview(filePath, name ?? fileName(filePath), message);
+  const preview = useFilePreview(filePath, shownName, message);
   const revealMenu = useRevealOriginalMenu();
   const fileOutsideWorkspace = useMessageFileOutsideWorkspace(filePath, message);
   const revealHere = Boolean(revealBridge());
@@ -381,7 +381,7 @@ function LocalFileLink({ filePath, shownPath, name, source, children, message }:
   return (
     <span dir="ltr" className="inline-flex flex-wrap items-center gap-x-1.5 [unicode-bidi:isolate]" {...revealMenu.targetProps(source)}>
       {revealMenu.menu}
-      {preview.available && <SaveIconButton name={name ?? fileName(filePath)} save={save} retryable={save.retryable} />}
+      {preview.available && <SaveIconButton name={shownName} save={save} retryable={save.retryable} />}
       <button
         type="button"
         onClick={(event) => void pathAction(event)}
@@ -690,8 +690,10 @@ function MarkdownLink({ href, children, ...rest }: { href?: string; children?: R
     const copy = delivered && Object.hasOwn(delivered, fileName(localPath)) ? delivered[fileName(localPath)] : undefined;
     const source = copy && originals && Object.hasOwn(originals, copy) ? originals[copy] : undefined;
     // localFilePath already decodes a file:// URL; a plain path link is still encoded and gets the server's single decode.
+    // A delivered copy keeps its literal name.
     const shownPath = copy ?? (/^file:\/\//i.test(href) ? localPath : decodedLinkPath(localPath));
-    return <LocalFileLink filePath={copy ?? href} shownPath={shownPath} name={fileName(localPath)} source={source} message={message}>{children}</LocalFileLink>;
+    const shownName = copy ? fileName(localPath) : fileName(shownPath);
+    return <LocalFileLink filePath={copy ?? href} shownPath={shownPath} shownName={shownName} name={shownName} source={source} message={message}>{children}</LocalFileLink>;
   }
   if (!/^https?:\/\//i.test(href)) {
     return (
