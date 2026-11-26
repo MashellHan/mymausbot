@@ -1,10 +1,12 @@
 import { expect, it } from "vitest";
-import { compactBudget, compactionReading, contextWindowFor, shouldCompact, DEFAULT_CONTEXT_WINDOW } from "./context-budget.ts";
+import { compactBudget, compactionReading, contextWindowFor, shouldCompact, DEFAULT_AUTO_COMPACT_CAP, DEFAULT_CONTEXT_WINDOW } from "./context-budget.ts";
 
-it("keeps compaction reachable below small model windows", () => {
+it("keeps compaction reachable below small model windows and caps default budget on 1M windows", () => {
   expect(compactBudget(8_000)).toBe(6_400);
   expect(compactBudget(2_000, 20_000)).toBe(1_800);
   expect(compactBudget(100_000, 0.7, 50_000)).toBe(45_000);
+  expect(compactBudget(1_048_576)).toBe(DEFAULT_AUTO_COMPACT_CAP);
+  expect(compactBudget(1_048_576, 500_000)).toBe(500_000);
 });
 
 it("rejects invalid window values and ignores invalid provider readings", () => {
