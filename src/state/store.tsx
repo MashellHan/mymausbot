@@ -2105,7 +2105,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const dispatch = useMemo(() => {
     const navigation = new Map<string, number>();
     const roomAnswer = roomAnswers(() => stateRef.current, rawDispatch);
-    const olderPagesInFlight = new Set<string>();
     const newTaskOnce = createNewTaskOnce(), runNewChat = createNewChat({ state: () => store.getState(), rawDispatch, dispatch: (action) => wrapped(action), showError: (error) => showError(error),
       navigated: (botId) => navigation.set(botId, (navigation.get(botId) ?? 0) + 1), create: (botId, projectId) => botPatchQueue.flush(botId).then(() => api<{ bot: Bot }>(`/api/bots/${botId}/tasks`, { method: "POST", body: JSON.stringify({ projectId }) })) });
     let creatingBot = false;
