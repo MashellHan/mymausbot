@@ -120,7 +120,7 @@ import { vpsLeftBehindNotice, vpsNotChosenReason } from "./cloud-backend.ts";
 import * as composio from "./composio.ts"; import { createConnectorListingRoutes } from "./routes/connectors-listing.ts";
 import { appSandboxRule, connectorCallFromFrame, connectorRefusalText, connectorScopeRefusalText, connectorUnrecognizedText, evaluateConnectorTools } from "./connector-verdict.ts";
 import { signInCardText } from "./connector-card-text.ts";
-import { BOT_HELD_CODE, BOT_PAUSED_CODE } from "../shared/bot-limit.ts"; import { createBotHolds } from "./host/bot-holds.ts"; import { createBotHoldRoutes } from "./routes/bot-holds.ts"; import { createStarterAwake } from "./host/starter-awake.ts"; import { createStarterCaps } from "./host/starter-caps.ts"; import { createStarterRoutineWake, workInFlight, type StarterRoutineWake } from "./host/starter-routine-wake.ts"; import { createStarterAwakeRoutes } from "./routes/starter-awake.ts"; import { chiefOfStaffPrompt, chiefOfStaffSystemPrompt } from "./chief-of-staff.ts"; import { coordinateTooLong } from "./too-long.ts"; import { chiefAbsentFrom, createChiefRooms } from "./host/chief-rooms.ts"; import { chiefLevel, readTeamRolesWith } from "./chief-level.ts"; import { defaultBotRefusal, ensureDefaultBot } from "./default-bot.ts";
+import { BOT_HELD_CODE, BOT_PAUSED_CODE } from "../shared/bot-limit.ts"; import { createBotHolds } from "./host/bot-holds.ts"; import { createBotHoldRoutes } from "./routes/bot-holds.ts"; import { createStarterAwake } from "./host/starter-awake.ts"; import { createStarterCaps } from "./host/starter-caps.ts"; import { createStarterRoutineWake, workInFlight, type StarterRoutineWake } from "./host/starter-routine-wake.ts"; import { createStarterAwakeRoutes } from "./routes/starter-awake.ts"; import { chiefOfStaffPrompt, chiefOfStaffSystemPrompt } from "./chief-of-staff.ts"; import { coordinateMessageMax, coordinateTooLong, reportBackTooLong } from "./too-long.ts"; import { chiefAbsentFrom, createChiefRooms } from "./host/chief-rooms.ts"; import { chiefLevel, readTeamRolesWith } from "./chief-level.ts"; import { defaultBotRefusal, ensureDefaultBot } from "./default-bot.ts";
 import { buildRecall, recallRooms, recallThreadIds, withRecalled } from "./recall.ts";
 import { hostTimeZone, takesTurnClock, turnClockLine, withTurnClock } from "./turn-clock.ts";
 import { createMemoryUpkeep, dreamConversations, upkeepEnabled } from "./memory-upkeep.ts";
@@ -299,7 +299,7 @@ import { threadModelFallback, type ThreadEngine } from "./thread-model.ts";
 import { computerEngineMoveText, removedComputerInstanceIds, writeComputerEngineMoveLines } from "./computer-engine-removal.ts";
 import { peerDeliveryReceipt, type PeerDeliveryReceipt } from "./peer-delivery.ts";
 import { createRoomAccess, PRIVATE_CHAT_ROOM_WRITE } from "./host/room-access.ts";
-import { outsideRoomNote, sentRow, teammateResultRow, WAIT_CARD_CLOSED_REASON } from "./host/handoff-sent.ts"; import { createHandoffFiles, handoffFilesSchema, inboxRead, turnsRunInOwnFolder } from "./host/handoff-files.ts";
+import { outsideRoomNote, sentRow, teammateResultRow, WAIT_CARD_CLOSED_REASON } from "./host/handoff-sent.ts"; import { createHandoffFiles, handoffFilesSchema, inboxRead, turnsRunInOwnFolder } from "./host/handoff-files.ts"; import { conversationAttachments } from "./conversation-attachments.ts"; import { createReworkCap } from "./host/rework-cap.ts";
 import { createWebhookRoomPost } from "./host/webhook-room-deps.ts";
 import { createRoomJobs, parallelRoomJobsEnabled, type RoomRoundLine } from "./host/room-jobs.ts";
 import { markGroupThreadUnreadAfterTurn } from "./group-task-state.ts";
@@ -307,7 +307,7 @@ import { createDelegatedLevel } from "./host/delegated-level.ts";
 import { createLiveApprovalMode, createRecipientApprovalLevel } from "./host/live-approval.ts";
 import { CONSENT_RULE, continuedOrigin, escapeNotes, labelledLine, OUTSIDE, peerLineText, peerProvenanceNote, quoteInNote, reportNote, requestWorkOrigin, workOrigin, type WorkOrigin } from "./peer-provenance.ts"; import { lineNote, PROVENANCE_PROMPT } from "./provenance-label.ts"; import { openRoomThread } from "./host/room-new-thread.ts"; import { createLineLabels } from "./host/line-labels.ts";
 import { decideRoomPost, emptyRoomPostBudget, type RoomPostAttempt, type RoomPostBudget } from "./room-post-budget.ts";
-import { messagePages, pageSize } from "./host/message-pages.ts"; import { suggestedSelection } from "./host/suggested-selection.ts";
+import { messagePages, pageSize } from "./host/message-pages.ts"; import { SUGGESTION_MAX_AGE_MS, suggestedSelection } from "./host/suggested-selection.ts"; import { otherProviderSelection } from "./checker-model.ts";
 import { coordinateResultMessage, createAsksActingPerson, createTeammatePrompts } from "./host/teammate-prompts.ts"; import { createPersonalReach } from "./host/personal-reach.ts"; import { createMausBotOwnChat } from "./host/mausbot-own-chat.ts"; import { moveMemoryLayer } from "./memory-move.ts";
 import { cancelPeerApprovalsFor, cancelPeerApprovalsForThread, dismissStalePeerCards, peerApprovalFailure, requestPeerApproval, resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { createQueuedReason } from "./host/queued-reason.ts";
@@ -3880,7 +3880,7 @@ const questionRouting = createQuestionRouting({ store, handedInUnproven, active:
   answerLive: async (threadId, requestId, text) => await answerRequest(threadId, botForThread(store.botByThread(threadId)?.id ?? "", threadId)?.modelSelection.instanceId ?? "", requestId, "answer", text) === "answered", settleSignIns: (node) => signInSettle.answeredElsewhere(node),
   keptPrivate: (node, requester) => keptPrivate({ child: teamHost.privateTo(node.threadId), parent: teamHost.privateTo(requester.threadId) }),
   steer: async (threadId, text) => canSteerThread(threadId) && (await steerThread(threadId, text)) !== "refused", mayReach: outsideLineage.mayReach });
-const handoffFiles = createHandoffFiles({ dataDir: DATA_DIR, attachmentsDir: ATTACHMENTS_DIR, botName: (id) => store.bot(id)?.name, node: (id) => coordinator.node(id), children: (id) => coordinator.children(id), discard: deleteAttachment, threadsReferencing, changes: (listener) => store.onChange(listener), log: (line) => console.error(line),
+const reworkCap = createReworkCap(); const handoffFiles = createHandoffFiles({ dataDir: DATA_DIR, attachmentsDir: ATTACHMENTS_DIR, botName: (id) => store.bot(id)?.name, node: (id) => coordinator.node(id), children: (id) => coordinator.children(id), discard: deleteAttachment, threadsReferencing, changes: (listener) => store.onChange(listener), log: (line) => console.error(line),
   worksInOwnFolder: (botId, threadId) => turnsRunInOwnFolder(botId, threadId, store.taskByThread(botId, threadId)?.cwd, store.bot(botId)?.cwd, Boolean(store.groupByThread(threadId))), vmHome: (botId) => localVmMode(cfg) === "per-bot" ? perBotLocalVmTarget(botId).workspaceDir : null, withheld: (child, parent) => Boolean(roomHandoffProblem(child, parent)) || keptPrivate({ child: teamHost.privateTo(child.threadId), parent: teamHost.privateTo(parent.threadId) }) });
 const titleHandedThread = createHandedThreadTitle({ store, gate: threadTitleGate, generate: generateThreadTitle }); const botLink = createBotLinkHost({ roomLine: (threadId, key, params) => serverLine(threadLanguage(threadId), key, params), roomWindow: (threadId, reader) => roomTranscript.window(threadId, userNameFor(threadId), undefined, reader), roomOpener: (botId, threadId) => handoffOpener({ botId, threadId }, threadId), roomChanged: (groupId) => { const room = store.group(groupId); if (room) broadcast({ kind: "group", group: publicGroupState(room) }); }, roomFollow: followRoomMentions<GroupTurnOperation>({ members: (groupId) => (store.group(groupId)?.memberIds ?? []).map((id) => store.bot(id)).filter((bot): bot is BotRecord => Boolean(bot)), mentioned: (text, members) => roomResponders(text, members, { kind: "mentions" }), begin: beginGroupTurnOperation, finish: finishGroupTurnOperation, queue: groupQueues, wait: waitForChatRoomMember, run: (groupId, threadId, botId, hop, spoken, operation) => runGroupMemberTurn(groupId, threadId, botId, hop, spoken, undefined, undefined, () => operation.cancelled, undefined, undefined, undefined, undefined, operation) }), dataDir: DATA_DIR, environmentId: ENVIRONMENT_ID, store, coordinator: () => coordinator, kick: () => handoffTicks.kick(), level: (bot) => approvalModeForTurn(bot, true, bot.threadId), titleHanded: titleHandedThread, refusal: botMoveRefusal, language: (threadId) => threadLanguage(threadId), personName: personNameIn,
   roomHandoffProblem, peerReviewRequired, approvalBus: () => approvalBus, sessions, power: () => cloudPower, files: handoffFiles, storeFile: (path, name, root) => saveBotAttachment({ path, name, roots: [root], byContent: true }), log: (line) => console.error(line), local: (auth) => auth.kind === "loopback" && auth.trust !== "service" && !CLOUD_HOME && !HOSTED_WORKSPACE, owner: (auth) => !sharedMembership() && !HOSTED_WORKSPACE && (ownHome.owner(auth) || (CLOUD_PERSONAL && cloudOwnerSession(auth))) }); ROUTES.push(botLink.routes); const handoffTicks = createHandoffTicks(), coordinator: Coordinator = createCoordinator({
@@ -11041,7 +11041,7 @@ function messageFileRootsForThread(senderId: string, threadId: string): string[]
 /** A bot's own file copied into the attachment store, for attach_file and coordinate_bots' files alike. The store is no source: only the
  * bot's own files are (its conversation's inbox of received files among them), or one saved outside them this turn, never from the data dir. */
 function saveTurnFile(capability: InternalCapability, botId: string, vm: LocalVmTarget | undefined, path: string, name: string | undefined, byContent: boolean) {
-  return saveBotAttachment({ path, name, byContent, roots: messageFileRootsForThread(botId, capability.threadId).filter((root) => root !== ATTACHMENTS_DIR), inbox: inboxRead(botId, capability.threadId),
+  return saveBotAttachment({ path, name, byContent, roots: messageFileRootsForThread(botId, capability.threadId).filter((root) => root !== ATTACHMENTS_DIR), inbox: inboxRead(botId, capability.threadId), attached: () => conversationAttachments(store.messagesFor(capability.threadId)),
     ...(vm ? { guest: { root: VM_WORKSPACE_GUEST, host: vm.workspaceDir } } : {}),
     ...(capability.deliversSavedFiles && capability.turnStartedAt !== undefined ? { savedThisTurn: { since: capability.turnStartedAt, refuse: [DATA_DIR] } } : {}) });
 }
@@ -13835,7 +13835,7 @@ if (await miniAppRoutes.internal({ method, path, res, json, botId: internalSende
         const parsed = z.object({
           groupId: z.string().min(1).max(128).optional(),
           botIds: z.array(z.string().min(1).max(128)).min(1).max(4).refine(ids => new Set(ids).size === ids.length),
-          message: z.string().trim().min(1).max(4000),
+          message: z.string().trim().min(1).max(coordinateMessageMax),
           reason: z.string().trim().max(200).optional(),
           rework: z.boolean().default(false),
           thread: z.string().trim().min(1).max(128).default("standing"), title: z.string().trim().max(80).refine(fitsOnOneLine).optional(),
@@ -13844,8 +13844,8 @@ if (await miniAppRoutes.internal({ method, path, res, json, botId: internalSende
           inMyFolder: z.boolean().optional(),
           done_when: z.string().trim().max(1000).optional(), answers: z.string().trim().min(1).max(128).optional(), files: handoffFilesSchema,
         }).safeParse(await readInternalBody());
-        if (!parsed.success) return json(res, 400, { error: coordinateTooLong(parsed.error.issues) ?? "Provide 1-4 distinct botIds and a message of 1-4000 characters; thread is standing, new or the id of a thread you opened on that teammate, title one line of at most 80 characters, reply is resume or none, consult is a boolean, done_when at most 1000 characters, files at most 5 paths." });
-        const { groupId, botIds, message, reason, rework, thread, title, reply, consult, inMyFolder, done_when: doneWhen, answers, files: paths } = parsed.data;
+        if (!parsed.success) return json(res, 400, { error: coordinateTooLong(parsed.error.issues) ?? `Provide 1-4 distinct botIds and a message of 1-${coordinateMessageMax} characters; thread is standing, new or the id of a thread you opened on that teammate, title one line of at most 80 characters, reply is resume or none, consult is a boolean, done_when at most 1000 characters, files at most 5 paths.` });
+        const { groupId, botIds, message, reason, rework, thread, title, reply, consult, inMyFolder, done_when: doneWhen, answers, files: paths } = parsed.data; const reworkRefused = rework ? reworkCap.take(directRequestOwners.get(internalCapability.threadId)?.messageId ?? internalCapability.threadId, botIds, (id) => store.bot(id)?.name ?? "that teammate") : null; if (reworkRefused) return json(res, 400, { error: reworkRefused });
         const result = await handoffFiles.coordinate({ paths, answers, senderId: internalSender.id, recipients: botIds.length, saveOne: async (path) => saveTurnFile(internalCapability, internalSender.id, await attachmentVmForTurn(internalCapability), path, undefined, true),
           send: (files) => coordinateBots({ groupId, botIds, message, reason: reason || undefined, rework, thread, title: title || undefined, reply, consult, inMyFolder, doneWhen: doneWhen || undefined, ...(answers ? { answers } : {}), ...(files ? { files } : {}) }) }); refusedHandoffs.settled(internalCapability.threadId, internalSender, botIds, result.status);
         return json(res, result.status, result.body);
@@ -14049,7 +14049,7 @@ if (await miniAppRoutes.internal({ method, path, res, json, botId: internalSende
         const picked = body.modelSelection === undefined ? null : checkedModelSelection(body.modelSelection, undefined, true, true); const refused = !picked ? null : target.id !== from.id ? "model_selection is only for threads on yourself" : !picked.ok ? picked.error : ownThreads.refusal(picked.selection, from); if (refused) return json(res, 400, { error: refused });
         if (target.id === from.id) { const selfRefused = selfThreadRefusal({ handoff: Boolean(internalCapability.roomHandoffId), requestLine: store.activePath(fromThreadId).findLast((line) => line.role === "user" && line.kind === "text") }); if (selfRefused) return json(res, 409, { error: selfRefused });
           const inherited = ownThreads.inherited(from.id, fromThreadId, picked?.ok ? picked.selection : undefined);
-          if (body.reportBack === true) { if (owner.group) return json(res, 400, { error: "report_back works only from your own conversation, not a room. Leave it out; the thread's result then stays in that thread." });
+          if (body.reportBack === true) { if (owner.group) return json(res, 400, { error: "report_back works only from your own conversation, not a room. Leave it out; the thread's result then stays in that thread." }); const tooLong = reportBackTooLong(message); if (tooLong) return json(res, 400, { error: tooLong });
             const result = await coordinateBots({ botIds: [from.id], message, rework: false, thread: "new", reply: "resume", consult: false, title, projectId, ownThread: inherited }), receipt = (result.body.receipts as PeerDeliveryReceipt[] | undefined)?.[0];
             return json(res, result.status === 200 ? 201 : result.status, { ...result.body, self: true, reportBack: true, title, botId: from.id, botName: from.name, threadId: receipt?.threadId, requestId: receipt?.requestId }); }
           const task = store.createTask(from.id, title, false, projectId, { botId: from.id, name: from.name, at: Date.now() }, inherited.approvalMode, inherited.modelSelection, undefined,
@@ -14708,11 +14708,9 @@ if (await miniAppRoutes.internal({ method, path, res, json, botId: internalSende
     }
 
     if (method === "GET" && path === "/api/bot-defaults") {
-      return json(res, 200, {
-        defaults: structuredClone(cfg.newBotDefaults ?? newBotDefaultsSchema.parse({})),
-        modelSelection: await suggestedSelection({ reused: (age) => registry.describe({ reuse: { ...age, changed: () => broadcast({ kind: "config", ...configStatus() }) } }), fresh: () => registry.describe(), select: (instances) => defaultSelection(undefined, instances) }),
-        suggestedName: pickBotName(store.bots.map(bot => bot.name)),
-      });
+      const defaults = structuredClone(cfg.newBotDefaults ?? newBotDefaultsSchema.parse({})), reused = (ms: number) => registry.describe({ reuse: { ms, maxAgeMs: SUGGESTION_MAX_AGE_MS, changed: () => broadcast({ kind: "config", ...configStatus() }) } }), modelSelection = await suggestedSelection({ reused: (age) => reused(age.ms), fresh: () => registry.describe(), select: (instances) => defaultSelection(undefined, instances) });
+      const checker = url.searchParams.get("checker") === "1" && !hostedModels ? otherProviderSelection(selectableInstances<SelectableInstance>(await reused(ENGINE_LIST_REUSE_MS)), defaults.profile.modelSelection?.instanceId ? defaults.profile.modelSelection : modelSelection, selectionContext) : undefined;
+      return json(res, 200, { defaults, modelSelection, suggestedName: pickBotName(store.bots.map(bot => bot.name)), ...(checker === undefined ? {} : { checkerModelSelection: checker }) });
     }
     if (method === "POST" && path === "/api/bot-defaults/skills/preview") {
       const checked = z.object({ source: z.string().min(1).max(2000) }).strict().safeParse(await readBody(req));
