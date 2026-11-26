@@ -406,7 +406,7 @@ describe("PWA bridge unit, config, and route enforcement", () => {
     }
     expect(seenSocketProps.length).toBe(beforeCalls);
 
-    // Routine endpoints are allowed on the bridge allowlist; /api/instances stays blocked.
+    // Routine, notification, activity, and Web Push endpoints are allowed on the bridge allowlist; /api/instances stays blocked.
     for (const [method, path] of [
       ["GET", "/api/routines"],
       ["POST", "/api/routines"],
@@ -416,8 +416,25 @@ describe("PWA bridge unit, config, and route enforcement", () => {
       ["POST", "/api/routine-runs/run-1/cancel"],
       ["POST", "/api/routine-runs/run-1/seen"],
       ["POST", "/api/routine-runs/seen-all"],
+      ["GET", "/api/notifications"],
+      ["POST", "/api/notifications/read-all"],
+      ["POST", "/api/notifications/n-1/read"],
+      ["GET", "/api/bots/b1/activity"],
+      ["GET", "/api/push/web/vapid-key"],
+      ["GET", "/api/push/web/subscription"],
+      ["PUT", "/api/push/web/subscription"],
+      ["DELETE", "/api/push/web/subscription"],
+      ["POST", "/api/push/web/test"],
     ] as const) {
       expect(isBridgeRouteAllowed(method, path), `${method} ${path}`).toBe(true);
+    }
+    for (const [method, path] of [
+      ["POST", "/api/push/web/vapid-key"],
+      ["POST", "/api/push/web/subscription"],
+      ["GET", "/api/push/web/test"],
+      ["POST", "/api/bots/b1/activity"],
+    ] as const) {
+      expect(isBridgeRouteAllowed(method, path), `${method} ${path}`).toBe(false);
     }
     expect(isBridgeRouteAllowed("GET", "/api/instances")).toBe(false);
 

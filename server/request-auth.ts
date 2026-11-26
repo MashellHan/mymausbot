@@ -331,6 +331,10 @@ export const CLIENT_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Reg
   { methods: ["POST"], path: /^\/api\/phones\/self\/jobs\/[\w-]+\/(?:lease|result)$/ },
   // This phone's own push registrations, alerts and Live Activities, keyed by its session (routes/phone-push.ts).
   { methods: ["GET", "PUT", "DELETE"], path: /^\/api\/push\/(?:device|activity)$/ },
+  // Browser/PWA Web Push VAPID public key, device-bound subscription, and self-test push (routes/web-push.ts).
+  { methods: ["GET"], path: /^\/api\/push\/web\/vapid-key$/ },
+  { methods: ["GET", "PUT", "DELETE"], path: /^\/api\/push\/web\/subscription$/ },
+  { methods: ["POST"], path: /^\/api\/push\/web\/test$/ },
   { methods: ["GET"], path: /^\/api\/health$/ },
   { methods: ["GET"], path: /^\/api\/edition$/ },
   { methods: ["GET"], path: /^\/api\/brand$/ },
@@ -338,6 +342,7 @@ export const CLIENT_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Reg
   // reads that carry no secrets
   { methods: ["GET"], path: /^\/api\/bots$/ },
   { methods: ["GET"], path: /^\/api\/bots\/[\w-]+$/ },
+  { methods: ["GET"], path: /^\/api\/bots\/[\w-]+\/activity$/ },
   { methods: ["GET"], path: /^\/api\/team-map$/ },
   // a link into the organisation's Admin: identifiers only, and Admin authorizes its own visitor
   { methods: ["GET"], path: /^\/api\/bots\/[\w-]+\/slack-management$/ },
