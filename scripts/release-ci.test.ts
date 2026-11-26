@@ -109,7 +109,7 @@ describe("what a CI run proves", () => {
   it("is partial for retired Linux shards or an incomplete macOS full set", () => {
     expect(judgeRun(mainLane())).toBe("partial");
     const source = run(1, "push", "completed");
-    expect(judgeRun(green().filter((job) => job.name !== "vitest (macos-latest, all shard 10/10)"), planFor(source), source)).toBe("partial");
+    expect(judgeRun(green().filter((job) => job.name !== "vitest (macos-latest, all shard 11/11)"), planFor(source), source)).toBe("partial");
     expect(judgeRun([...mainLane(), ...shards("windows-latest")])).toBe("partial");
   });
 
