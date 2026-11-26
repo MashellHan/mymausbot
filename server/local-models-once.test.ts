@@ -91,6 +91,7 @@ describe("list_models with the Other engine on Ollama", () => {
     const engines = [claude, codex] as unknown as MenuEngine[];
     const own = createOwnThreads({ store, registry: { instances: () => engines, cliTarget: () => null }, node: () => undefined,
       current: () => undefined, proposalRefusal: () => null, givesWay: () => null, modelName: (one) => one.model,
+      sourceLevel: () => "ask", mayRaise: () => true,
       localOnce: (listed) => localModelsOnce(listed, direct(other(ollama))) });
     const menu = own.menu(bot.id, bot.threadId, undefined)!;
     expect(menu.engines.find((row) => row.instanceId === "claude")?.models).toEqual(["claude-sonnet-5", "ollama::qwen3:8b", "lmstudio::gemma4:26b"]);
