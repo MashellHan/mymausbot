@@ -42,6 +42,10 @@ export function notificationListedFor(shown: (auth: RequestAuth) => (threadId: s
 
 export type NotificationListed = ReturnType<typeof notificationListedFor>;
 
+export function unreadNotificationCount(listing: NotificationListing): number {
+  return recentNotificationLog(undefined, listing.reader).filter((entry) => !entry.read && listing(entry)).length;
+}
+
 export function createNotificationRoutes(deps: { recent(reader?: string): NotificationLogEntry[]; markRead(ids: readonly string[], reader?: string): void } = {
   recent: (reader) => recentNotificationLog(undefined, reader),
   markRead: markNotificationLogRead,
