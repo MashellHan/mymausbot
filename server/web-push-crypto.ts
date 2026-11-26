@@ -144,7 +144,26 @@ export function vapidPublicKeyObject(publicKeyB64Url: string) {
   });
 }
 
-function validateVapidSubject(subject: string): string {
+// Apple APNs Web Push rejects RFC 2606 .invalid and local/loopback VAPID subjects with HTTP 403 BadJwtToken.
+const DISALLOWED_VAPID_HOST = /(?:^|\.)(?:invalid|localhost|local)$/i;
+
+function isDisallowedVapidHost(rawHost: string): boolean {
+  const host = rawHost.trim().toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  if (!host) return true;
+  if (
+    host === "127.0.0.1"
+    || host === "::1"
+    || host === "0.0.0.0"
+    || host === "::"
+    || host.startsWith("127.")
+    || host.startsWith("::ffff:7f00:")
+  ) {
+    return true;
+  }
+  return DISALLOWED_VAPID_HOST.test(host);
+}
+
+export function validateVapidSubject(subject: string): string {
   const trimmed = subject.trim();
   if (!trimmed) throw new Error("VAPID subject is required");
   let parsed: URL;
@@ -155,6 +174,17 @@ function validateVapidSubject(subject: string): string {
   }
   if (parsed.protocol !== "mailto:" && parsed.protocol !== "https:") {
     throw new Error("VAPID subject must use mailto: or https:");
+  }
+  if (parsed.protocol === "mailto:") {
+    const address = parsed.pathname.trim();
+    const at = address.lastIndexOf("@");
+    if (at <= 0 || at === address.length - 1 || isDisallowedVapidHost(address.slice(at + 1))) {
+      throw new Error("VAPID mailto: subject must use a valid non-local, non-.invalid domain");
+    }
+    return trimmed;
+  }
+  if (parsed.username || parsed.password || isDisallowedVapidHost(parsed.hostname)) {
+    throw new Error("VAPID https: subject must use a valid non-loopback, non-.invalid host");
   }
   return trimmed;
 }
