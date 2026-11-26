@@ -62,7 +62,7 @@ import { useShowThreads } from "@/lib/thread-preferences";
 import { speechOwner, spokenReplyStream } from "@/lib/spoken-reply-stream";
 import { t } from "@/lib/i18n";
 export { formatTime } from "@/lib/clock-time";
-import { createBotPatchQueue, flushWhenLeaving, keepaliveFits, type BotUpdatePatch } from "./bot-patch-queue"; import { createNewTaskOnce } from "./new-task-once";
+import { createBotPatchQueue, flushWhenLeaving, keepaliveFits, type BotUpdatePatch } from "./bot-patch-queue"; import { createNewTaskOnce } from "./new-task-once"; import { createNewChat, reduceNewChat, type NewChat } from "./new-chat";
 import { liveCallFromFrame, nextLiveCallLookup } from "./live-call";
 import { isNoAiRefusal, useChatErrorClear } from "./chat-error";
 import { openLiveEvents, publishLiveFrame, publishMissedFrames, withoutScreenPixels } from "@/lib/live-events";
@@ -561,6 +561,7 @@ export interface AppState {
   error: string | null;
   notice: { kind: "thread-gone" | "bot-gone" | "steer-images" | "note"; botName: string | null; text?: string } | null;
   revealThread: { threadId: string; nonce: number } | null;
+  newChat?: NewChat | null;
   mascotMotion: {
     botId: string;
     nonce: number;
@@ -698,7 +699,7 @@ export type Action =
       rememberCommand?: boolean;
       onError?: (message: string) => void;
     }
-  | { type: "newTask"; botId: string; projectId?: string; cwd?: string; onCreated?: () => void; onError?: (message: string) => void }
+  | { type: "newTask"; botId: string; projectId?: string; cwd?: string; onCreated?: () => void; onError?: (message: string) => void; blankChat?: number }
   | { type: "switchTask"; botId: string; threadId: string; whole?: true }
   | { type: "switchTaskFailed"; botId: string; threadId: string }
   | { type: "taskSwitched"; bot: Bot }
@@ -860,6 +861,7 @@ function dismissOnboardingCard(state: AppState, botId: string): AppState {
 export const CLOUD_LINK_SETTINGS = { type: "toggleAppSettings", open: true, section: "cloudAccount", cloudLink: true } as const satisfies Action;
 
 export function reducer(state: AppState, action: Action): AppState {
+  const [newChatState, newChatOnly] = reduceNewChat(state, action); if (newChatOnly) return newChatState; state = newChatState;
   if (action.type === "send" || action.type === "sendGroup") state = addForkOptimistic(state, action);
   if (action.type === "optimisticMessageRemoved") state = removeForkOptimistic(state, action);
   if (action.type === "messageAdded" || action.type === "messagePatched") {
@@ -2103,7 +2105,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const dispatch = useMemo(() => {
     const navigation = new Map<string, number>();
     const roomAnswer = roomAnswers(() => stateRef.current, rawDispatch);
-    const newTaskOnce = createNewTaskOnce();
+    const olderPagesInFlight = new Set<string>();
+    const newTaskOnce = createNewTaskOnce(), runNewChat = createNewChat({ state: () => store.getState(), rawDispatch, dispatch: (action) => wrapped(action), showError: (error) => showError(error),
+      navigated: (botId) => navigation.set(botId, (navigation.get(botId) ?? 0) + 1), create: (botId, projectId) => botPatchQueue.flush(botId).then(() => api<{ bot: Bot }>(`/api/bots/${botId}/tasks`, { method: "POST", body: JSON.stringify({ projectId }) })) });
     let creatingBot = false;
     const showError = (e: unknown) => { if (isBotLimitRefusal(e)) return; if (isNoAiRefusal(e)) wrapped({ type: "notice", notice: { kind: "note", botName: null, text: e.message } }); else rawDispatch({ type: "error", message: e instanceof Error ? e.message : String(e) }); };
     const loadOlderMessages = createOlderMessagesLoader(
@@ -2213,7 +2217,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       store.flushFrames(); if (["select", "newTask", "switchTask", "newGroupTask", "switchGroupTask", "showChat", "showRoutines", "showTeamMap", "showFiles", "showWebPanel", "showPublishedApps", "showTeamFiles", "showAnnouncements"].includes(action.type)) selectionRevision.current++;
       // Pin before any await or optimistic state change.
       action = pinBotThreadAction(action, stateRef.current.bots);
-      if (action.type === "openForkPanel" && !action.loadId) action = { ...action, loadId: randomUuid() };
+      if (runNewChat(action)) return;
       if (action.type === "taskSwitched") action = { ...action, bot: withTaskWrites(action.bot) as Bot };
       if (action.type === "botPatched") action = { ...action, bot: withTaskWrites(action.bot) };
       if (action.type === "openForkPanel" && !action.loadId) action = { ...action, loadId: randomUuid() };
@@ -2222,14 +2226,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         action.type === "updateBot" || action.type === "setModel"
           ? stateRef.current.bots.find((candidate) => candidate.id === action.botId)
           : undefined;
-      const botBeforeSend =
-        action.type === "send"
-          ? stateRef.current.bots.find((candidate) => candidate.id === action.botId)
-          : undefined;
-      const leafBeforeEdit =
-        action.type === "editMessage"
-          ? stateRef.current.bots.find((candidate) => candidate.id === action.botId)?.activeLeafId ?? null
-          : null;
+      const botBeforeSend = action.type === "send" ? stateRef.current.bots.find((candidate) => candidate.id === action.botId) : undefined;
+      const leafBeforeEdit = action.type === "editMessage" ? stateRef.current.bots.find((candidate) => candidate.id === action.botId)?.activeLeafId ?? null : null;
       const executionBotsBeforeAction = (() => {
         if (action.type === "editMessage" || action.type === "answerCard") {
           const bot = stateRef.current.bots.find((candidate) => candidate.id === action.botId);
