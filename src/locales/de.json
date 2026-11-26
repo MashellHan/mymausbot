@@ -2947,6 +2947,7 @@
   "server.teammates.cancelled": "{bot}: abgebrochen: {detail}",
   "server.teammates.closedBy": "Geschlossen von @{bot}",
   "server.teammates.failed": "{bot}: fehlgeschlagen: {detail}",
+  "server.teammates.forwardedTo": "An {name} weitergeleitet",
   "server.teammates.goal.blocked": "Ziel blockiert: {detail}",
   "server.teammates.goal.completed": "Ziel erreicht: {detail}",
   "server.teammates.goal.failed": "Ziel fehlgeschlagen: {detail}",
