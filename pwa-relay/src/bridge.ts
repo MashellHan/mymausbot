@@ -56,6 +56,8 @@ interface InFlightStream {
   streamId: string;
   res: ServerResponse;
   req: IncomingMessage;
+  remoteIp: string;
+  ipReleased: boolean;
   headersSent: boolean;
   finished: boolean;
   hasRequestBody: boolean;
@@ -138,6 +140,33 @@ function pathnameOf(urlText: string | undefined): string {
 
 function isUploadPath(pathname: string): boolean {
   return pathname.startsWith("/api/attachments") || pathname.startsWith("/api/files");
+}
+
+const BEARER_SESSION_RE = /^Bearer\s+omb_sess_[A-Za-z0-9_-]{8,256}$/i;
+const STREAM_TICKET_RE = /^[A-Za-z0-9_-]{1,256}$/;
+
+function parseQueryParam(urlText: string | undefined, key: string): string | null {
+  if (!urlText) return null;
+  const q = urlText.indexOf("?");
+  if (q === -1) return null;
+  try {
+    return new URLSearchParams(urlText.slice(q + 1)).get(key);
+  } catch {
+    return null;
+  }
+}
+
+function hasPublicProxyAuth(req: IncomingMessage, pathname: string): boolean {
+  const rawAuth = req.headers.authorization;
+  const auth = Array.isArray(rawAuth) ? rawAuth[0] : rawAuth;
+  if (typeof auth === "string" && BEARER_SESSION_RE.test(auth.trim())) {
+    return true;
+  }
+  if (req.method === "GET" && pathname === "/api/events") {
+    const ticket = parseQueryParam(req.url, "ticket");
+    return typeof ticket === "string" && STREAM_TICKET_RE.test(ticket);
+  }
+  return false;
 }
 
 function applyCorsAndNoStore(res: ServerResponse, pwaOrigin: string): void {
@@ -261,6 +290,9 @@ export async function startBridge(
   const authFailWindowMs = config.authFailWindowMs ?? 60_000;
   const authMaxFailures = config.authMaxFailures ?? 5;
   const authBlockMs = config.authBlockMs ?? 60_000;
+  const maxConcurrentStreamsPerIp = config.maxConcurrentStreamsPerIp ?? 16;
+  const ipRateWindowMs = config.ipRateWindowMs ?? 60_000;
+  const ipRateMaxRequests = config.ipRateMaxRequests ?? 300;
 
   let activeHost: HostSession | null = null;
   let draining = false;
@@ -268,6 +300,41 @@ export async function startBridge(
   let pendingAuthCount = 0;
   const pendingAuthReleases = new WeakMap<WebSocket, () => void>();
   const authFailures = new Map<string, { count: number; windowStart: number; blockedUntil: number }>();
+  const streamsByIp = new Map<string, number>();
+  const ipRateWindows = new Map<string, { count: number; windowStart: number }>();
+
+  const releaseStreamIp = (stream: InFlightStream) => {
+    if (stream.ipReleased) return;
+    stream.ipReleased = true;
+    const current = streamsByIp.get(stream.remoteIp) ?? 0;
+    if (current <= 1) streamsByIp.delete(stream.remoteIp);
+    else streamsByIp.set(stream.remoteIp, current - 1);
+  };
+
+  const checkIpRateLimit = (ip: string, now = Date.now()): { limited: false } | { limited: true; retryAfterSec: number } => {
+    if (ipRateMaxRequests <= 0) return { limited: false };
+    let rec = ipRateWindows.get(ip);
+    if (!rec || now - rec.windowStart >= ipRateWindowMs) {
+      if (!rec && ipRateWindows.size >= 4096) {
+        for (const [k, v] of ipRateWindows) {
+          if (now - v.windowStart >= ipRateWindowMs) ipRateWindows.delete(k);
+        }
+        if (ipRateWindows.size >= 4096) {
+          const oldest = ipRateWindows.keys().next().value;
+          if (oldest !== undefined) ipRateWindows.delete(oldest);
+        }
+      }
+      rec = { count: 1, windowStart: now };
+      ipRateWindows.set(ip, rec);
+      return { limited: false };
+    }
+    rec.count += 1;
+    if (rec.count > ipRateMaxRequests) {
+      const remainingMs = Math.max(1000, ipRateWindowMs - (now - rec.windowStart));
+      return { limited: true, retryAfterSec: Math.ceil(remainingMs / 1000) };
+    }
+    return { limited: false };
+  };
 
   const isAuthBlocked = (ip: string, now = Date.now()): boolean => {
     const rec = authFailures.get(ip);
@@ -335,6 +402,7 @@ export async function startBridge(
   ) => {
     if (!host.streams.delete(stream.streamId)) return;
     stream.finished = true;
+    releaseStreamIp(stream);
     cleanupStreamUpload(host, stream, false);
     if (stream.headerTimer) clearTimeout(stream.headerTimer);
     if (cancelUpstream) {
@@ -467,17 +535,55 @@ export async function startBridge(
       applyCorsAndNoStore(res, config.pwaOrigin);
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       res.statusCode = 200;
-      res.end(
-        JSON.stringify({
-          ok: true,
-          hostConnected: activeHost !== null && activeHost.ws.readyState === WebSocket.OPEN && !draining,
-        }),
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+
+    const remoteIp = resolveRemoteAddr(req);
+    const rate = checkIpRateLimit(remoteIp);
+    if (rate.limited) {
+      const closeAfter = !req.readableEnded && !req.destroyed;
+      log({ ev: "http_rate_limited", reason: "ip_rate_limit" });
+      sendJsonError(
+        res,
+        config.pwaOrigin,
+        429,
+        { error: "Rate limit exceeded", code: "rate_limited" },
+        { "Retry-After": String(rate.retryAfterSec), ...(closeAfter ? { Connection: "close" } : {}) },
+        closeAfter ? () => closeRequestAfterError(req, res) : undefined,
+      );
+      return;
+    }
+
+    const isPairingPost = req.method === "POST" && pathname === "/api/pair";
+    if (!isPairingPost && !hasPublicProxyAuth(req, pathname)) {
+      const closeAfter = !req.readableEnded && !req.destroyed;
+      sendJsonError(
+        res,
+        config.pwaOrigin,
+        401,
+        { error: "Unauthorized", code: "unauthorized" },
+        closeAfter ? { Connection: "close" } : undefined,
+        closeAfter ? () => closeRequestAfterError(req, res) : undefined,
       );
       return;
     }
 
     if (draining || !activeHost || activeHost.ws.readyState !== WebSocket.OPEN) {
       sendJsonError(res, config.pwaOrigin, 503, { error: "Mac host is offline", code: "mac_offline" });
+      return;
+    }
+
+    if (maxConcurrentStreamsPerIp > 0 && (streamsByIp.get(remoteIp) ?? 0) >= maxConcurrentStreamsPerIp) {
+      const closeAfter = !req.readableEnded && !req.destroyed;
+      sendJsonError(
+        res,
+        config.pwaOrigin,
+        429,
+        { error: "Too many concurrent streams from IP", code: "too_many_streams" },
+        { "Retry-After": "1", ...(closeAfter ? { Connection: "close" } : {}) },
+        closeAfter ? () => closeRequestAfterError(req, res) : undefined,
+      );
       return;
     }
 
@@ -525,7 +631,7 @@ export async function startBridge(
       method: req.method ?? "GET",
       path: req.url ?? "/",
       headers: filterRequestHeaders(req.headers),
-      remoteAddr: resolveRemoteAddr(req),
+      remoteAddr: remoteIp,
     });
     if (Buffer.byteLength(openPayload, "utf8") > config.maxFrameBytes) {
       const closeAfter = !req.readableEnded && !req.destroyed;
@@ -553,6 +659,8 @@ export async function startBridge(
       streamId,
       res,
       req,
+      remoteIp,
+      ipReleased: false,
       headersSent: false,
       finished: false,
       hasRequestBody,
@@ -570,6 +678,7 @@ export async function startBridge(
     };
 
     host.streams.set(streamId, stream);
+    streamsByIp.set(remoteIp, (streamsByIp.get(remoteIp) ?? 0) + 1);
 
     stream.headerTimer = setTimeout(() => {
       failStream(host, stream, 504, "upstream_timeout", "Upstream response timed out", true);
@@ -589,6 +698,7 @@ export async function startBridge(
     const onClientAbort = () => {
       if (!stream.finished && host.streams.has(streamId)) {
         stream.finished = true;
+        releaseStreamIp(stream);
         cleanupStreamUpload(host, stream, false);
         if (stream.headerTimer) clearTimeout(stream.headerTimer);
         host.streams.delete(streamId);
@@ -891,6 +1001,7 @@ export async function startBridge(
           }
           if (stream.res.writableEnded || stream.res.destroyed) {
             stream.finished = true;
+            releaseStreamIp(stream);
             session.streams.delete(stream.streamId);
             cleanupStreamUpload(session, stream, false);
             sendFrame(session.ws, { type: "req.cancel", streamId: stream.streamId });
@@ -900,6 +1011,7 @@ export async function startBridge(
           if (stream.res.writableLength + chunk.length > config.maxStreamBufferBytes) {
             log({ ev: "stream_error", status: 502, reason: "stream_buffer_overflow" });
             stream.finished = true;
+            releaseStreamIp(stream);
             session.streams.delete(stream.streamId);
             cleanupStreamUpload(session, stream, false);
             sendFrame(session.ws, { type: "req.cancel", streamId: stream.streamId });
@@ -912,6 +1024,7 @@ export async function startBridge(
           }
           if (frame.eof) {
             stream.finished = true;
+            releaseStreamIp(stream);
             session.streams.delete(stream.streamId);
             const uploadUnfinished = stream.hasRequestBody && !stream.uploadEofSent;
             cleanupStreamUpload(session, stream, uploadUnfinished);

@@ -12,6 +12,7 @@ import { EmailConnectForm, type EmailConnectRefusal } from "./EmailCard";
 import { EmailOutgoingRequestForm, EmailRequestSettled } from "./EmailRequestCard";
 import type { EmailConnectRequest, EmailOutgoingFields } from "../../shared/email";
 import { productName } from "@/lib/brand";
+import { isRemotePwaMode } from "@/lib/pwa-transport";
 import { VaultChoices } from "./VaultChoices";
 import { desktopStore } from "./keys/key-save";
 
@@ -54,9 +55,13 @@ export function SecretRequestCard({
   const endpoint = `/api/bots/${encodeURIComponent(botId)}/secret-cards/${encodeURIComponent(message.id)}`;
   const error = localError ?? secret.error;
   const custom = secret.target === CUSTOM_SECRET_TARGET;
-  // A page reached through a desktop paired to another computer: a key that computer keeps in its own encrypted store can
-  // only be typed there. Anything its server keeps, a custom secret or a provider key, is typed here like on any page.
-  const onlyOnHost = window.ogb?.remoteClient?.active === true && secret.target !== CUSTOM_SECRET_TARGET && desktopCredentialSlot(secret.target) !== null && !isProviderCredentialTarget(secret.target);
+  // Remote PWA disallows secret writes over the bridge; only Electron desktop remote clients can submit server-stored keys.
+  const onlyOnHost =
+    isRemotePwaMode() ||
+    (window.ogb?.remoteClient?.active === true &&
+      secret.target !== CUSTOM_SECRET_TARGET &&
+      desktopCredentialSlot(secret.target) !== null &&
+      !isProviderCredentialTarget(secret.target));
   const outcome = credentialResumeOutcome(secret);
   const provided = outcome === "provided";
   const declined = outcome === "dismissed";
