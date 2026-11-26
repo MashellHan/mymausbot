@@ -89,16 +89,13 @@ interface RuntimeOptions<Config> {
   driverKind: string;
   apiKey: string;
   apiUrl: string;
-  models: () => ModelCatalog;
-  prepareTurn?: (turn: SendTurnInput, signal: AbortSignal) => Promise<void> | undefined;
+  models: () => ModelCatalog; prepareTurn?: (turn: SendTurnInput, signal: AbortSignal) => Promise<void> | undefined;
   selectedReasoning?: (model: string, variant?: string) => boolean;
   requestBody(model: string, messages: OpenAIChatMessage[], stream: boolean, variant?: string, threadId?: string, selectedModel?: string): Record<string, unknown>;
   httpErrorLabel: string;
   /** A refusal this provider words itself: the sentence the person sees instead of the HTTP line, or undefined. */
   plainRefusal?: (status: number, body: string) => string | undefined;
-  missingKeyError: string;
-  unavailableReason: string;
-  timeoutMs: number;
+  missingKeyError: string; unavailableReason: string; timeoutMs: number;
   /** Ask a server on this machine or network for its models this often while a reply is pending, and stop the reply
    * when it misses LIVENESS_MISSES checks in a row: it crashed, froze or left the network. */
   livenessEveryMs?: number;
@@ -955,41 +952,23 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
     },
     adapter: {
       provider: options.driverKind,
-      capabilities: { ...(options.computerUse ? { computerMcp: options.tools !== false,
-        localComputerMcp: options.tools !== false,
+      capabilities: { ...(options.computerUse ? { computerMcp: options.tools !== false, localComputerMcp: options.tools !== false,
         browserMcp: options.tools !== false, nativeImageInput: true, images: true } : {}),
         ...(options.modelVariants ? { modelVariants: true } : {}), sessionModelSwitch: "in-session", customMcp: options.tools !== false, agentsMcp: options.tools !== false, composioMcp: options.tools !== false,
-        dataMcp: options.tools !== false,
-        emailMcp: options.tools !== false,
-        deviceMcp: options.tools !== false,
-        queueing: true,
-        ...(options.tools !== false ? { askTool: { kind: "native" as const, name: ASK_USER_TOOL } } : {}),
-        guestTurns: "confined" },
+        dataMcp: options.tools !== false, emailMcp: options.tools !== false, deviceMcp: options.tools !== false,
+        queueing: true, ...(options.tools !== false ? { askTool: { kind: "native" as const, name: ASK_USER_TOOL } } : {}), guestTurns: "confined" },
       sendTurn,
       interruptTurn: async (threadId, turnId) => {
         const turn = active.get(threadId);
         if (!turn || (turnId && turn.turnId !== turnId)) return;
-        turn.abort.abort();
-        await turn.done;
+        turn.abort.abort(); await turn.done;
       },
       respondToRequest: async (threadId, requestId, decision) =>
         active.get(threadId)?.approval.answer(requestId, decision.behavior, decision.message, decision.always) ?? "unavailable",
-      steer: async (threadId, text) => {
-        const running = active.get(threadId);
-        if (!running || running.ending) return "refused";
-        running.asides.push(text);
-        return "steered";
-      },
+      steer: async (threadId, text) => { const r = active.get(threadId); if (!r || r.ending) return "refused"; r.asides.push(text); return "steered"; },
       hasSession: (threadId) => active.has(threadId),
-      stopAll: async () => {
-        const turns = [...active.values()];
-        for (const turn of turns) turn.abort.abort();
-        await Promise.all(turns.map((turn) => turn.done));
-      },
-      onEvent: (listener) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
+      stopAll: async () => { const turns = [...active.values()]; for (const turn of turns) turn.abort.abort(); await Promise.all(turns.map((turn) => turn.done)); },
+      onEvent: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
     },
     generateText: async (prompt, { signal, onUsage, model: named } = {}) => {
       const model = named ?? options.generateModel?.() ?? options.models().default;
