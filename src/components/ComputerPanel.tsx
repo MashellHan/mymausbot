@@ -19,7 +19,7 @@ import { listenLiveFrames } from "@/lib/live-events";
 import { CloudScreenPreview } from "./CloudScreenPreview"; import { ResetCloudComputerButton } from "./ResetCloudComputerButton"; import { CloudComputerRecoveryRow } from "./CloudComputerRecovery";
 import { isActiveTurnRefusal, isRemoteScreenshotContention } from "@/lib/remote-desktop";
 import { SimpleVpsChoices } from "./SimpleVpsChoices";
-import { placeManagedBy, worksOnChoices, worksOnSelected } from "./WorksOnGrid";
+import { placeManagedBy, worksOnChoices, worksOnHintKey, worksOnSelected } from "./WorksOnGrid";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { RoutinesSection } from "./bot-settings/RoutinesSection";
 import { BotOverviewIntro } from "./BotOverviewIntro";
@@ -1690,7 +1690,7 @@ export function ComputerPanel({ bot: profileBot, onOpenVmWorkspace, panelWidth: 
             <ChevronDown size={16} className={cn("shrink-0 text-ink-secondary transition-transform", worksExpanded && "rotate-180")} aria-hidden="true" />
           </button>
           <div id="bot-overview-works-content" hidden={!worksExpanded}>{worksExpanded && <>
-        {advanced ? renderAdvancedWorks({ cloudHome: state.config?.cloudHome, options: placeOptions, selectPlace, livePin,
+        {advanced ? renderAdvancedWorks({ hintKey: worksOnHintKey(state.config, capabilities), options: placeOptions, selectPlace, livePin,
           view: worksOnView, placeActionButton, cloudSelected: profileBot.computer === "cloud", cloudBackend,
           onBackend: (backend) => updateComputerSelection({ cloudBackend: backend }) }) : (
           <div className="mt-4 rounded-xl bg-card p-4" data-testid="where-works">

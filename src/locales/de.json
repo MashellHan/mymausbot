@@ -4148,5 +4148,8 @@
   "server.reach.place.myCloud": "My Cloud",
   "server.reach.place.thisCloud": "dieser Cloud",
   "server.reach.place.cloudDesktop": "dem Cloud-Desktop",
-  "server.teammates.noLongerWaiting": "{who} wartet nicht mehr auf dich"
+  "server.teammates.noLongerWaiting": "{who} wartet nicht mehr auf dich",
+  "decider.provider.line": "Oder nutze für diese kleinen Modelle einen Schlüssel eines anderen Anbieters.",
+  "computer.worksOnHintServer": "Wähle, wo dieser Bot arbeitet. Einen Computer, den du aus der {app}-Desktop-App teilst, wählst du nicht hier: Bitte einfach den Bot, ihn zu nutzen.",
+  "settings.ai.otherServicesLine": "Schlüssel für Stimmen, Computer, Apps und Helfer, zusätzlich zu deinen Hauptmodellen."
 }
