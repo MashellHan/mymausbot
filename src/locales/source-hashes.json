@@ -59777,7 +59777,8 @@
       "botAccess.cloud.serverPickHint": "98e8f8043da8f8c8fcc0887435867473afcc491d4fddac669c462e8ef67e8ce0",
       "botAccess.cloud.serverPickDefault": "04f8c8609c5369828f915006cf06a5d95398472014945bcab2d7a2ff000c0e7d",
       "botAccess.cloud.serverPickNone": "fbc0134f1d438a0781af95743d45cede059746ae89decf3e106d458f4257717f",
-      "botAccess.cloud.serverPickOther": "15524e6a8d1c4bd7ec0549a8f3c866770872e76caa5428ff38925306276dca7b"
+      "botAccess.cloud.serverPickOther": "15524e6a8d1c4bd7ec0549a8f3c866770872e76caa5428ff38925306276dca7b",
+      "chat.notice.backupAlreadyRan": "870e82d6520f23fcb808dacfd77a8d88833d56d6ba428b1147e0b9f1a5a4ee34"
     },
     "ru": {
       "about.connectedTo": "7eba311e0e3c7146cf09856dae9934abad7b60e15b5a60679db755aab63541f9",
