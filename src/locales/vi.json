@@ -706,6 +706,7 @@
   "browser.control.yours": "Bạn đang sử dụng trình duyệt",
   "browser.control.yoursHint": "Các công cụ trình duyệt của {name} bị tạm dừng khi bạn sử dụng. Quyền điều khiển sẽ quay lại với {name} sau vài giây không có hoạt động nhập.",
   "browser.input.tooSlow": "Đã dừng thao tác nhập vào trình duyệt vì trình duyệt không theo kịp (có thể bị kẹt hoặc kết nối bị chậm). Hãy kết nối lại chế độ xem trước khi nhập lại. Nếu vẫn bị kẹt, hãy khởi động lại trình duyệt.",
+  "browser.input.notReaching": "Các lần nhấp và nội dung bạn gõ không đến được trang.",
   "browser.live.botBusy": "{name} đang sử dụng trình duyệt này. Chế độ xem trực tiếp sẽ mở khi trình duyệt rảnh…",
   "browser.noEngine": "Trình duyệt không khả dụng ở đây.",
   "browser.panel.engineNotInstalled": "Trình duyệt chưa được cài đặt",
