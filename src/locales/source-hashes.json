@@ -59799,7 +59799,11 @@
       "settings.vault.bitwardenSecrets.guide": "a9cde30c280181181cdcc7f07ecf5bac7e8c50399b4ad010555cc091e55a69fb",
       "settings.vault.bitwardenSecrets.token": "9a911b08feb9d2928240dda42c6efa8794ab3457f8b59a7cfb5187e817f948e3",
       "settings.vault.bitwardenSecrets.note": "cb98c043ae54f73b55e675c6791759f93421cc65d2a3080b12d8af988997ef13",
-      "settings.vault.bitwardenSecrets.error": "393d6d3cb4d0776647976c6288ff1dac2198db77e9eb2613b6c389bca082694f"
+      "settings.vault.bitwardenSecrets.error": "393d6d3cb4d0776647976c6288ff1dac2198db77e9eb2613b6c389bca082694f",
+      "cloudAccount.savedStuck": "5efbddc0309e897b7087a02f66746c693393b24cad3dac3768c44bd3ecdeda72",
+      "cloudAccount.savedStuckKeychain": "249c72d715f2ad1758046fbf0cd6e05974494ad9fc2608b74e6a0cbf5b8a9369",
+      "cloudAccount.savedStuckKeyring": "f6d3b9e6e946fcc98ce0b64183ae840c5a8a964bf4f5e2c0056a7be48d993e30",
+      "homeScreen.offlineWait": "7de832bcc189e9fa19b386a0a67d938840772d5500985c835fa1db1afee4d49f"
     },
     "ru": {
       "about.connectedTo": "7eba311e0e3c7146cf09856dae9934abad7b60e15b5a60679db755aab63541f9",
