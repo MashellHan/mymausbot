@@ -74,9 +74,18 @@ describe("sign-in codes through the server's own mail server", () => {
   });
 
   it.each(["success", "failure"])("keeps a resent code after an older delivery ends in %s", async (outcome) => {
+    const deferred = () => {
+      let resolve!: () => void;
+      let reject!: (err: unknown) => void;
+      const promise = new Promise<void>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    };
     let clock = 1_000_000;
-    const started = Promise.withResolvers<void>();
-    const delivery = Promise.withResolvers<void>();
+    const started = deferred();
+    const delivery = deferred();
     const box = mailbox();
     const mail = createSignInMail({ url: URL_, now: () => clock, transport: {
       sendMail: async (message) => {
