@@ -597,7 +597,22 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
     });
   }
 
+  async function getRoster(): Promise<LocalAgentTeamsResponse> {
+    try {
+      const responses = await Promise.allSettled([
+        run(["--session", "default", "workspace", "list"]),
+        run(["--session", "default", "agent", "list"]),
+      ]);
+      if (responses.some((response) => response.status === "rejected")) throw new Error("Herdr read failed");
+      const [workspaceOutput, agentOutput] = responses.map((response) => (response as PromiseFulfilledResult<string>).value);
+      return buildFastRoster(herdrRows(workspaceOutput, "workspaces"), herdrRows(agentOutput, "agents"), now());
+    } catch {
+      return { status: "unavailable", updatedAt: null, teamCount: null, teams: [] };
+    }
+  }
+
   return {
+    getRoster,
     get(fresh = false): Promise<LocalAgentTeamsResponse> {
       if (!fresh && pending) {
         if (fastRosterTimeoutMs > 0) {
