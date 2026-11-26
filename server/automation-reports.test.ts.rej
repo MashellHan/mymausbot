@@ -1,0 +1,9 @@
+diff a/server/automation-reports.test.ts b/server/automation-reports.test.ts	(rejected hunks)
+@@ -107,6 +107,7 @@ function fixture(options: { threadLanguage?: (threadId: string) => string | unde
+     wrote: (_bot: BotRecord, threadId) => wrote.push(threadId),
+     notify: (kind, _bot, threadId, detail) => notified.push({ kind, threadId, detail }),
+     ...(options.threadLanguage ? { threadLanguage: options.threadLanguage } : {}),
++    ...(options.notes ? { notes: { has: (runId: string) => options.notes!.has(runId), take: (runId: string) => { const note = options.notes!.get(runId) ?? null; options.notes!.delete(runId); return note; } } } : {}),
+   });
+   const reports = create();
+   let serial = 0;
