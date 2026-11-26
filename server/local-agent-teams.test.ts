@@ -1422,4 +1422,31 @@ describe("local Agent Team provider", () => {
     expect(swappedMember.taskHint).toBeNull();
     expect(swappedMember.tokenUsage7d).toEqual({ coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null } });
   });
+
+  it("getRoster() returns live team and occupant membership from Herdr without scanning transcripts or process-info", async () => {
+    const commands: string[] = [];
+    const provider = createLocalAgentTeamsProvider({
+      now: () => 2000,
+      run: async (args) => {
+        commands.push(args.join(" "));
+        if (args.at(-2) === "workspace") return workspaces;
+        return JSON.stringify({
+          result: {
+            agents: [{
+              pane_id: "w6:p1", workspace_id: "w6", name: "mausbot-lead", agent: "codex", agent_status: "working",
+              agent_session: { kind: "id", source: "herdr:codex", agent: "codex", value: SESSION },
+              cwd: "/private/workspace", terminal_id: "t-roster-1",
+            }],
+          },
+        });
+      },
+    });
+    const roster = await provider.getRoster();
+    expect(commands.sort()).toEqual(["--session default agent list", "--session default workspace list"]);
+    expect(roster.status).toBe("ready");
+    expect(roster.teams).toHaveLength(1);
+    expect(roster.teams[0]!.id).toBe("w6");
+    expect(roster.teams[0]!.agents[0]!.id).toBe("w6:p1");
+    expect(roster.teams[0]!.agents[0]!.occupantId).toMatch(/^o[0-9a-f]{16}$/);
+  });
 });

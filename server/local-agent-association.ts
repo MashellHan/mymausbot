@@ -144,7 +144,13 @@ async function savedTeamSource(agents: Record<string, unknown>[], teamId: string
   return { source: candidates.length === 1 ? candidates[0]! : null, error: error || candidates.length > 1 };
 }
 
-export async function teamSource(agents: Record<string, unknown>[], teamId: string, home: string, read: DocumentReader = readDocument): Promise<{ source: TeamSource | null; error: boolean }> {
+export async function teamSource(
+  agents: Record<string, unknown>[],
+  teamId: string,
+  home: string,
+  read: DocumentReader = readDocument,
+  options: { includeWorktrees?: boolean } = {},
+): Promise<{ source: TeamSource | null; error: boolean }> {
   const counts = new Map<string, number>();
   for (const agent of agents) {
     const cwd = agent.cwd;
@@ -168,8 +174,14 @@ export async function teamSource(agents: Record<string, unknown>[], teamId: stri
   }
   candidates.sort((a, b) => b.count - a.count);
   const source = candidates[0] && candidates[0].count > (candidates[1]?.count ?? 0) ? candidates[0] : null;
-  if (source) return { source: { ...source,
-    worktrees: await registeredWorktrees(source.root, [...counts.keys()].filter((cwd) => cwd !== source.root)) }, error };
+  if (source) {
+    return {
+      source: options.includeWorktrees === false
+        ? source
+        : { ...source, worktrees: await registeredWorktrees(source.root, [...counts.keys()].filter((cwd) => cwd !== source.root)) },
+      error,
+    };
+  }
   const saved = await savedTeamSource(agents, teamId, home, read);
   return { source: saved.source, error: error || saved.error };
 }

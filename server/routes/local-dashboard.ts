@@ -11,7 +11,11 @@ import { createLocalUsageProvider } from "../local-usage.ts";
 import { PASS, type RouteHandler } from "./table.ts";
 
 export interface LocalDashboardProviders {
-  agents: { get(fresh?: boolean): Promise<LocalAgentTeamsResponse> };
+  agents: {
+    get(fresh?: boolean): Promise<LocalAgentTeamsResponse>;
+    /** Fast live roster check (Herdr workspace/agent list only) for verifying current team/occupant membership without rescanning transcripts or SQLite. */
+    getRoster?(): Promise<LocalAgentTeamsResponse>;
+  };
   activity: { get(agentId: string, history?: LocalAgentActivityHistoryRequest): Promise<LocalAgentActivityResponse> };
   configuration: {
     getAgent(agentId: string): Promise<LocalAgentConfigurationResponse>;
