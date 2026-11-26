@@ -32,6 +32,7 @@ import {
 } from "@/lib/composer-attachments";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
+import { revealBridge, revealHostPath, revealProblemText, REVEALABLE_PATH } from "@/lib/reveal-host-path";
 import { downloadRemoteUrl, isRelayMediaPath, isRemotePwaMode, remoteFetch } from "@/lib/pwa-config";
 import { useRemoteMediaUrl } from "@/lib/use-remote-media";
 import { serverErrorText } from "@/lib/server-error";
@@ -320,12 +321,6 @@ export function MessageFolderFiles({ folderPath, listing, message }: {
   );
 }
 
-const REVEALABLE_PATH = /^(?:\/(?!\/)|[a-zA-Z]:[\\/])/;
-function revealBridge(): NonNullable<Window["ogb"]>["revealInFolder"] {
-  const ogb = typeof window === "undefined" ? undefined : window.ogb;
-  return ogb?.remoteClient?.active ? undefined : ogb?.revealInFolder;
-}
-
 export function OutsideWorkspaceFile({ filePath }: { filePath: string }) {
   const [problem, setProblem] = useState("");
   const reveal = revealBridge();
@@ -338,13 +333,9 @@ export function OutsideWorkspaceFile({ filePath }: { filePath: string }) {
   }
   const show = async () => {
     setProblem("");
-    try {
-      const result = await reveal(filePath);
-      if (result === "missing") setProblem(t("attach.revealMissing"));
-      else if (result !== "shown") setProblem(t("attach.revealFailed"));
-    } catch {
-      setProblem(t("attach.revealFailed"));
-    }
+    const result = await revealHostPath(filePath);
+    const text = revealProblemText(result);
+    if (text) setProblem(text);
   };
   return (
     <>
