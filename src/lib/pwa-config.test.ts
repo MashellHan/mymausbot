@@ -684,6 +684,109 @@ describe("pwa pairing lifecycle, IndexedDB persistence, and authenticated fetch"
     expect(sentPairRequestId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });
 
+  it("omits localStorage backup when IndexedDB succeeds, deletes stale backup on IDB read, and purges all stores on clearPwaAuth", async () => {
+    const lsStore = new Map<string, string>([
+      [
+        "omb.pwa.auth.v1",
+        JSON.stringify({
+          ownerKey: "https://relay.mxhan.com::env-stale::ses-stale",
+          relayUrl: "https://relay.mxhan.com",
+          token: "tok-stale",
+          deviceId: "dev-stale",
+          environmentId: "env-stale",
+          sessionId: "ses-stale",
+          serverName: "Mac",
+          scopes: ["client"],
+          pairedAt: 1700000000000,
+        }),
+      ],
+    ]);
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => lsStore.get(k) ?? null,
+      setItem: (k: string, v: string) => { lsStore.set(k, v); },
+      removeItem: (k: string) => { lsStore.delete(k); },
+    });
+
+    const idb = createMemoryIdb();
+    vi.stubGlobal("indexedDB", idb);
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/pair")) {
+        return new Response(JSON.stringify({ token: "tok-idb-only", device: { id: "dev-1" }, serverName: "Mac" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/auth/session")) {
+        return new Response(
+          JSON.stringify({ kind: "session", id: "ses-1", environmentId: "env-1", scopes: ["client"] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ environmentId: "env-1", label: "Mac" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const paired = await activatePwaPairing(
+      { relayUrl: "https://relay.mxhan.com", credential: `omb_pair_${"z".repeat(43)}` },
+      { fetchImpl: fetchMock },
+    );
+    expect(paired.ok).toBe(true);
+    expect(lsStore.has("omb.pwa.auth.v1")).toBe(false);
+
+    // Populate offline cache stores before clearing auth.
+    const {
+      OMB_PWA_OUTBOX_LEASES_STORE,
+      OMB_PWA_OUTBOX_STORE,
+      OMB_PWA_PREFS_STORE,
+      OMB_PWA_SNAPSHOT_STORE,
+    } = await import("./pwa-config");
+    const { setBootPwaCache, peekBootPwaCache, setActivePwaPrefs, getActivePwaPrefs } = await import("./pwa-cache");
+    const db = (await openPwaDb())!;
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(
+        [OMB_PWA_SNAPSHOT_STORE, OMB_PWA_OUTBOX_STORE, OMB_PWA_OUTBOX_LEASES_STORE, OMB_PWA_PREFS_STORE],
+        "readwrite",
+      );
+      tx.objectStore(OMB_PWA_SNAPSHOT_STORE).put({ ownerKey: "k", savedAt: 1, bots: [], groups: [], sections: [], config: null }, "k");
+      tx.objectStore(OMB_PWA_OUTBOX_STORE).put({ sendId: "s1", ownerKey: "k" }, "s1");
+      tx.objectStore(OMB_PWA_OUTBOX_LEASES_STORE).put({ leasedUntil: 999 }, "k");
+      tx.objectStore(OMB_PWA_PREFS_STORE).put({ ownerKey: "k", openPinnedOnLaunch: true, updatedAt: 1 }, "k");
+      tx.oncomplete = () => resolve();
+    });
+    db.close();
+    setBootPwaCache({ ownerKey: "k", snapshot: { ownerKey: "k", savedAt: 1, bots: [], groups: [], sections: [], config: null }, prefs: null, queryBotId: null });
+    setActivePwaPrefs({ ownerKey: "k", openPinnedOnLaunch: true, updatedAt: 1 });
+
+    // Reading valid IDB auth also deletes any lingering localStorage backup.
+    lsStore.set("omb.pwa.auth.v1", "{\"stale\":true}");
+    resetPwaConfigForTests();
+    const restored = await initPwaAuth();
+    expect(restored?.token).toBe("tok-idb-only");
+    expect(lsStore.has("omb.pwa.auth.v1")).toBe(false);
+
+    await clearPwaAuth();
+    expect(peekBootPwaCache()).toBeNull();
+    expect(getActivePwaPrefs()).toBeNull();
+
+    const dbAfter = (await openPwaDb())!;
+    const checkEmpty = async (storeName: string, key: string) =>
+      await new Promise<unknown>((resolve) => {
+        const tx = dbAfter.transaction(storeName, "readonly");
+        const req = tx.objectStore(storeName).get(key);
+        req.onsuccess = () => resolve(req.result);
+      });
+    expect(await checkEmpty(OMB_PWA_AUTH_STORE, OMB_PWA_AUTH_ACTIVE_KEY)).toBeUndefined();
+    expect(await checkEmpty(OMB_PWA_SNAPSHOT_STORE, "k")).toBeUndefined();
+    expect(await checkEmpty(OMB_PWA_OUTBOX_STORE, "s1")).toBeUndefined();
+    expect(await checkEmpty(OMB_PWA_OUTBOX_LEASES_STORE, "k")).toBeUndefined();
+    expect(await checkEmpty(OMB_PWA_PREFS_STORE, "k")).toBeUndefined();
+    expect(await checkEmpty(OMB_PWA_DPOP_STORE, paired.ok ? paired.auth.ownerKey : "k")).toBeUndefined();
+    dbAfter.close();
+  });
+
   it("sends dpopPublicKey on /api/pair, signs verification and remoteFetch calls, and preserves DPoP across reload", async () => {
     const idb = createMemoryIdb();
     const calls: Array<{ url: string; init?: RequestInit }> = [];
@@ -992,8 +1095,12 @@ describe("pwa pairing lifecycle, IndexedDB persistence, and authenticated fetch"
       { fetchImpl: fetchMock },
     );
     expect(paired.ok).toBe(true);
-    expect(lsStore.has("omb.pwa.auth.v1")).toBe(true);
-    expect(JSON.parse(lsStore.get("omb.pwa.auth.v1")!).dpopBound).toBe(true);
+    expect(lsStore.has("omb.pwa.auth.v1")).toBe(false);
+
+    // Explicitly populate legacy localStorage backup for a dpopBound session when IndexedDB has lost dpop_keys.
+    if (paired.ok) {
+      lsStore.set("omb.pwa.auth.v1", JSON.stringify(paired.auth));
+    }
 
     // Simulate iOS evicting IndexedDB while localStorage backup survives.
     resetPwaConfigForTests();
