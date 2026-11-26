@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { z } from "zod";
 
 import { HELD_SECRET_MASK } from "../shared/redact.ts";
-import { LOGIN_FIELD_MAX, LOGIN_HOSTS_MAX, loginMatchesHost, loginPlace, loginSite, loginUsableBy, type BitwardenCredentials, type LoginBots, type LoginPlace, type LoginSummary } from "../shared/logins.ts";
+import { LOGIN_FIELD_MAX, LOGIN_HOSTS_MAX, loginMatchesHost, loginPlace, loginSite, loginUsableBy, type BitwardenCredentials, type BitwardenSecretsCredentials, type LoginBots, type LoginPlace, type LoginSummary } from "../shared/logins.ts";
 import { VAULT_SECRET_NAME_MAX, vaultNameKey, type VaultSecret } from "../shared/vault.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { appSessionCredentials, sessionCredentialRefusal } from "./app-session-credentials.ts";
@@ -75,7 +75,7 @@ const fileSchema = z.object({
   onePassword: z.object({ token: z.string().min(1), connectedAt: z.number() }).optional(),
   /** Bitwarden's server address, API key and master password, read only by its command line tool's environment. */
   bitwarden: z.object({ serverUrl: z.string().min(1), clientId: z.string().min(1), clientSecret: z.string().min(1), password: z.string().min(1), connectedAt: z.number() }).optional(),
-  /** Bitwarden Secrets Manager's server address and a machine account's access token, preserved across rollbacks. */
+  /** Bitwarden Secrets Manager's server address and a machine account's access token. */
   bitwardenSecrets: z.object({ serverUrl: z.string().min(1), accessToken: z.string().min(1), connectedAt: z.number() }).optional(),
   /** Vault id → the bots that may use its logins; a vault not named here is for every bot. Kept across reconnects. */
   onePasswordGrants: z.record(z.string(), botsSchema).optional(),
@@ -517,6 +517,16 @@ export class VaultStore {
   setBitwardenCredentials(credentials: BitwardenCredentials | null): void {
     const { bitwarden: _previous, ...rest } = this.read();
     this.write(credentials ? { ...rest, bitwarden: { ...credentials, connectedAt: this.now() } } : rest);
+  }
+
+  bitwardenSecretsCredentials(): BitwardenSecretsCredentials | null {
+    const saved = this.read().bitwardenSecrets;
+    return saved ? { serverUrl: saved.serverUrl, accessToken: saved.accessToken } : null;
+  }
+
+  setBitwardenSecretsCredentials(credentials: BitwardenSecretsCredentials | null): void {
+    const { bitwardenSecrets: _previous, ...rest } = this.read();
+    this.write(credentials ? { ...rest, bitwardenSecrets: { ...credentials, connectedAt: this.now() } } : rest);
   }
 
   onePasswordGrants(): Record<string, LoginBots> {
