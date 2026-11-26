@@ -7,6 +7,7 @@ import type { InstanceConfigMap } from "./contracts.ts";
 import { resolveClaudeConfigDir } from "./drivers/claude.ts";
 import { codexHome } from "./drivers/codex-identity.ts";
 import { antigravityPlanUsage } from "./drivers/antigravity-usage-limits.ts";
+import { createProxiedFetch } from "./drivers/antigravity-account.ts";
 import { harnessHome, sealedFixture } from "./env-path.ts";
 import { openCodeAuthText } from "./plan-usage-opencode-auth.ts";
 import { appLoginKeychainForbidden } from "./app-session-credentials.ts";
@@ -908,7 +909,14 @@ function okRow(account: PlanAccount, windows: PlanWindows): PlanProviderRow {
 
 async function fetchProvider(account: PlanAccount, deps: PlanUsageDeps): Promise<PlanProviderRow | null> { // null: OpenCode, in every fleet, with no key of its own
   let credential: PlanCredential;
-  if (account.driver === "antigravity") { const windows = await antigravityPlanUsage(account.id, deps); return windows && okRow(account, windows); } // null: no sign-in, or Google gave nothing
+  if (account.driver === "antigravity") {
+    const proxyUrl = account.environment?.HTTPS_PROXY || account.environment?.HTTP_PROXY;
+    const effectiveDeps = proxyUrl && deps.fetch === fetch
+      ? { ...deps, fetch: createProxiedFetch(proxyUrl) as unknown as PlanFetch, proxyUrl }
+      : { ...deps, proxyUrl };
+    const windows = await antigravityPlanUsage(account.id, effectiveDeps);
+    return windows && okRow(account, windows);
+  } // null: no sign-in, or Google gave nothing
   try {
     credential = await deps.credentials.read(account);
   } catch {
