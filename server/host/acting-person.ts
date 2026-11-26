@@ -24,7 +24,30 @@ const MAX_ENTRIES = 20_000;
 
 type Card = { answered?: string; answeredText?: string; dismissed?: boolean; autoApplied?: boolean; answeredBy?: { kind: string; person?: string } };
 export type ActingLine = {
-  id: string; at: number; role: string; peerAsk?: unknown; steered?: boolean; relayed?: boolean; queueId?: string; sender?: { id?: string }; card?: Card;
+  id: string;
+  at: number;
+  role: string;
+  kind?: string;
+  peerAsk?: unknown;
+  steered?: boolean;
+  relayed?: boolean;
+  relay?: unknown;
+  inbox?: unknown;
+  automated?: boolean;
+  automation?: unknown;
+  fromApp?: unknown;
+  from?: unknown;
+  via?: unknown;
+  webhookPost?: unknown;
+  roomRequest?: unknown;
+  threadPost?: unknown;
+  peerPost?: unknown;
+  reaction?: unknown;
+  setupRequest?: unknown;
+  aside?: unknown;
+  queueId?: string;
+  sender?: { id?: string };
+  card?: Card;
 };
 /** A one-on-one conversation's latest request (index.ts directRequestOwners). */
 export type DirectRequest = {
@@ -79,15 +102,59 @@ export class HandedPeople {
   }
 }
 
-/** A person's own line: theirs as the server recorded it, never a bot's relayed one. */
+const hasUntrustedProvenance = (line: ActingLine): boolean =>
+  Boolean(
+    line.peerAsk
+    || line.relayed
+    || line.relay
+    || line.inbox
+    || line.aside
+    || line.automated
+    || line.automation
+    || line.fromApp
+    || line.from
+    || line.via
+    || line.webhookPost
+    || line.roomRequest
+    || line.threadPost
+    || line.peerPost
+    || line.reaction
+    || line.setupRequest,
+  );
+
+/** A person's own line: theirs as the server recorded it, never a bot's, relayed, or synthetic one. */
 const linePerson = (line: ActingLine | undefined): string | undefined =>
-  line?.role === "user" && !line.peerAsk && line.sender?.id && PERSON.test(line.sender.id) ? line.sender.id : undefined;
+  line?.role === "user"
+    && (line.kind === undefined || line.kind === "text")
+    && !hasUntrustedProvenance(line)
+    && line.sender?.id
+    && PERSON.test(line.sender.id)
+    ? line.sender.id
+    : undefined;
 
 /** No one else's words joined the work since `since`: no line of another person's (and no line sent into a running turn
- * by someone the server can't name), and no answer of theirs to a card. */
+ * or from a synthetic/relayed/app source), and no answer of theirs to a card. */
 export function onlyTheirs(thread: readonly ActingLine[], person: string, since: number): boolean {
   return !thread.some((line) => line.at >= since && (
-    (line.role === "user" && !line.peerAsk && (line.sender?.id ? line.sender.id !== person : line.steered === true || line.relayed === true))
+    (line.role === "user" && !line.peerAsk && (
+      line.sender?.id
+        ? line.sender.id !== person
+        : line.steered === true
+          || line.relayed === true
+          || line.relay !== undefined
+          || line.inbox !== undefined
+          || line.automated === true
+          || line.automation !== undefined
+          || line.fromApp !== undefined
+          || line.via !== undefined
+          || line.webhookPost === true
+          || line.roomRequest !== undefined
+          || line.threadPost !== undefined
+          || line.peerPost !== undefined
+          || line.reaction !== undefined
+          || line.setupRequest === true
+          || line.aside === true
+    ))
     || (answeredByPerson(line.card) && line.card!.answeredBy?.kind === "session" && line.card!.answeredBy.person !== person)));
 }
 
@@ -127,6 +194,7 @@ export function createActingPeople(deps: ActingPeopleDeps) {
     const request = deps.direct(threadId);
     const turn = generation ?? request?.generation;
     if (!request || !turn || request.stopped || !request.generations.has(turn) || request.automation !== undefined) return null;
+    if (request.origin !== undefined && request.origin.kind !== "user") return null;
     if (request.messageId) {
       const line = thread.find((message) => message.id === request.messageId);
       const person = linePerson(line);
