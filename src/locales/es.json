@@ -914,6 +914,7 @@
   "browser.control.yours": "Estás usando el navegador",
   "browser.control.yoursHint": "Las herramientas de navegador de {name} están en pausa mientras lo usas. El control vuelve a {name} tras unos segundos sin actividad.",
   "browser.input.tooSlow": "La entrada al navegador se detuvo porque el navegador no da abasto (puede estar bloqueado o la conexión puede ser lenta). Vuelve a conectar la vista antes de seguir escribiendo. Si sigue bloqueado, reinicia el navegador.",
+  "browser.input.notReaching": "Tus clics y lo que escribes no llegan a la página.",
   "browser.live.botBusy": "{name} está usando este navegador. La vista en vivo se abrirá cuando esté libre…",
   "browser.noEngine": "El navegador no está disponible aquí.",
   "browser.panel.engineNotInstalled": "El navegador no está instalado",

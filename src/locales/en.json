@@ -1723,6 +1723,7 @@
   "browser.extensions.takeControl": "Take control to open an extension.",
   "browser.extensions.title": "Extensions",
   "browser.input.tooSlow": "Browser input stopped because the browser is not keeping up with it (it may be stuck, or the connection may be slow). Reconnect the view before typing again. If it stays stuck, restart the browser.",
+  "browser.input.notReaching": "Your clicks and typing are not reaching the page.",
   "browser.live.botBusy": "{name} is using this browser. The live view opens when it’s free…",
   "browser.noEngine": "The browser isn't available here.",
   "browser.notInstalled": "The browser isn't installed here yet. Turn on the browser switches in Settings → Desktops & browser and in the bot's Access settings, then open Bot's screen → Browser to install it. Or run `openmausbot browser install` where the app runs.",

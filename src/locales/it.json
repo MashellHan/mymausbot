@@ -1156,6 +1156,7 @@
   "browser.control.yours": "Stai usando il browser",
   "browser.control.yoursHint": "Gli strumenti del browser di {name} sono in pausa mentre lo usi. Il controllo torna a {name} dopo qualche secondo di inattività.",
   "browser.input.tooSlow": "I comandi al browser si sono fermati perché il browser non sta al passo (può essere bloccato, oppure la connessione è lenta). Riconnetti la vista prima di scrivere di nuovo. Se resta bloccato, riavvia il browser.",
+  "browser.input.notReaching": "I tuoi clic e ciò che scrivi non arrivano alla pagina.",
   "browser.live.botBusy": "{name} sta usando questo browser. La vista dal vivo si apre quando è libero…",
   "browser.noEngine": "Il browser non è disponibile qui.",
   "browser.panel.address": "Indirizzo del browser",

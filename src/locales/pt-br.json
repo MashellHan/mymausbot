@@ -1671,6 +1671,7 @@
   "browser.extensions.takeControl": "Assuma o controle para abrir uma extensão.",
   "browser.extensions.title": "Extensões",
   "browser.input.tooSlow": "O envio de comandos ao navegador parou porque ele não está conseguindo processá-los (pode estar travado ou a conexão pode estar lenta). Reconecte a visualização antes de digitar novamente. Se continuar travado, reinicie o navegador.",
+  "browser.input.notReaching": "Seus cliques e o que você digita não estão chegando à página.",
   "browser.live.botBusy": "{name} está usando este navegador. A visualização ao vivo abre quando o navegador estiver livre…",
   "browser.noEngine": "O navegador não está disponível aqui.",
   "browser.notInstalled": "O navegador ainda não está instalado aqui. Ative as opções do navegador em Configurações → Desktops e navegador e nas configurações de Acesso do bot, depois abra Tela do bot → Navegador para instalá-lo. Ou execute `openmausbot browser install` onde o app roda.",
