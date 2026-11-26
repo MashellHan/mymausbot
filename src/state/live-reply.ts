@@ -8,6 +8,7 @@ import type { RuntimeEvent } from "../../shared/runtime-events";
 import { isClientCancellation } from "../../shared/client-cancel";
 import { redactSecretsInText } from "../../shared/redact";
 import { isPureLeakedSystemHarnessMessage } from "../../shared/system-message-guard";
+import type { ConcurrentWorkerMeta, RuntimeEventWithIntake } from "@/lib/progressive-intake-ui";
 import type { Message } from "@/state/store";
 
 export interface LiveReplyItem {
@@ -15,6 +16,8 @@ export interface LiveReplyItem {
   /** The message id the server streamed it under; absent from a server older than item ids. */
   itemId?: string;
   turnId?: string;
+  replyToId?: string;
+  concurrentWorker?: ConcurrentWorkerMeta;
   /** A room reply: the member whose words these are. */
   botId?: string;
   text: string;
@@ -31,6 +34,11 @@ interface ThreadReplies {
   skipping: boolean;
 }
 
+interface TurnAnchorMeta {
+  replyToId?: string;
+  concurrentWorker?: ConcurrentWorkerMeta;
+}
+
 /** True around a reply still streaming in: its actions wait for it to finish. */
 export const StreamingReplyContext = createContext(false);
 
@@ -38,6 +46,7 @@ const LIVE_ID = "live:";
 const MAX_THREADS = 200;
 const MAX_SEEN_EVENTS = 4096;
 const MAX_STREAMED = 500;
+const MAX_ENDED_TURNS = 64;
 /** A backstop: a thread nobody has on screen settles nothing, and a turn's start already drops the turns before it. */
 const MAX_ITEMS = 32;
 const EMPTY: readonly LiveReplyItem[] = [];
@@ -45,6 +54,8 @@ const threads = new Map<string, ThreadReplies>();
 const listeners = new Map<string, Set<() => void>>();
 const seenEvents = new Set<string>();
 const streamed = new Set<string>();
+const turnMeta = new Map<string, Map<string, TurnAnchorMeta>>();
+const endedTurns = new Map<string, Set<string>>();
 /** Set when the stream restarted without the frames it missed; a thread then draws deltas only after its next item or
  * turn boundary, since any item open across the gap lost its start. */
 let gapped = false;
@@ -71,6 +82,8 @@ function firstSeen(eventId: string): boolean {
 
 const isSaved = (item: LiveReplyItem) => item.savedAs !== undefined;
 const sameTurn = (item: LiveReplyItem, turnId: string | undefined) => !turnId || !item.turnId || item.turnId === turnId;
+const sameWorker = (a: ConcurrentWorkerMeta | undefined, b: ConcurrentWorkerMeta | undefined) =>
+  a === b || (a !== undefined && b !== undefined && a.workerId === b.workerId && a.parentTurnId === b.parentTurnId);
 const kept = (items: readonly LiveReplyItem[], keep: (item: LiveReplyItem) => boolean) => {
   const next = items.filter(keep);
   return next.length === items.length ? items : next;
@@ -79,39 +92,114 @@ const isTurnEnd = (event: RuntimeEvent) =>
   event.type === "turn.completed" || event.type === "cap.exhausted" || event.type === "session.exited" ||
   (event.type === "runtime.error" && event.terminal === true);
 
+function recordTurnMeta(threadId: string, event: RuntimeEventWithIntake): TurnAnchorMeta | undefined {
+  const replyToId = event.replyToId ?? (event.type === "turn.started" ? event.requestMessageId : event.requestMessageId);
+  const concurrentWorker = event.concurrentWorker;
+  if (!event.turnId) return replyToId || concurrentWorker ? { ...(replyToId ? { replyToId } : {}), ...(concurrentWorker ? { concurrentWorker } : {}) } : undefined;
+  let perTurn = turnMeta.get(threadId);
+  if (!perTurn) turnMeta.set(threadId, (perTurn = new Map()));
+  const prev = perTurn.get(event.turnId);
+  if (replyToId || concurrentWorker) {
+    const next: TurnAnchorMeta = {
+      replyToId: replyToId ?? prev?.replyToId,
+      concurrentWorker: concurrentWorker ?? prev?.concurrentWorker,
+    };
+    perTurn.set(event.turnId, next);
+    while (perTurn.size > MAX_ENDED_TURNS) perTurn.delete(perTurn.keys().next().value!);
+    return next;
+  }
+  return prev;
+}
+
+function markTurnEnded(threadId: string, turnId: string | undefined): void {
+  if (!turnId) return;
+  let set = endedTurns.get(threadId);
+  if (!set) endedTurns.set(threadId, (set = new Set()));
+  set.add(turnId);
+  while (set.size > MAX_ENDED_TURNS) set.delete(set.values().next().value!);
+}
+
 /** One live runtime frame. A frame seen before (a resumed stream replaying it) changes nothing. */
-export function noteLiveReplyEvent(event: RuntimeEvent): void {
+export function noteLiveReplyEvent(rawEvent: RuntimeEvent): void {
+  const event = rawEvent as RuntimeEventWithIntake;
   const { threadId } = event;
   const current = threads.get(threadId) ?? { items: EMPTY, skipping: false };
   const { items } = current;
   if (event.type === "content.delta") {
     if (event.streamKind !== "assistant_text" || !event.delta || !firstSeen(event.eventId) || current.skipping) return;
     if (gapped && !boundarySinceGap.has(threadId)) return;
+    const meta = recordTurnMeta(threadId, event);
     const at = event.itemId ? items.findIndex((item) => item.itemId === event.itemId) : legacyOpen(items, event.turnId);
     const growing = items[at];
     if (growing) {
-      if (!growing.done) put(threadId, { ...current, items: items.map((item, index) => index === at ? { ...item, text: item.text + event.delta, ...(event.botId ? { botId: event.botId } : {}) } : item) });
+      if (!growing.done) {
+        put(threadId, {
+          ...current,
+          items: items.map((item, index) => index === at ? {
+            ...item,
+            text: item.text + event.delta,
+            ...(event.botId ? { botId: event.botId } : {}),
+            ...(meta?.replyToId && !item.replyToId ? { replyToId: meta.replyToId } : {}),
+            ...(meta?.concurrentWorker && !item.concurrentWorker ? { concurrentWorker: meta.concurrentWorker } : {}),
+          } : item),
+        });
+      }
       return;
     }
-    // The server opens a message only once the one before it is over: an earlier one still open never completes.
-    const fresh: LiveReplyItem = { key: event.itemId ?? event.eventId, ...(event.itemId ? { itemId: event.itemId } : {}),
-      ...(event.turnId ? { turnId: event.turnId } : {}), ...(event.botId ? { botId: event.botId } : {}), text: event.delta, at: Date.now(), done: false };
-    put(threadId, { ...current, items: [...kept(items, (item) => item.done), fresh] });
+    const fresh: LiveReplyItem = {
+      key: event.itemId ?? event.eventId,
+      ...(event.itemId ? { itemId: event.itemId } : {}),
+      ...(event.turnId ? { turnId: event.turnId } : {}),
+      ...(meta?.replyToId ? { replyToId: meta.replyToId } : {}),
+      ...(meta?.concurrentWorker ? { concurrentWorker: meta.concurrentWorker } : {}),
+      ...(event.botId ? { botId: event.botId } : {}),
+      text: event.delta,
+      at: Date.now(),
+      done: false,
+    };
+    // Keep finished items and still-open items from other concurrent turns; drop stale uncompleted items of this turn.
+    put(threadId, {
+      ...current,
+      items: [...kept(items, (item) => item.done || Boolean(event.turnId && item.turnId && item.turnId !== event.turnId)), fresh],
+    });
   } else if (event.type === "item.completed" && event.itemType === "assistant_text") {
     if (!firstSeen(event.eventId)) return;
     if (gapped) boundarySinceGap.add(threadId);
+    const meta = recordTurnMeta(threadId, event);
     const at = event.itemId ? items.findIndex((item) => item.itemId === event.itemId) : legacyOpen(items, event.turnId);
-    const next = at >= 0 && !items[at]!.done ? items.map((item, index) => index === at ? { ...item, text: event.text, done: true } : item) : items;
+    const next = at >= 0 && !items[at]!.done
+      ? items.map((item, index) => index === at ? {
+          ...item,
+          text: event.text,
+          done: true,
+          ...(meta?.replyToId && !item.replyToId ? { replyToId: meta.replyToId } : {}),
+          ...(meta?.concurrentWorker && !item.concurrentWorker ? { concurrentWorker: meta.concurrentWorker } : {}),
+        } : item)
+      : items;
     put(threadId, { items: next, skipping: false });
   } else if (event.type === "item.started" && event.itemType === "tool") {
     if (gapped) boundarySinceGap.add(threadId);
   } else if (event.type === "turn.started") {
     if (gapped) boundarySinceGap.add(threadId);
-    // The turns before this one are over: their saved messages are in the thread's transcript by now, drawn or not.
-    put(threadId, { items: kept(items, (item) => isSaved(item) && event.turnId !== undefined && item.turnId === event.turnId), skipping: false });
+    if (event.turnId) endedTurns.get(threadId)?.delete(event.turnId);
+    recordTurnMeta(threadId, event);
+    const ended = endedTurns.get(threadId);
+    // Drop already-finished turns when a new turn starts, while keeping still-running concurrent turns alive.
+    put(threadId, {
+      items: kept(items, (item) => {
+        if (!item.turnId || !event.turnId) return isSaved(item) && event.turnId !== undefined && item.turnId === event.turnId;
+        if (item.turnId === event.turnId) return isSaved(item);
+        return !ended?.has(item.turnId);
+      }),
+      skipping: false,
+    });
   } else if (isTurnEnd(event)) {
     if (gapped) boundarySinceGap.add(threadId);
-    put(threadId, { items: kept(items, isSaved), skipping: false });
+    markTurnEnded(threadId, event.turnId);
+    put(threadId, {
+      items: kept(items, (item) => isSaved(item) || Boolean(event.turnId && item.turnId && item.turnId !== event.turnId)),
+      skipping: false,
+    });
   }
 }
 
@@ -267,8 +355,27 @@ function liveRowOf(item: LiveReplyItem, speaker?: LiveSpeaker): Message | null {
   if (!text.trim()) return null;
   const from = speaker?.(item.botId);
   let row = rowCache.get(item);
-  if (!row || row.text !== text || !sameSpeaker(row.message.from, from)) {
-    row = { text, message: { id: `${LIVE_ID}${item.key}`, role: "bot", kind: "text", text, at: item.at, ...(item.turnId ? { turnId: item.turnId } : {}), ...(from ? { from } : {}) } as Message };
+  if (
+    !row ||
+    row.text !== text ||
+    !sameSpeaker(row.message.from, from) ||
+    row.message.replyToId !== item.replyToId ||
+    !sameWorker(row.message.concurrentWorker, item.concurrentWorker)
+  ) {
+    row = {
+      text,
+      message: {
+        id: `${LIVE_ID}${item.key}`,
+        role: "bot",
+        kind: "text",
+        text,
+        at: item.at,
+        ...(item.turnId ? { turnId: item.turnId } : {}),
+        ...(item.replyToId ? { replyToId: item.replyToId } : {}),
+        ...(item.concurrentWorker ? { concurrentWorker: item.concurrentWorker } : {}),
+        ...(from ? { from } : {}),
+      } as Message,
+    };
     rowCache.set(item, row);
   }
   return row.message;
@@ -297,6 +404,8 @@ export function withLiveRows(items: readonly LiveReplyItem[], windowed: Message[
  * the row shows at all and whether it is only a leaked harness message, which a transcript hides. */
 interface LiveRowShape extends Drawable {
   turnId?: string;
+  replyToId?: string;
+  concurrentWorker?: ConcurrentWorkerMeta;
   botId?: string;
   at: number;
   shown: boolean;
@@ -306,11 +415,31 @@ interface LiveRowShape extends Drawable {
 
 const NO_SHAPES: readonly LiveRowShape[] = [];
 const sameShape = (a: LiveRowShape, b: LiveRowShape) =>
-  a.key === b.key && a.itemId === b.itemId && a.savedAs === b.savedAs && a.turnId === b.turnId && a.botId === b.botId && a.at === b.at && a.shown === b.shown && a.harness === b.harness;
+  a.key === b.key &&
+  a.itemId === b.itemId &&
+  a.savedAs === b.savedAs &&
+  a.turnId === b.turnId &&
+  a.replyToId === b.replyToId &&
+  sameWorker(a.concurrentWorker, b.concurrentWorker) &&
+  a.botId === b.botId &&
+  a.at === b.at &&
+  a.shown === b.shown &&
+  a.harness === b.harness;
 
 function shapeOf(item: LiveReplyItem): LiveRowShape {
   const text = shownText(item);
-  return { key: item.key, itemId: item.itemId, savedAs: item.savedAs, turnId: item.turnId, botId: item.botId, at: item.at, shown: text.trim() !== "", harness: isPureLeakedSystemHarnessMessage(text) ? text : "" };
+  return {
+    key: item.key,
+    itemId: item.itemId,
+    savedAs: item.savedAs,
+    turnId: item.turnId,
+    replyToId: item.replyToId,
+    concurrentWorker: item.concurrentWorker,
+    botId: item.botId,
+    at: item.at,
+    shown: text.trim() !== "",
+    harness: isPureLeakedSystemHarnessMessage(text) ? text : "",
+  };
 }
 
 /** The thread's live rows as shapes, the same array for as long as no shape changes: a new word keeps it. */
@@ -341,7 +470,19 @@ function standInFor(shape: LiveRowShape, speaker?: LiveSpeaker): Message | null 
   if (!shape.shown) return null;
   const from = speaker?.(shape.botId);
   let row = standIns.get(shape);
-  if (!row || !sameSpeaker(row.from, from)) standIns.set(shape, (row = { id: `${LIVE_ID}${shape.key}`, role: "bot", kind: "text", text: shape.harness, at: shape.at, ...(shape.turnId ? { turnId: shape.turnId } : {}), ...(from ? { from } : {}) } as Message));
+  if (!row || !sameSpeaker(row.from, from)) {
+    standIns.set(shape, (row = {
+      id: `${LIVE_ID}${shape.key}`,
+      role: "bot",
+      kind: "text",
+      text: shape.harness,
+      at: shape.at,
+      ...(shape.turnId ? { turnId: shape.turnId } : {}),
+      ...(shape.replyToId ? { replyToId: shape.replyToId } : {}),
+      ...(shape.concurrentWorker ? { concurrentWorker: shape.concurrentWorker } : {}),
+      ...(from ? { from } : {}),
+    } as Message));
+  }
   return row;
 }
 
@@ -364,6 +505,8 @@ export function resetLiveReplies(): void {
   threads.clear();
   seenEvents.clear();
   streamed.clear();
+  turnMeta.clear();
+  endedTurns.clear();
   gapped = false;
   boundarySinceGap.clear();
   shapes.clear();

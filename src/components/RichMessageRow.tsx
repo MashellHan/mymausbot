@@ -9,6 +9,7 @@ import { GoalRunRow } from "./GoalRunCard";
 import { HelperKeySuggestion } from "./HelperKeySuggestion";
 import { MessageBoundary } from "./MessageBoundary";
 import { SettingsCard } from "./SettingsCard";
+import { UserIntakeNote } from "./ProgressiveIntakeNote";
 import { WidgetMessage } from "./widget/WidgetMessage";
 
 export function richRowKind(message: Message): Message["kind"] {
@@ -107,13 +108,15 @@ function OutboxStatusNote({ sendId }: { sendId: string | undefined }) {
 export function UserLineNote({ message }: { message: Message }) {
   const outboxSendId = message.id.startsWith("optimistic-") ? message.sendId : undefined;
   const outboxNote = outboxSendId ? <OutboxStatusNote sendId={outboxSendId} /> : null;
+  const intakeNote = <UserIntakeNote message={message} />;
   // A @devs message: its report's status ("Got it, we're looking", then "Fixed in 0.1.x").
-  if (message.bugReport) return <>{outboxNote}<BugReportNote report={message.bugReport} /></>;
+  if (message.bugReport) return <>{outboxNote}{intakeNote}<BugReportNote report={message.bugReport} /></>;
   if (message.pointed?.length) {
     const label = t("chat.preview.pointedAt", { parts: message.pointed.map((part) => part.label).join(", ") });
     return (
       <>
         {outboxNote}
+        {intakeNote}
         <span data-pointed-note className="mt-1 flex min-w-0 items-center gap-1 text-[11px] text-ink-tertiary" title={label}>
           <Crosshair aria-hidden="true" size={11} className="shrink-0" />
           <bdi dir="auto" className="min-w-0 truncate">{label}</bdi>
@@ -126,6 +129,7 @@ export function UserLineNote({ message }: { message: Message }) {
     return (
       <>
         {outboxNote}
+        {intakeNote}
         <span data-sent-from-app={message.fromApp.messageId} className="mt-1 flex items-center gap-1 text-[11px] text-ink-tertiary" title={label}>
           <AppWindow aria-hidden="true" size={11} className="shrink-0" />
           <bdi dir="auto" className="min-w-0 truncate">{label}</bdi>
@@ -133,7 +137,7 @@ export function UserLineNote({ message }: { message: Message }) {
       </>
     );
   }
-  if (message.via === "api") return <>{outboxNote}<span data-via-bot-api className="mt-1 text-[11px] text-ink-tertiary" title={t("chat.viaBotApi")}>{t("chat.viaBotApi")}</span></>;
-  if (message.via === "call") return <>{outboxNote}<span className="mt-1 text-[11px] text-ink-tertiary" title={t("chat.viaCall")}>{t("chat.viaCall")}</span></>;
-  return outboxNote;
+  if (message.via === "api") return <>{outboxNote}{intakeNote}<span data-via-bot-api className="mt-1 text-[11px] text-ink-tertiary" title={t("chat.viaBotApi")}>{t("chat.viaBotApi")}</span></>;
+  if (message.via === "call") return <>{outboxNote}{intakeNote}<span className="mt-1 text-[11px] text-ink-tertiary" title={t("chat.viaCall")}>{t("chat.viaCall")}</span></>;
+  return <>{outboxNote}{intakeNote}</>;
 }

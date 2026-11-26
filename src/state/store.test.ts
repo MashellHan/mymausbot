@@ -3431,3 +3431,50 @@ describe("fleet order from the server", () => {
     expect(reducer(hydrated, { type: "botsOrdered", botIds: ["a", "b", "c", "d"] })).toBe(hydrated);
   });
 });
+
+describe("progressive intake in store sends and patches", () => {
+  const busyBot: Bot = {
+    id: "pepper",
+    threadId: "t-pepper",
+    name: "Pepper",
+    title: "",
+    description: "",
+    notifications: false,
+    color: "green",
+    unread: false,
+    busy: true,
+    modelSelection: { instanceId: "acp", model: "fake" },
+    messages: [],
+  };
+  const idleBot: Bot = { ...busyBot, id: "idle", threadId: "t-idle", busy: false };
+  const base = reducer(initialState, { type: "hydrate", bots: [busyBot, idleBot], groups: [], computerControl: {} });
+
+  it("attaches optimistic received intake immediately when sending while busy and merges patches monotonically", () => {
+    const afterIdleSend = reducer(base, { type: "send", botId: "idle", threadId: "t-idle", sendId: "s-idle", text: "hi" });
+    expect(afterIdleSend.bots[1]!.messages.at(-1)?.intake).toBeUndefined();
+
+    const afterBusySend = reducer(base, { type: "send", botId: "pepper", threadId: "t-pepper", sendId: "s-busy", text: "follow up" });
+    const sentMsg = afterBusySend.bots[0]!.messages.at(-1)!;
+    expect(sentMsg.intake).toMatchObject({ mode: "progressive-continue", state: "received" });
+
+    const settled: Message = {
+      ...sentMsg,
+      id: "m-1",
+      intake: { mode: "progressive-continue", state: "processing", targetTurnId: "t1", updatedAt: sentMsg.at + 10 },
+    };
+    const reconciled = reducer(afterBusySend, { type: "messageAdded", threadId: "t-pepper", message: settled });
+    const stalePatch: Message = {
+      ...settled,
+      intake: { mode: "progressive-continue", state: "folding", targetTurnId: "t1", updatedAt: sentMsg.at + 50 },
+    };
+    const afterStalePatch = reducer(reconciled, { type: "messagePatched", threadId: "t-pepper", message: stalePatch });
+    expect(afterStalePatch.bots[0]!.messages.find((m) => m.id === "m-1")?.intake?.state).toBe("processing");
+
+    const answeredPatch: Message = {
+      ...settled,
+      intake: { mode: "progressive-continue", state: "answered", targetTurnId: "t1", updatedAt: sentMsg.at + 60 },
+    };
+    const afterAnsweredPatch = reducer(afterStalePatch, { type: "messagePatched", threadId: "t-pepper", message: answeredPatch });
+    expect(afterAnsweredPatch.bots[0]!.messages.find((m) => m.id === "m-1")?.intake?.state).toBe("answered");
+  });
+});

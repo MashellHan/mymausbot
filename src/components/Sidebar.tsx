@@ -82,7 +82,7 @@ import { MENU_ITEM, MENU_ITEM_SEPARATOR, MENU_SHEET } from "./menu-recipe";
 import { ELEVATED_CONTROL } from "./elevated";
 export { TeamMenuItems };
 import { SidebarResizeHandle, useSidebarWidth } from "./SidebarResizeHandle";
-import { PHONE_TOP_BUTTON, SIMPLE_CORNER_BUTTON, SIMPLE_ROW_FOCUS, SIMPLE_TOP_BUTTON, SidebarSearchPill, SidebarSearchToggle } from "./SidebarSimpleTop";
+import { PHONE_TOP_BUTTON, SIMPLE_CORNER_BUTTON, SIMPLE_ROW_FOCUS, SIMPLE_TOP_BUTTON, SidebarSearchPill, SidebarSearchToggle } from "./SidebarSimpleTop"; import { MobilePwaNotificationBell } from "./NotificationsPanel";
 import { isSidebarToggle } from "@/lib/keyboard-shortcuts";
 import { SidebarRailSeparator, SimpleRailFooter } from "./SidebarSimpleRail";
 import { useShowThreads } from "@/lib/thread-preferences";
@@ -1298,7 +1298,7 @@ export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = 
             <Search size={20} strokeWidth={1.5} />
           </button>}
           {advanced && inboxSupport === "no" && <SidebarActiveThreads entries={attention} icons={density === "icons"} phone={phone} dispatch={dispatch} />}
-          {phone && <SidebarInboxRow compactIcon icons={false} large={false} running={attentionHasRunningWork(attention)} hideEmpty={raw} onOpened={onClose} />}
+          {phone && <SidebarInboxRow compactIcon icons={false} large={false} running={attentionHasRunningWork(attention)} hideEmpty={raw} onOpened={onClose} />}<MobilePwaNotificationBell show={phone} bar={PHONE_TOP_BUTTON} iconSize={18} />
           {plusControl}
         </div>}
       </div>

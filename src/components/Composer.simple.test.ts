@@ -143,7 +143,7 @@ describe("the Simple composer in a bot chat", () => {
     const source = { id: "source", role: "bot", kind: "text", at: 1, text: "Earlier answer" } as Message;
     const onConsumeReply = vi.fn();
     render({ bot: { ...bot, busy }, replyDraftId: source.id, replyTo: source, onConsumeReply });
-    click(busy ? container.querySelector('button[aria-label="Sends when Atlas is done"]') : sendButton());
+    click(busy ? container.querySelector('button[aria-label="Send to Atlas"]') : sendButton());
     expect(fixture.dispatch.mock.calls.find(([action]) => action.type === "send")?.[0]).toMatchObject({
       text: "Current request", replyToId: "source", threadId: bot.threadId,
     });
@@ -192,12 +192,12 @@ describe("the Simple composer in a bot chat", () => {
     expect(menu()).toBeNull();
   });
 
-  it("keeps the plain placeholder while the bot works and says what Send does in the bot's terms", () => {
+  it("keeps the plain placeholder while the bot works and offers non-blocking follow-up send", () => {
     restoreComposerDraft(`bot:${bot.id}:${bot.threadId}`, { text: "and this", attachments: [] });
     render({ bot: { ...bot, busy: true } });
     expect(container.querySelector("textarea")!.getAttribute("placeholder")).toBe("Message Atlas");
-    const send = container.querySelector<HTMLButtonElement>('button[aria-label="Sends when Atlas is done"]')!;
-    expect(send.getAttribute("title")).toBe("Sends when Atlas is done");
+    const send = container.querySelector<HTMLButtonElement>('button[aria-label="Send to Atlas"]')!;
+    expect(send.getAttribute("title")).toBe("Send to Atlas");
   });
 
   it("rounds its corners in from 22 to 18 once the message takes a second line", () => {

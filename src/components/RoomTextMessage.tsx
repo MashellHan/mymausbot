@@ -32,6 +32,7 @@ import { ReplyQuote } from "./ReplyQuote";
 import { AttachmentGallery, MessageAttachmentGallery, replyAttachmentGroup, useUserMessageAttachments } from "./AttachmentGallery";
 import { VoiceNoteBubble, type VoiceNoteAttachment } from "./VoiceNoteBubble";
 import { UserLineNote } from "./RichMessageRow";
+import { ConcurrentWorkerNote } from "./ProgressiveIntakeNote";
 import { RoutedByLine } from "./RoomQueueList";
 
 interface RoomTextMessageProps {
@@ -137,6 +138,7 @@ export const RoomTextMessage = memo(function RoomTextMessage({
   );
   return (
     <div {...{ [MESSAGE_ROW]: "" }} data-look={user ? "message-user" : "message-bot"} className={cn("group flex w-full flex-col", user ? "items-end" : "items-start")}>
+      {!user && m.concurrentWorker && <ConcurrentWorkerNote worker={m.concurrentWorker} />}
       {speaker && <div className="mb-0.5 px-1 text-right text-[13px] [overflow-wrap:anywhere] font-semibold text-ink-secondary">{speaker}</div>}
       <div className={cn("flex w-full items-end gap-1.5", user ? "justify-end" : "justify-start")}>
         {user && (
@@ -183,7 +185,7 @@ export const RoomTextMessage = memo(function RoomTextMessage({
                 data-citation-thread={threadId}
               >
                 <ThreadRefText text={display} peers={peers} everyone={!dm} />
-              </div>{m.bugReport ? <BugReportNote report={m.bugReport} /> : (m.pointed?.length || m.id.startsWith("optimistic-")) ? <UserLineNote message={m} /> : null}
+              </div>{m.bugReport ? <BugReportNote report={m.bugReport} /> : (m.pointed?.length || m.id.startsWith("optimistic-") || m.intake) ? <UserLineNote message={m} /> : null}
               {cited && <SentCitations citations={cited.citations} onNavigate={onNavigateCitation} />}
               {m.via === "api" && (
                 <div className="mt-1 text-[11px] text-ink-secondary">{t("room.viaApi")}</div>

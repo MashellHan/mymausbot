@@ -501,4 +501,168 @@ describe("pwa-cache", () => {
     });
     expect(apiHandled).toBe(false);
   });
+
+  it("handles Web Push events, replaces activity tags in place, syncs app badge, deep-links clicks, and notifies on subscription change", async () => {
+    const sw = readFileSync(new URL("../../public/sw.js", import.meta.url), "utf8");
+    const listeners = new Map<string, (event: any) => void>();
+    const showNotification = vi.fn(async () => {});
+    const subscribe = vi.fn(async () => ({
+      endpoint: "https://push.example/new",
+      toJSON: () => ({ endpoint: "https://push.example/new", keys: { p256dh: "p256-new", auth: "auth-new" } }),
+    }));
+    const setAppBadge = vi.fn(async () => {});
+    const clearAppBadge = vi.fn(async () => {});
+    const focus = vi.fn(async () => {});
+    const postMessage = vi.fn();
+    const openWindow = vi.fn(async () => null);
+    let currentClients: Array<{ url: string; focused?: boolean; visibilityState?: string; focus?: () => Promise<unknown>; postMessage?: (msg: unknown) => void }> = [
+      { url: "https://mausbot.mxhan.com/?bot=scout", focused: true, visibilityState: "visible", focus, postMessage },
+    ];
+
+    const swGlobal = {
+      location: { origin: "https://mausbot.mxhan.com" },
+      navigator: { setAppBadge, clearAppBadge },
+      registration: {
+        showNotification,
+        pushManager: { subscribe },
+      },
+      clients: {
+        claim: vi.fn(async () => {}),
+        matchAll: vi.fn(async () => currentClients),
+        openWindow,
+      },
+      caches: {
+        open: vi.fn(),
+        keys: vi.fn(async () => []),
+        delete: vi.fn(async () => true),
+      },
+      fetch: vi.fn(),
+      Response,
+      Headers,
+      URL,
+      addEventListener: (type: string, handler: (event: any) => void) => {
+        listeners.set(type, handler);
+      },
+    };
+
+    new Function("self", "caches", "fetch", "Response", "Headers", "URL", sw)(
+      swGlobal,
+      swGlobal.caches,
+      swGlobal.fetch,
+      Response,
+      Headers,
+      URL,
+    );
+
+    const pushPromises: Promise<unknown>[] = [];
+    listeners.get("push")!({
+      data: {
+        json: () => ({
+          version: 1,
+          id: "act-1",
+          kind: "activity",
+          title: "Scout is working",
+          body: "Running checks",
+          tag: "omb:activity:thread-9",
+          botId: "scout",
+          threadId: "thread-9",
+          unreadCount: 3,
+          ts: 1000,
+        }),
+      },
+      waitUntil: (p: Promise<unknown>) => pushPromises.push(p),
+    });
+    await Promise.all(pushPromises);
+    expect(showNotification).toHaveBeenCalledWith("Scout is working", expect.objectContaining({
+      body: "Running checks",
+      tag: "omb:activity:thread-9",
+      renotify: false,
+      data: expect.objectContaining({
+        botId: "scout",
+        threadId: "thread-9",
+        kind: "activity",
+        notificationId: "act-1",
+        url: "https://mausbot.mxhan.com/?bot=scout&thread=thread-9&notificationId=act-1",
+      }),
+    }));
+    expect(setAppBadge).toHaveBeenCalledWith(3);
+
+    // Malformed payload still degrades gracefully without throwing and clears badge when unreadCount is 0.
+    const badPushPromises: Promise<unknown>[] = [];
+    listeners.get("push")!({
+      data: {
+        json: () => { throw new Error("bad json"); },
+        text: () => "{not-json",
+      },
+      waitUntil: (p: Promise<unknown>) => badPushPromises.push(p),
+    });
+    await Promise.all(badPushPromises);
+    expect(showNotification).toHaveBeenLastCalledWith("MausBot", expect.objectContaining({ tag: "omb:fallback" }));
+
+    const msgPromises: Promise<unknown>[] = [];
+    listeners.get("message")!({
+      data: { type: "omb:set-app-badge", unreadCount: 0 },
+      waitUntil: (p: Promise<unknown>) => msgPromises.push(p),
+    });
+    await Promise.all(msgPromises);
+    expect(clearAppBadge).toHaveBeenCalledOnce();
+
+    // Clicking a notification focuses an existing window client and posts target info.
+    const close = vi.fn();
+    const clickPromises: Promise<unknown>[] = [];
+    listeners.get("notificationclick")!({
+      notification: {
+        close,
+        data: { botId: "scout", groupId: "room-1", threadId: "thread-9", kind: "mention", id: "n1" },
+      },
+      waitUntil: (p: Promise<unknown>) => clickPromises.push(p),
+    });
+    await Promise.all(clickPromises);
+    expect(close).toHaveBeenCalledOnce();
+    expect(focus).toHaveBeenCalledOnce();
+    expect(postMessage).toHaveBeenCalledWith({
+      type: "omb:notification-click",
+      target: {
+        botId: "scout",
+        groupId: "room-1",
+        threadId: "thread-9",
+        kind: "mention",
+        id: "n1",
+        notificationId: "n1",
+        url: "https://mausbot.mxhan.com/?bot=scout&group=room-1&thread=thread-9&notificationId=n1",
+      },
+    });
+    expect(openWindow).not.toHaveBeenCalled();
+
+    // When no window is open, openWindow falls back to the deep-link URL.
+    currentClients = [];
+    const coldClickPromises: Promise<unknown>[] = [];
+    listeners.get("notificationclick")!({
+      notification: {
+        close: vi.fn(),
+        data: { botId: "scout", threadId: "thread-9" },
+      },
+      waitUntil: (p: Promise<unknown>) => coldClickPromises.push(p),
+    });
+    await Promise.all(coldClickPromises);
+    expect(openWindow).toHaveBeenCalledWith("https://mausbot.mxhan.com/?bot=scout&thread=thread-9");
+
+    // pushsubscriptionchange re-subscribes when needed and broadcasts to window clients.
+    currentClients = [{ url: "https://mausbot.mxhan.com/", postMessage }];
+    postMessage.mockClear();
+    const subChangePromises: Promise<unknown>[] = [];
+    listeners.get("pushsubscriptionchange")!({
+      oldSubscription: { options: { userVisibleOnly: true, applicationServerKey: new Uint8Array([1, 2, 3]) } },
+      waitUntil: (p: Promise<unknown>) => subChangePromises.push(p),
+    });
+    await Promise.all(subChangePromises);
+    expect(subscribe).toHaveBeenCalledOnce();
+    expect(postMessage).toHaveBeenCalledWith({
+      type: "omb:pushsubscriptionchange",
+      subscription: {
+        endpoint: "https://push.example/new",
+        keys: { p256dh: "p256-new", auth: "auth-new" },
+      },
+    });
+  });
 });

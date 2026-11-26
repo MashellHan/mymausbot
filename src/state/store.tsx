@@ -17,7 +17,7 @@ import { bumpThreadUpdatedAt, mergeTaskStamps, rewindThreadUpdatedAt } from "./t
 import { botOpensTo, closeTrayUnlessShown, closeUnpinnedTray, openBot, openThread, visibleNotificationThread, withRememberedTrayPin } from "./thread-navigation";
 import { patchGroupTask } from "./thread-edits"; import { unreadBeyondFrame, wholeBotFrame } from "./bot-thread-frame";
 import type { EngineInstall } from "./engine-install";
-import { nextLiveSendNonce, optimisticMessageId, optimisticUserMessage, sendArrived, sendReconciled } from "./optimistic-send";
+import { nextLiveSendNonce, optimisticMessageId, optimisticUserMessage, sendArrived, sendReconciled } from "./optimistic-send"; import { createOptimisticIntake, mergeMessageIntake, type ConcurrentWorkerMeta, type MessageIntake } from "@/lib/progressive-intake-ui";
 import { patchedGroups, roomAnswers, snapshotPatch } from "./room-frames";
 import { savedStateAction, type SavedOwner, type SavedSnapshot } from "./saved-state";
 import { createOlderMessagesLoader } from "./older-message-pages";
@@ -156,6 +156,7 @@ export interface Message extends Pick<import("../../shared/wire").WireMessage, "
   dataResult?: import("../../shared/wire").WireMessage["dataResult"];
   queued?: boolean;
   queueId?: string;
+  intake?: MessageIntake; concurrentWorker?: ConcurrentWorkerMeta;
   liveSendNonce?: number; outboxRestored?: boolean;
 }
 
@@ -1292,7 +1293,10 @@ export function reducer(state: AppState, action: Action): AppState {
       return rewindThreadUpdatedAt(cleared, action.threadId, kept, task?.createdAt ?? group.createdAt, group.hasMore ? optimistic.optimisticThreadOrderAt : undefined);
     }
     case "messagePatched": {
-      const stamped = movesThreadToTop(action.message) ? bumpThreadUpdatedAt(state, action.threadId, action.message.at, true, action.message.turnCompletedAt ?? action.message.at) : state;
+      const existingIntake = state.bots.find((b) => b.threadId === action.threadId)?.messages.find((m) => m.id === action.message.id)?.intake;
+      const intake = mergeMessageIntake(existingIntake, action.message.intake);
+      const patchedMessage = intake && intake !== action.message.intake ? { ...action.message, intake } : action.message;
+      const stamped = movesThreadToTop(patchedMessage) ? bumpThreadUpdatedAt(state, action.threadId, patchedMessage.at, true, patchedMessage.turnCompletedAt ?? patchedMessage.at) : state;
       const bot = stamped.bots.find((b) => b.threadId === action.threadId);
       if (!bot) {
         const group = stamped.groups.find((g) => g.threadId === action.threadId);
@@ -1301,23 +1305,23 @@ export function reducer(state: AppState, action: Action): AppState {
           ...stamped,
           groups: stamped.groups.map((g) =>
             g.id === group.id
-              ? { ...g, messages: g.messages.map((m) => (m.id === action.message.id ? action.message : m)) }
+              ? { ...g, messages: g.messages.map((m) => (m.id === patchedMessage.id ? patchedMessage : m)) }
               : g,
           ),
         };
       }
       const motion =
-        action.message.kind === "activity"
-          ? action.message.tool?.ok === false
+        patchedMessage.kind === "activity"
+          ? patchedMessage.tool?.ok === false
             ? "failure"
-            : action.message.tool?.ok === true
+            : patchedMessage.tool?.ok === true
               ? "success"
               : "working"
           : null;
       const next = motion ? withMascotMotion(stamped, bot.id, motion) : stamped;
       return updateBot(next, bot.id, (b) => ({
         ...b,
-        messages: b.messages.map((m) => (m.id === action.message.id ? action.message : m)),
+        messages: b.messages.map((m) => (m.id === patchedMessage.id ? patchedMessage : m)),
       }));
     }
     case "computerStart": {
@@ -1653,7 +1657,7 @@ export function reducer(state: AppState, action: Action): AppState {
       const threadId = action.threadId ?? bot?.threadId;
       if (!bot || threadId !== bot.threadId) return animated;
       if (bot.messages.some((message) => message.sendId === action.sendId)) return animated;
-      const message = optimisticUserMessage(action.text, action.sendId, action.replyToId, bot.activeLeafId, undefined, { liveSendNonce: nextLiveSendNonce() });
+      const message = optimisticUserMessage(action.text, action.sendId, action.replyToId, bot.activeLeafId, undefined, { liveSendNonce: nextLiveSendNonce(), intake: createOptimisticIntake({ busy: bot.busy, followUp: action.followUp }) });
       message.optimisticThreadOrderAt = bot.tasks?.find((task) => task.threadId === threadId)?.lastThreadOrderAt;
       return bumpThreadUpdatedAt(updateBot(animated, bot.id, (current) => ({
         ...current,
