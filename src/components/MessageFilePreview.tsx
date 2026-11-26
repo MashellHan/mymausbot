@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { ArrowLeft, LoaderCircle } from "lucide-react";
 import { filePreviewKind, type MessageFilePreview as PreviewFile } from "@/lib/file-preview";
 import { tableDelimiter } from "@/lib/table-data";
@@ -8,15 +8,19 @@ import { ChatMarkdown } from "./ChatMarkdown";
 import { SaveIconButton } from "./HtmlFilePreview";
 import { readTableResponse, TableFileContent } from "./TableFilePreview";
 
+const WhatChangedContent = lazy(() => import("./WhatChangedView"));
+
 export const MARKDOWN_PREVIEW_MAX_BYTES = 1024 * 1024;
 
 export function MessageFilePreview({ file, onBack }: { file: PreviewFile; onBack?: () => void }) {
   const back = useRef<HTMLButtonElement>(null);
   const save = useLocalFileSave(file.path, file.name, file.message);
   useEffect(() => { back.current?.focus(); }, []);
+  const changes = file.kind === "changes" && file.original ? file.original : null;
   const delimiter = tableDelimiter(file.name) ?? tableDelimiter(file.path);
+  const title = changes ? t("changes.title", { name: file.name }) : file.name;
   return (
-    <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-panel text-ink" aria-label={t("file.preview", { name: file.name })}
+    <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-panel text-ink" aria-label={changes ? title : t("file.preview", { name: file.name })}
       onKeyDown={(event) => {
         if (event.key === "Escape" && onBack && !event.defaultPrevented) {
           event.preventDefault(); event.stopPropagation(); onBack();
@@ -25,14 +29,16 @@ export function MessageFilePreview({ file, onBack }: { file: PreviewFile; onBack
       <header className="flex min-w-0 items-center gap-2 border-b border-hairline/40 px-4 py-2">
         {onBack && <button ref={back} type="button" className="table-action shrink-0" onClick={onBack}
           title={t("file.back")} aria-label={t("file.back")}><ArrowLeft size={16} aria-hidden="true" /></button>}
-        <h2 className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink" title={file.name}>{file.name}</h2>
+        <h2 className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink" title={title}>{title}</h2>
         <SaveIconButton name={file.name} save={save} retryable={save.state === "failed" && !save.outsideWorkspace} />
       </header>
       {save.state === "failed" && <p role="alert" className="px-4 pt-2 text-[12px] text-danger">{saveFailureText(save)}</p>}
-      <div className="min-h-0 min-w-0 flex-1 overflow-auto p-4">
-        {filePreviewKind(file.name, file.path) === "markdown"
-          ? <MarkdownFileContent file={file} />
-          : delimiter && <TableFileContent {...file} delimiter={delimiter} />}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto p-4">
+        {changes
+          ? <Suspense fallback={<div role="status" className="flex items-center justify-center gap-2 p-12 text-sm text-ink-secondary"><LoaderCircle size={16} className="animate-spin" />{t("changes.loading")}</div>}><WhatChangedContent edited={{ path: file.path, name: file.name, message: file.message }} original={{ path: changes.path, name: changes.name, message: { threadId: file.message.threadId, messageId: changes.messageId } }} fill /></Suspense>
+          : filePreviewKind(file.name, file.path) === "markdown"
+            ? <MarkdownFileContent file={file} />
+            : delimiter && <TableFileContent {...file} delimiter={delimiter} />}
       </div>
     </section>
   );
