@@ -22,7 +22,7 @@ Add an entry under `"instances"` in `~/.openmausbot/config.json`, then restart t
 }
 ```
 
-`config.cli` includes the command and its arguments. Use an absolute executable path if the app cannot find it on its `PATH`; a desktop launch may have a different path from your terminal. `displayName` sets the name shown in the model picker. To set the command in the app, open **Settings → AI**, find the instance under **More providers** if needed, select **Manage** or **Set up**, expand **CLI path and updates**, then select **Set CLI…**. An instance without a command stays visible with a setup hint.
+`config.cli` includes the command and its arguments, so `"npx -y some-agent acp"` is valid. Use an absolute executable path if the app cannot find it on its `PATH` (for example `/home/you/.local/bin/vibe-acp`, or a Windows `.cmd` shim); a desktop launch may have a different path from your terminal. `displayName` sets the name shown in the model picker; the per-bot picker lists the instance, not a generic driver name. To set the command in the app, open **Settings → AI**, find the instance under **More providers** if needed, select **Manage** or **Set up**, expand **CLI path and updates**, then select **Set CLI…**. An instance without a command stays visible with a setup hint.
 
 ## Authentication and models
 
