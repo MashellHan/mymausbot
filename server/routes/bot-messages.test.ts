@@ -535,6 +535,109 @@ describe("POST /api/bots/:id/messages with widgetAction", () => {
     expect(row(widgetId).widget!.settled).toMatchObject({ ref: "confirm", label: "Merge the two ready", sendId: SEND });
   });
 
+  it("patches rowId intake state on DELETE /queue/:queueId and avoids duplicate rows on POST /queue/:queueId/steer", async () => {
+    const store = new Store(() => sonnet);
+    const bot = store.createBot({ name: "Scout" });
+    const threadId = bot.threadId;
+    store.setTaskActivity(bot.id, threadId, "working");
+    const cancelRow = store.appendMessage(threadId, {
+      role: "user",
+      kind: "text",
+      text: "Cancelable supplement",
+      intake: { mode: "progressive-continue", state: "received", updatedAt: 1000 },
+    });
+    const queuedCancel = queueSteeredMessage(bot.id, threadId, "Cancelable supplement", { rowId: cancelRow.id });
+    const steerRow = store.appendMessage(threadId, {
+      role: "user",
+      kind: "text",
+      text: "Steerable supplement",
+      intake: { mode: "progressive-continue", state: "received", updatedAt: 1000 },
+    });
+    const queuedSteer = queueSteeredMessage(bot.id, threadId, "Steerable supplement", { rowId: steerRow.id });
+
+    const fakeInstance = {
+      instanceId: "codex",
+      driverKind: "codex",
+      adapter: { capabilities: { queueing: true }, steer: async () => "steered" as const },
+    };
+
+    const settled: Array<[string, readonly string[]]> = [];
+    const server = createServer(async (req, res) => {
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const routes = [createBotMessageRoutes({
+        store,
+        routines: () => null,
+        desktopManaged: true,
+        cloudHome: false,
+        DirectSendRefused,
+        acceptDirectSend: async () => { throw new Error("unused"); },
+        directSendRefusal: () => null,
+        usageTriggerFor: () => ({ kind: "user" }),
+        messageSender: () => undefined,
+        cloudGuestSendRefusal: () => null,
+        resolveReplyTarget: () => undefined,
+        requestedTaskBot: () => ({ ...bot, busy: true }),
+        startTurn: async () => steerRow,
+        threadBusy: () => true,
+        botAtThreadCapacity: () => false,
+        parksBehindCoordination: () => false,
+        activeGroupTurnForBot: () => null,
+        cloudThreadRefusal: () => null,
+        phoneSecretSubmissions: { hasThread: () => false },
+        turnSelection: () => undefined,
+        registry: { get: () => fakeInstance },
+        runningTurnInstance: () => fakeInstance,
+        engineSteersImages: () => false,
+        handoffs: { current: () => undefined, steered: () => {} },
+        clearUnattended: () => {},
+        drainQueuedSends: () => {},
+        owners: { removeRefusal: () => null, joinRefusal: () => null },
+        policyModelRefusal: () => undefined,
+        relayedReaction: () => {},
+        fromPhone: () => false,
+        notePhoneSend: () => {},
+        pressRecords: () => null,
+        serverPress: () => null,
+        onQueueSettled: (tid: string, qids: readonly string[]) => settled.push([tid, qids]),
+      } as unknown as BotMessageRouteDeps)];
+      const auth = { kind: "loopback", scopes: ["admin"] } as RequestAuth;
+      const handled = await dispatchRoutes(routes, { req, res, url, path: url.pathname, method: req.method ?? "GET", auth, json, readBody });
+      if (!handled) json(res, 404, {});
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    const del = await fetch(`${base}/api/bots/${bot.id}/queue/${queuedCancel.id}`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ threadId }),
+    });
+    expect(del.status).toBe(200);
+    expect(store.messagesFor(threadId).find((m) => m.id === cancelRow.id)).toMatchObject({
+      requestCancelled: true,
+      intake: { mode: "progressive-continue", state: "superseded" },
+    });
+
+    const steerRes = await fetch(`${base}/api/bots/${bot.id}/queue/${queuedSteer.id}/steer`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ threadId }),
+    });
+    expect(steerRes.status).toBe(200);
+    const matchingRows = store.messagesFor(threadId).filter((m) => m.text === "Steerable supplement");
+    expect(matchingRows).toHaveLength(1);
+    expect(matchingRows[0]).toMatchObject({
+      id: steerRow.id,
+      steered: true,
+      intake: { mode: "live-steer", state: "processing" },
+    });
+    expect(settled).toEqual([
+      [threadId, [queuedCancel.id]],
+      [threadId, [queuedSteer.id]],
+    ]);
+  });
+
   it("never reports a typed reply as a press, on the plain, guarded and edit routes, even when its words are a control's label", async () => {
     const { store, bot, threadId, state, post, edit, show, row, sent } = await fixture();
     const widgetId = show("pullRequests");
