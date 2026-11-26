@@ -1443,7 +1443,7 @@
   "botPanel.library.memoryError": "Não foi possível ler o arquivo de memória agora.",
   "botPanel.library.memoryOff": "A memória está desligada para {name}.",
   "botPanel.library.pages": "Páginas",
-  "botPanel.library.scope": "Desta conversa",
+  "botPanel.library.showAll": "Mostrar tudo",
   "botPanel.memory.addPlaceholder": "Diga algo para {name} lembrar",
   "botPanel.memory.editText": "Editar como texto",
   "botPanel.memory.empty": "Nada guardado na memória ainda.",

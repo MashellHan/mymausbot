@@ -1379,7 +1379,7 @@
   "botPanel.library.memoryError": "暂时无法读取记忆文件。",
   "botPanel.library.memoryOff": "{name} 的记忆已关闭。",
   "botPanel.library.pages": "页面",
-  "botPanel.library.scope": "来自这个对话",
+  "botPanel.library.showAll": "显示全部",
   "botPanel.memory.addPlaceholder": "告诉 {name} 要记住什么",
   "botPanel.memory.empty": "还没有记住任何内容。",
   "botPanel.memory.forget": "删除",

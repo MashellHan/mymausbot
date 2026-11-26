@@ -6509,5 +6509,6 @@
   "server.teammates.noLongerWaiting": "{who} ya no te espera",
   "decider.provider.line": "O usa una clave de otro proveedor para estos modelos pequeños.",
   "computer.worksOnHintServer": "Elige dónde trabaja este bot. Un equipo que compartes desde la app de escritorio de {app} no se elige aquí: pídele al bot que lo use.",
-  "settings.ai.otherServicesLine": "Claves para voces, equipos, apps y ayudantes, además de tus modelos principales."
+  "settings.ai.otherServicesLine": "Claves para voces, equipos, apps y ayudantes, además de tus modelos principales.",
+  "botPanel.library.showAll": "Mostrar todo"
 }
