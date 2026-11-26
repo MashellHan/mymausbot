@@ -61,6 +61,15 @@ describe("reading the first snapshot", () => {
       expect((await readChatSnapshot(() => ({ selectedId: "a" }), undefined, failing as never)).bots[0]!.messages).toHaveLength(SNAPSHOT_TAIL);
     }
   });
+
+  it("keeps the tail when the page response omits messages", async () => {
+    for (const malformed of [{}, null, { messages: null }, { messages: "bad", hasMore: false }]) {
+      const broken = vi.fn(async (path: string) => (path.startsWith("/api/bots?") ? { bots: [tailOf("a")], groups: [] } : malformed));
+      const botA = (await readChatSnapshot(() => ({ selectedId: "a" }), undefined, broken as never)).bots[0]!;
+      expect(botA.messages).toEqual(full.a.slice(-SNAPSHOT_TAIL));
+      expect(botA.hasMore).toBe(true);
+    }
+  });
 });
 
 class FixtureEventSource {
