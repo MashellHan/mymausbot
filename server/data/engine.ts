@@ -22,6 +22,22 @@ import { quoteIdentifier } from "./sql-identifiers.ts";
 import { removeSourceStore, retainedStoreFile, storeFolder, DATA_DB_FILE } from "./storage.ts";
 import { tableIdentifierParts } from "./identifiers.ts";
 import {
+  CLOSE_DRAIN_MS,
+  COMPARABLE_TYPE,
+  Lane,
+  NUMERIC_TYPE,
+  TEMPORAL_TYPE,
+  closeNames,
+  drainLanes,
+  formatEpoch,
+  formatNumber,
+  likePattern,
+  missingTableName,
+  toCount,
+  type Binding,
+  type Cell,
+} from "./engine-helpers.ts";
+import {
   DataFailure,
   type BotDatabase,
   type DataColumn,
@@ -30,6 +46,7 @@ import {
   type DataChanged,
   type DataEngine,
   type DataExtension,
+  type DataHeld,
   type DataHistogram,
   type DataPage,
   type DescribeResult,
@@ -39,8 +56,10 @@ import {
   type DataSnapshotManifest,
 } from "./types.ts";
 
-type Binding = typeof DuckDB;
-type Cell = string | number | boolean | null;
+export { CLOSE_DRAIN_MS, Lane, closeNames, drainLanes, levenshtein, likePattern } from "./engine-helpers.ts";
+
+type DataShut = { closed: true } | { closed: false; why: DataHeld["why"]; detail?: string };
+const CLOSED: DataShut = { closed: true };
 
 export { DATA_DB_FILE, DATA_TMP_DIR } from "./storage.ts";
 const IDLE_CLOSE_MS = 10 * 60_000;
@@ -49,7 +68,6 @@ const HISTOGRAM_BINS = 20;
 const SAMPLE_SCAN_ROWS = 1_000;
 const STATS_CACHE_MAX = 64;
 const PAGE_LIMIT_MAX = 10 * DATA_LIMITS.pageSize;
-const INTERRUPT_DELIVERY_MS = 10;
 const RESULT_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const PLAIN_IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 
@@ -107,142 +125,11 @@ export async function loadExtensions(connection: Pick<DuckDB.DuckDBConnection, "
   }
 }
 
-export function likePattern(filter: string): string {
-  return `%${filter.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
-}
-
-export function levenshtein(a: string, b: string): number {
-  if (a === b) return 0;
-  if (!a.length || !b.length) return Math.max(a.length, b.length);
-  let previous = Array.from({ length: b.length + 1 }, (_, i) => i);
-  for (let i = 1; i <= a.length; i++) {
-    const current = [i];
-    for (let j = 1; j <= b.length; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      current[j] = Math.min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost);
-    }
-    previous = current;
-  }
-  return previous[b.length];
-}
-
-export function closeNames(wanted: string, names: readonly string[], max = 5): string[] {
-  const target = wanted.toLowerCase();
-  const budget = Math.max(2, Math.floor(target.length / 3));
-  return names
-    .map((name) => {
-      const folded = name.toLowerCase();
-      const distance = levenshtein(target, folded);
-      const prefix = folded.startsWith(target) || target.startsWith(folded);
-      const related = prefix || folded.includes(target);
-      return { name, distance, prefix, related };
-    })
-    .filter((entry) => entry.related || entry.distance <= budget)
-    .sort((x, y) => Number(y.prefix) - Number(x.prefix) || x.distance - y.distance || x.name.localeCompare(y.name))
-    .slice(0, max)
-    .map((entry) => entry.name);
-}
-
-const COMPARABLE_TYPE = /^(?!STRUCT|MAP|UNION|JSON|GEOMETRY|VARIANT)[^[\]]*$/;
-const NUMERIC_TYPE = /^(?:U?TINYINT|U?SMALLINT|U?INTEGER|U?BIGINT|U?HUGEINT|FLOAT|DOUBLE|REAL|DECIMAL\(|BIGNUM)/;
-const TEMPORAL_TYPE = /^(?:DATE|TIMESTAMP)/;
-
-function parseLine(message: string): number | undefined {
-  const match = /\bLINE (\d+):/.exec(message);
-  return match ? Number(match[1]) : undefined;
-}
-
-function missingTableName(message: string): string | null {
-  const match = /Table with name "?([^"\n]+?)"? does not exist/.exec(message);
-  return match ? match[1] : null;
-}
-
-type InterruptCause = "timeout" | "cancelled";
-
-type RunState = { interrupted: InterruptCause | null; deadline: number; retry?: NodeJS.Timeout };
-
-function failureFrom(error: unknown, sql: string, interrupted: InterruptCause | null, timeoutMs: number): DataFailure {
-  if (error instanceof DataFailure) return error;
-  const message = error instanceof Error ? error.message : String(error);
-  if (interrupted === "timeout") {
-    return new DataFailure({ code: "timeout", message, sql, retryable: true, hint: `Stopped after ${timeoutMs} ms. Narrow the query or aggregate first.` });
-  }
-  if (interrupted === "cancelled") return new DataFailure({ code: "cancelled", message, sql });
-  const line = parseLine(message);
-  if (missingTableName(message)) return new DataFailure({ code: "table_not_found", message, sql, line });
-  return new DataFailure({ code: "sql_error", message, sql, line });
-}
-
-export class Lane {
-  private queue: Promise<unknown> = Promise.resolve();
-  private running: RunState | null = null;
-
-  readonly connection: DuckDB.DuckDBConnection;
-  constructor(connection: DuckDB.DuckDBConnection) { this.connection = connection; }
-
-  run<T>(sql: string, options: { timeoutMs?: number; signal?: AbortSignal }, work: (connection: DuckDB.DuckDBConnection) => Promise<T>): Promise<T> {
-    const turn = this.queue.then(() => this.execute(sql, options, work));
-    this.queue = turn.catch(() => undefined);
-    return turn;
-  }
-
-  private async execute<T>(sql: string, options: { timeoutMs?: number; signal?: AbortSignal }, work: (connection: DuckDB.DuckDBConnection) => Promise<T>): Promise<T> {
-    const timeoutMs = options.timeoutMs ?? DATA_LIMITS.sqlTimeoutMs;
-    if (options.signal?.aborted) throw new DataFailure({ code: "cancelled", message: "Cancelled before it ran.", sql });
-    const state: RunState = { interrupted: null, deadline: Date.now() + timeoutMs };
-    this.running = state;
-    const timer = setTimeout(() => this.stop(state, "timeout"), timeoutMs);
-    const onAbort = () => this.stop(state, "cancelled");
-    options.signal?.addEventListener("abort", onAbort, { once: true });
-    try {
-      return await work(this.connection);
-    } catch (error) {
-      throw failureFrom(error, sql, state.interrupted, timeoutMs);
-    } finally {
-      clearTimeout(timer);
-      if (state.retry) clearInterval(state.retry);
-      options.signal?.removeEventListener("abort", onAbort);
-      this.running = null;
-    }
-  }
-
-  interrupt(): void {
-    if (this.running) this.stop(this.running, "cancelled");
-  }
-
-  // DuckDB honours an interrupt only once its statement is dispatched, so a cause keeps re-delivering
-  // until the statement settles: one that lands first is not lost, and no cause blocks the next.
-  private stop(state: RunState, cause: InterruptCause): void {
-    state.interrupted ??= cause;
-    this.connection.interrupt();
-    if (state.retry || Date.now() >= state.deadline) return;
-    const retry = setInterval(() => {
-      if (Date.now() >= state.deadline) {
-        clearInterval(retry);
-        state.retry = undefined;
-        return;
-      }
-      this.connection.interrupt();
-    }, INTERRUPT_DELIVERY_MS);
-    state.retry = retry;
-  }
-}
-
 interface Open {
   binding: Binding;
   instance: DuckDB.DuckDBInstance;
   lanes: Record<DataConnection, Lane>;
   reserved: Set<string>;
-}
-
-export const CLOSE_DRAIN_MS = 10_000;
-
-/** A statement DuckDB did not stop (seen on Windows) would otherwise hold a close, and shutdown, forever. */
-export async function drainLanes(lanes: Array<{ run<T>(sql: string, options: object, work: () => Promise<T>): Promise<T> }>, ms: number): Promise<boolean> {
-  let timer: NodeJS.Timeout | undefined;
-  const drained = Promise.all(lanes.map((lane) => lane.run("", {}, async () => undefined).catch(() => undefined))).then(() => true);
-  const expired = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), ms); timer.unref(); });
-  try { return await Promise.race([drained, expired]); } finally { clearTimeout(timer); }
 }
 
 interface CatalogEntry {
@@ -251,22 +138,11 @@ interface CatalogEntry {
   type: string;
 }
 
-function toCount(cell: Cell): number {
-  return typeof cell === "string" ? Number(cell) : typeof cell === "number" ? cell : 0;
-}
-
-function formatNumber(value: number): string {
-  return Number.isInteger(value) ? String(value) : String(Number(value.toPrecision(6)));
-}
-
-function formatEpoch(seconds: number, dateOnly: boolean): string {
-  const iso = new Date(seconds * 1000).toISOString();
-  return dateOnly ? iso.slice(0, 10) : iso.slice(0, 16).replace("T", " ");
-}
-
 class BotDb implements BotDatabase {
   private state: Promise<Open> | null = null;
-  private closing: Promise<void> | null = null;
+  private closing: Promise<DataShut> | null = null;
+  /** The instance a close could not let go of: still open on the file, so the next statement uses it, never a second one. */
+  private kept: Promise<Open> | null = null;
   private idleTimer: NodeJS.Timeout | null = null;
   private inFlight = 0;
   private readonly statsCache = new Map<string, DataColumnStats>();
@@ -275,7 +151,7 @@ class BotDb implements BotDatabase {
   private folderPath: string;
   private managed: boolean;
   private revoked = false;
-  private unsafe = false;
+  private unsafe: DataShut | null = null;
 
   readonly botId: string;
   private readonly engine: Engine;
@@ -289,9 +165,10 @@ class BotDb implements BotDatabase {
     this.engine.requireReady();
     if (this.revoked || this.unsafe) throw new DataFailure({ code: "engine_unavailable", message: "This Data store is closed; resolve it again." });
     if (!this.state) {
-      // The file admits one instance per process: a reopen waits for a close that may still be draining.
-      const previous = this.closing ?? Promise.resolve();
-      const opening = previous.then(() => this.openNow());
+      // The file admits one instance per process: a reopen waits for a close that may still be draining, and after a close
+      // that could not let go of the instance it goes on with that one.
+      const previous = this.closing ?? Promise.resolve(CLOSED);
+      const opening = previous.then((shut) => (shut.closed || !this.kept ? this.openNow() : this.kept));
       this.state = opening;
       opening.catch(() => {
         if (this.state === opening) this.state = null;
@@ -728,40 +605,69 @@ FROM ${from} AS omb_source, omb_range WHERE ${finite} GROUP BY bin ORDER BY bin`
   }
 
   async close(strict = false): Promise<void> {
+    const shut = await this.shut(strict);
+    if (strict && !shut.closed) {
+      if (shut.why === "running") throw new DataFailure({ code: "timeout", message: "Data store did not drain before its safety barrier." });
+      throw new DataFailure({ code: "sql_error", message: shut.detail ?? "Data store failed to close cleanly." });
+    }
+  }
+
+  /** Closed, or why the instance is still open: a statement that did not stop, or a close that failed. */
+  async shut(strict = false): Promise<DataShut> {
     if (this.idleTimer) {
       clearTimeout(this.idleTimer);
       this.idleTimer = null;
     }
     const pending = this.state;
     if (!pending) {
-      await this.closing;
-      if (strict && this.unsafe) throw new DataFailure({ code: "timeout", message: "Data store did not drain before its safety barrier." });
-      return;
+      const waited = this.closing ? await this.closing : CLOSED;
+      if (this.unsafe) return this.unsafe;
+      return waited;
     }
     this.state = null;
     this.statsCache.clear();
-    const closing = (async () => {
+    const closing = (async (): Promise<DataShut> => {
       let open: Open;
-      try { open = await pending; } catch { return; }
-      // Closing a connection with a statement in flight is undefined: interrupt first, then let the lanes drain.
-      for (const lane of Object.values(open.lanes)) lane.interrupt();
-      if (!await drainLanes(Object.values(open.lanes), CLOSE_DRAIN_MS)) {
-        this.unsafe = true;
-        if (strict) throw new DataFailure({ code: "timeout", message: "Data store did not drain before its safety barrier." });
-        console.warn(`data: ${this.botId}'s database still had a statement running after ${CLOSE_DRAIN_MS} ms; its handles are left to the process`);
-        return;
+      try { open = await pending; } catch { return CLOSED; }
+      const shut = await this.closeOpen(open, strict);
+      if (shut.closed) this.kept = null;
+      else if (strict) {
+        this.unsafe = shut;
+      } else {
+        this.kept = pending;
+        if (!this.state) this.state = pending;
       }
-      let checkpointError: unknown;
-      if (strict) {
-        try { await open.lanes.bot.run("CHECKPOINT", { timeoutMs: CLOSE_DRAIN_MS }, async (conn) => { await conn.run("CHECKPOINT"); }); }
-        catch (error) { checkpointError = error; this.unsafe = true; }
-      }
-      for (const lane of Object.values(open.lanes)) lane.connection.closeSync();
-      open.instance.closeSync();
-      if (checkpointError) throw checkpointError;
+      return shut;
     })();
     this.closing = closing;
-    try { await closing; } finally { if (this.closing === closing) this.closing = null; }
+    try { return await closing; } finally { if (this.closing === closing) this.closing = null; }
+  }
+
+  private async closeOpen(open: Open, strict: boolean): Promise<DataShut> {
+    // Closing a connection with a statement in flight is undefined: interrupt first, then let the lanes drain.
+    for (const lane of Object.values(open.lanes)) { try { lane.interrupt(); } catch { /* the drain below decides */ } }
+    if (!await drainLanes(Object.values(open.lanes), CLOSE_DRAIN_MS)) {
+      console.warn(`data: ${this.botId}'s database still had a statement running after ${CLOSE_DRAIN_MS} ms; its handles are left to the process`);
+      return { closed: false, why: "running" };
+    }
+    if (strict) {
+      try { await open.lanes.bot.run("CHECKPOINT", { timeoutMs: CLOSE_DRAIN_MS }, async (conn) => { await conn.run("CHECKPOINT"); }); }
+      catch (error) {
+        const detail = (error instanceof Error ? error.message : String(error)).split("\n")[0]!.slice(0, 200);
+        console.warn(`data: ${this.botId}'s database failed CHECKPOINT: ${detail}`);
+        return { closed: false, why: "failed", detail };
+      }
+    }
+    try {
+      for (const lane of Object.values(open.lanes)) lane.connection.closeSync();
+      // The last close writes the WAL into the file and removes it: the file then holds every table on its own.
+      open.instance.closeSync();
+    } catch (error) {
+      const detail = (error instanceof Error ? error.message : String(error)).split("\n")[0]!.slice(0, 200);
+      console.warn(`data: ${this.botId}'s database did not close: ${detail}`);
+      return { closed: false, why: "failed", detail };
+    }
+    return CLOSED;
   }
 
   get isOpen(): boolean { return this.state !== null; }
@@ -974,6 +880,13 @@ class Engine implements DataEngine {
 
   async deleteBot(botId: string): Promise<void> {
     await this.withBotDeletion(botId, async () => { await removeSourceStore(this.folder(botId)); return true; });
+  }
+
+  /** Every bot's database closed and kept, to open again on its next statement; the ones still open, and why. */
+  async release(): Promise<DataHeld[]> {
+    const open = [...new Set([...this.databases.values(), ...this.storeDatabases.values()])];
+    const shut = await Promise.all(open.map((db) => db.shut()));
+    return open.flatMap((db, i) => { const one = shut[i]!; return one.closed ? [] : [{ botId: db.botId, why: one.why, ...(one.detail ? { detail: one.detail } : {}) }]; });
   }
 
   async closeAll(): Promise<void> {
