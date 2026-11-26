@@ -11302,5 +11302,6 @@
   "chat.notice.waitingPasswordElsewhere": "Esperando você em @{name}: {label}",
   "chat.notice.waitingSignInElsewhere": "Esperando você entrar em {label} em @{name}",
   "chat.notice.waitingConnectElsewhere": "Esperando você conectar {label} em @{name}",
-  "chat.notice.waitingReviewElsewhere": "Esperando sua revisão em @{name}"
+  "chat.notice.waitingReviewElsewhere": "Esperando sua revisão em @{name}",
+  "shortcuts.dictation-toggle": "Iniciar ou parar ditado"
 }

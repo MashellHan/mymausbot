@@ -11948,5 +11948,6 @@
   "chat.notice.waitingPasswordElsewhere": "Waiting on your {label} in @{name}",
   "chat.notice.waitingSignInElsewhere": "Waiting on you to sign in to {label} in @{name}",
   "chat.notice.waitingConnectElsewhere": "Waiting on you to connect {label} in @{name}",
-  "chat.notice.waitingReviewElsewhere": "Waiting on your review in @{name}"
+  "chat.notice.waitingReviewElsewhere": "Waiting on your review in @{name}",
+  "shortcuts.dictation-toggle": "Start or stop dictation"
 }
