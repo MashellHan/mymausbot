@@ -280,7 +280,7 @@ self.addEventListener("push", (event) => {
           ? `omb:${kind}:${id}`
           : "omb:fallback";
   const tag = cleanString(payload && payload.tag, 160) || fallbackTag;
-  const activity = kind === "activity" || tag.startsWith(ACTIVITY_TAG_PREFIX);
+  const activity = kind === "activity";
   const url = buildDeepLinkUrl(payload);
   const data = {
     url,
@@ -303,7 +303,20 @@ self.addEventListener("push", (event) => {
 
   const tasks = [];
   if (self.registration && typeof self.registration.showNotification === "function") {
-    tasks.push(self.registration.showNotification(title, options));
+    tasks.push(
+      (async () => {
+        // iOS Notification Center can stack notifications with the same tag unless prior ones are closed first.
+        if (tag && typeof self.registration.getNotifications === "function") {
+          try {
+            const existing = await self.registration.getNotifications({ tag });
+            for (const item of existing || []) {
+              if (item && typeof item.close === "function") item.close();
+            }
+          } catch {}
+        }
+        await self.registration.showNotification(title, options);
+      })(),
+    );
   }
   if (payload && typeof payload.unreadCount === "number") {
     tasks.push(syncSwBadge(payload.unreadCount));
