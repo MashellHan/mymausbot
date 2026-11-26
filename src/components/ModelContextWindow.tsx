@@ -8,8 +8,9 @@ import { Select } from "./Select";
 
 const WINDOW_OPTIONS = [32_000, 64_000, 128_000, 256_000, 512_000, MAX_CONTEXT_WINDOW_TOKENS];
 
-export function ModelContextWindow({ selection, disabled, onChange, inline = false }: {
+export function ModelContextWindow({ selection, defaultTokens, disabled, onChange, inline = false }: {
   selection: ModelSelection;
+  defaultTokens?: number;
   disabled?: boolean;
   onChange: (selection: ModelSelection) => void;
   inline?: boolean;
@@ -17,6 +18,9 @@ export function ModelContextWindow({ selection, disabled, onChange, inline = fal
   const [open, setOpen] = useState(false);
   const id = useId();
   const current = selection.contextWindowTokens;
+  const autoLabel = typeof defaultTokens === "number" && Number.isSafeInteger(defaultTokens) && defaultTokens > 0
+    ? `${t("model.simple.auto")} (${defaultTokens.toLocaleString()})`
+    : t("model.simple.auto");
   const options = [...new Set([...WINDOW_OPTIONS, ...(current === undefined ? [] : [current])])].sort((a, b) => a - b);
   const apply = (next: number | undefined) => {
     if (disabled || next === selection.contextWindowTokens) return;
@@ -31,7 +35,7 @@ export function ModelContextWindow({ selection, disabled, onChange, inline = fal
       onClick={() => setOpen(!open)} className={MENU_ROW}>
       <span className={MENU_GUTTER}><Gauge size={16} strokeWidth={MENU_STROKE} className={MENU_ICON} aria-hidden="true" /></span>
       <span className="min-w-0 flex-1 truncate">{t("model.context.label")}</span>
-      <span className="shrink-0 text-ink-secondary">{selection.contextWindowTokens?.toLocaleString() ?? t("model.simple.auto")}</span>
+      <span className="shrink-0 text-ink-secondary">{selection.contextWindowTokens?.toLocaleString() ?? autoLabel}</span>
       <ChevronDown size={16} strokeWidth={MENU_STROKE} className={cn(MENU_TRAILING, open && "rotate-180")} aria-hidden="true" />
     </button>}
     {(inline || open) && <div id={`${id}-edit`} className={inline ? "w-[65%] min-w-0" : "px-2 pb-2 pt-1"}>
@@ -45,7 +49,7 @@ export function ModelContextWindow({ selection, disabled, onChange, inline = fal
             if (option !== undefined) apply(option);
           }
         }}>
-        <option value="auto">{t("model.simple.auto")}</option>
+        <option value="auto">{autoLabel}</option>
         {options.map((tokens) => <option key={tokens} value={tokens}>{tokens.toLocaleString()}</option>)}
       </Select>
     </div>}

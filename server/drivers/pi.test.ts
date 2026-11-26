@@ -66,9 +66,9 @@ describe("parsePiCatalog", () => {
   it("keeps Pi's native model ids and reflects the levels each model supports", () => {
     const baseUrl = "http://127.0.0.1:4040/v1";
     const line = JSON.stringify({ type: "response", command: "get_available_models", success: true, data: { models: [
-      { provider: "raven", baseUrl, id: "gemini-4-carbon", reasoning: true, thinkingLevelMap: { off: null, medium: null, xhigh: null } },
-      { provider: "raven", baseUrl, id: "sol", reasoning: true, thinkingLevelMap: { xhigh: "xhigh", max: "max" } },
-      { provider: "raven", baseUrl, id: "plain-chat", reasoning: false },
+      { provider: "raven", baseUrl, id: "gemini-4-carbon", contextWindow: 1_000_000.9, reasoning: true, thinkingLevelMap: { off: null, medium: null, xhigh: null } },
+      { provider: "raven", baseUrl, id: "sol", contextWindow: 256_000, reasoning: true, thinkingLevelMap: { xhigh: "xhigh", max: "max" } },
+      { provider: "raven", baseUrl, id: "plain-chat", contextWindow: 0, reasoning: false },
     ] } });
     const { options } = parsePiCatalog(line);
     expect(options.map(({ id, effortLevels }) => [id, effortLevels])).toEqual([
@@ -76,6 +76,7 @@ describe("parsePiCatalog", () => {
       ["raven/sol", ["none", "low", "medium", "high", "xhigh", "max"]],
       ["raven/plain-chat", []],
     ]);
+    expect(options.map((option) => option.contextWindow)).toEqual([1_000_000, 256_000, undefined]);
     expect(options[0]?.providerRoute?.connectionGroup)
       .toBe(configuredProviderRoute("raven", "Raven (Local)", baseUrl).connectionGroup);
     expect(options[0]?.providerRoute?.connectionGroup).toMatch(/^loopback:/);

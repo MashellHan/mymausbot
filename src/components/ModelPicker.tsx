@@ -49,6 +49,12 @@ const POPOVER_HEIGHT = 600;
 export const SIMPLE_POPOVER_WIDTH = 324;
 const MENU_ITSELF = ":scope";
 
+function optionContextWindow(option: InstanceInfo["models"]["options"][number] | undefined): number | undefined {
+  return typeof option?.contextWindow === "number" && Number.isSafeInteger(option.contextWindow) && option.contextWindow > 0
+    ? option.contextWindow
+    : undefined;
+}
+
 export function ModelPicker({
   bot: shown, threadId, className, label, size = "md",
   contained = false, showReasoning = false, inlineSettings = false, folded = false,
@@ -140,9 +146,10 @@ export function ModelPicker({
   const refocusAfterPick = useRefocusAfterPick(menuRef, open, selection, query);
   const instances = withTypedModels(state.instances, selection, query);
   const active = instances.find((instance) => instance.instanceId === selection.instanceId);
+  const currentOption = active?.models.options.find((option) => option.id === selection.model);
   const pickerInstances = configuredModelInstances(instances, selection.instanceId);
   const selectedVariantLabel = selection.variant === undefined ? undefined : variantLabel(
-    active?.models.options.find((option) => option.id === selection.model)?.variants?.find((option) => option.id === selection.variant)
+    currentOption?.variants?.find((option) => option.id === selection.variant)
       ?? { id: selection.variant, label: selection.variant },
     active?.driverKind,
   );
@@ -383,10 +390,21 @@ export function ModelPicker({
     }
     : levels.length > 0 && !shown.busy ? { levels, current: selection.effort && levels.includes(selection.effort) ? selection.effort : undefined, onPick: writeEffort, onReset: () => writeEffort(undefined) }
     : null;
+  const declaredContextWindow = optionContextWindow(currentOption);
   const contextWindow = (!contained || showReasoning) && active?.capabilities?.configurableContextWindow
-    ? <ModelContextWindow key={JSON.stringify([bot.id, threadId ?? bot.threadId])} selection={selection} disabled={shown.busy || Boolean(active.policy)} inline={inlineSettings}
+    ? <ModelContextWindow key={JSON.stringify([bot.id, threadId ?? bot.threadId])} selection={selection} defaultTokens={declaredContextWindow}
+      disabled={shown.busy || Boolean(active.policy)} inline={inlineSettings}
       onChange={(next) => applySelection(active, next)} />
-    : null;
+    : inlineSettings && !active?.capabilities?.configurableContextWindow && declaredContextWindow !== undefined
+      ? (
+        <div data-context-window-readonly="" className="flex items-center justify-between gap-3">
+          <span id={`${menuId}-context-window-label`} className="text-[13px] text-ink-secondary">{t("model.context.label")}</span>
+          <output aria-labelledby={`${menuId}-context-window-label`} className="w-[65%] truncate rounded-md bg-control/60 px-2.5 py-1 text-[13px] text-ink-secondary tabular-nums">
+            {declaredContextWindow.toLocaleString()}
+          </output>
+        </div>
+      )
+      : null;
 
   const botModelSelection = follows !== undefined && profile.modelSelection.instanceId === railInstance?.instanceId
     ? profile.modelSelection : undefined;
@@ -414,7 +432,6 @@ export function ModelPicker({
     else close(true);
   };
 
-  const currentOption = active?.models.options.find((option) => option.id === selection.model);
   const attention = !active ? undefined
     : active.policy ? t("policy.managedBy", { organization: active.policy.organizationName })
       : needsCli(active) ? t("model.setupRequired")

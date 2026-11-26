@@ -24,6 +24,7 @@ import {
   resolveAntigravityReleaseAsset,
   type AntigravityReleaseAsset,
 } from "./antigravity-release.ts";
+import { resolveLocalAntigravityCli } from "./antigravity-local.ts";
 
 const FREE_SPACE_MARGIN = 256 * 1024 * 1024;
 const DOWNLOAD_TIMEOUT_MS = 45 * 60_000;
@@ -64,8 +65,10 @@ const INSTALL_RECORD = ".install-complete.json";
 export interface AntigravityRuntime {
   executablePath: string;
   harnessPath: string;
-  source: "managed" | "override" | "path";
+  source: "managed" | "override" | "path" | "local-cli";
   version: string | null;
+  localBaseUrl?: string;
+  modelContextWindows?: ReadonlyMap<string, number>;
 }
 
 export class AntigravitySetupError extends Error {
@@ -184,6 +187,22 @@ export async function resolveAntigravityRuntime(
   for (const candidate of pathCandidates(names.executable, env)) {
     const found = await externalRuntime(candidate, "path");
     if (found) return found;
+  }
+  if (!override || legacyCli) {
+    const preferredLocal = legacyCli && override && (override.includes("/") || override.includes("\\"))
+      ? override
+      : undefined;
+    const local = await resolveLocalAntigravityCli(env, preferredLocal);
+    if (local) {
+      return {
+        executablePath: local.executablePath,
+        harnessPath: "",
+        source: "local-cli",
+        version: null,
+        localBaseUrl: local.baseUrl,
+        modelContextWindows: local.modelContextWindows,
+      };
+    }
   }
   if (!asset) {
     throw new AntigravitySetupError(

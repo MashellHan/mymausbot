@@ -12,6 +12,7 @@ const STRICT_DEMO_BINDINGS = new Map<string, { readonly editionKey: string; read
   ["/github/demo/hypothesis-orders/", { editionKey: "2026-11-23", repo: "hypothesisworks/hypothesis" }],
   ["/github/demo/jsonschema-agent-contract/", { editionKey: "2026-11-24", repo: "python-jsonschema/jsonschema" }],
   ["/github/demo/deepdiff-order-audit/", { editionKey: "2026-11-25", repo: "qlustered/deepdiff" }],
+  ["/github/demo/networkx-pipeline-audit/", { editionKey: "2026-11-26", repo: "networkx/networkx" }],
 ]);
 
 export interface GithubActivitySelection {

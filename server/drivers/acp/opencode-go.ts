@@ -11,6 +11,7 @@ import { decodeInjectId, hostApiKey, localHost, mergeLocalInject } from "../loca
 import { applyStandaloneSpawnEnv } from "../../engine-install.ts";
 import { OPENCODE_STANDALONE } from "./opencode-release.ts";
 import { openCodeBackgroundWork } from "./opencode-background.ts";
+import { applyOpenCodeContextWindow, enrichOpenCodeCatalog, opencodeConfigDir, parseJsonc } from "./opencode-config.ts";
 import { createAcpDriver, type AccountErrorCode, type AcpConfig, type AcpSupport } from "./core.ts";
 import { offeredModels } from "./config-options.ts";
 import { declareTypedOpenCodeModel } from "./opencode-typed-model.ts";
@@ -269,6 +270,10 @@ export async function discoverOpenCodeModels(
     const previous = lastSuccessfulCatalog.get(cli);
     return previous ? { ...previous } : NO_MODELS;
   }
+  const enriched = enrichOpenCodeCatalog(catalog, environment);
+  const prices = catalogPrices.get(catalog);
+  if (prices && enriched !== catalog) catalogPrices.set(enriched, prices);
+  catalog = enriched;
   if (options.refresh && !sameModelIds(lastSuccessfulCatalog.get(cli), catalog)) {
     catalogRevisions.set(cli, (catalogRevisions.get(cli) ?? 0) + 1);
   }
@@ -343,11 +348,6 @@ function withholdProviderKeysWhenManaged(
   for (const key of OPENCODE_PROVIDER_ENV) {
     if (!Object.hasOwn(instanceEnvironment, key)) delete env[key];
   }
-}
-
-function opencodeConfigDir(env: Record<string, string | undefined>): string {
-  const home = env.HOME || env.USERPROFILE || homedir();
-  return join(env.XDG_CONFIG_HOME || join(home, ".config"), "opencode");
 }
 
 /** Upsert an openai-compatible provider so OpenCode can select host/model. */
@@ -490,35 +490,6 @@ export function openCodeOwnedDirectories(botId?: string, cwd?: string): string[]
   // One path segment only: a bot id never names a folder outside its own.
   if (botId && /^[\w-][\w.-]*$/u.test(botId) && botId !== "..") directories.push(join(DATA_DIR, "workspaces", botId));
   return cwd ? directories.filter((directory) => !withinFolder(cwd, directory)) : directories;
-}
-
-/** JSON with comments and trailing commas, as OpenCode reads its config. */
-function parseJsonc(text: string): unknown {
-  let plain = "";
-  let inString = false;
-  for (let index = 0; index < text.length; index += 1) {
-    const character = text[index]!;
-    if (inString) {
-      plain += character;
-      if (character === "\\") plain += text[++index] ?? "";
-      else if (character === '"') inString = false;
-    } else if (character === '"') {
-      inString = true;
-      plain += character;
-    } else if (character === "/" && text[index + 1] === "/") {
-      while (index < text.length && text[index] !== "\n") index += 1;
-      plain += "\n";
-    } else if (character === "/" && text[index + 1] === "*") {
-      index += 2;
-      while (index < text.length && !(text[index] === "*" && text[index + 1] === "/")) index += 1;
-      index += 1;
-    } else plain += character;
-  }
-  try {
-    return JSON.parse(plain.replace(/,(\s*[}\]])/gu, "$1"));
-  } catch {
-    return undefined;
-  }
 }
 
 function readText(path: string): string | undefined {
@@ -695,6 +666,7 @@ const support = (
       return preferredOpenCodeModel(offered, catalogFromOpenCodeSession(sessionConfig)?.current, priceCatalog) || null;
     },
     modelVariants: true,
+    configurableContextWindow: true,
     ownMcpOverHttp: true,
     // OpenCode 1.18.27's build agent lists 13 tools of its own (bash, read, edit, task, skill…); room for a newer CLI's.
     engineTools: 24,
@@ -709,7 +681,8 @@ const support = (
       env.OPENCODE_DISABLE_CLAUDE_CODE_PROMPT = "1";
     },
     spawnFingerprint: (env, config) => openCodeSpawnFingerprint(env, config.cli),
-    applyTurnEnv: (env, { fullAuto, botId, cwd }) => {
+    applyTurnEnv: (env, { model, requestedModel, contextWindowTokens, fullAuto, botId, cwd }) => {
+      applyOpenCodeContextWindow(env, model ?? requestedModel, contextWindowTokens);
       if (openMausOwnsWorkingFolder(cwd)) env.OPENCODE_DISABLE_PROJECT_CONFIG = "1";
       if (!fullAuto) {
         allowOwnedDirectories(env, botId, cwd);

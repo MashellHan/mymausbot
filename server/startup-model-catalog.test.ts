@@ -9,6 +9,7 @@ import { ProviderRegistry } from "./harness/registry.ts";
 import * as procs from "./procs.ts";
 import { holdUntilFirstEngineRead } from "./first-engine-read.ts";
 import { CodexDriver } from "./drivers/codex.ts";
+import { loopbackOriginTag, withModelProviderRoutes } from "./model-provider-routes.ts";
 import { openStartupModelCatalog, readStartupModelCache, readStartupModelCacheEntry, STARTUP_MODEL_CACHE_FRESH_MS, unconfirmedModelCatalog, writeStartupModelCache } from "./startup-model-catalog.ts";
 
 const CACHED: ModelCatalog = {
@@ -134,12 +135,60 @@ describe("startup model catalogs", () => {
     writeFileSync(join(DATA_DIR, "providers", "engine-models", instanceId + ".json"), JSON.stringify({
       default: "a", options: [{
         id: "a", label: "A", effortLevels: ["low", "unknown"], protocolUnsupported: "true",
+        loopbackOrigin: "http://127.0.0.1:7024",
         providerRoute: { id: "configured:62ecdef896b71a45", label: "https://private.example", provenance: "configured", connectionGroup: "unknown", endpoint: "https://private.example" },
       }],
     }));
     expect(readStartupModelCache(instanceId)).toEqual({
       default: "a", options: [{ id: "a", label: "A", providerRoute: { id: "configured:62ecdef896b71a45", provenance: "configured" } }],
     });
+  });
+
+  it("persists hashed loopbackOrigin tags for cold-restart merging and strips them on the wire", () => {
+    const v1Tag = loopbackOriginTag("http://127.0.0.1:7474/v1")!;
+    const originOnlyTag = loopbackOriginTag("http://127.0.0.1:7474", true)!;
+    const v1Group = "loopback:cccccccccccccccc";
+    const originOnlyGroup = "loopback:dddddddddddddddd";
+
+    writeStartupModelCache("cached-opencode", {
+      default: "raven/m",
+      options: [{
+        id: "raven/m",
+        label: "M",
+        providerRoute: { id: "configured:1234567890abcdef", label: "Raven (Local)", provenance: "configured", connectionGroup: v1Group },
+        loopbackOrigin: v1Tag,
+      }],
+    });
+    writeStartupModelCache("cached-agy", {
+      default: "gemini-4-neon",
+      options: [{
+        id: "gemini-4-neon",
+        label: "Gemini 4 Neon",
+        providerRoute: { id: "configured:fedcba0987654321", label: "Antigravity (Local)", provenance: "configured", connectionGroup: originOnlyGroup },
+        loopbackOrigin: originOnlyTag,
+      }],
+    });
+
+    const hydratedOpenCode = readStartupModelCache("cached-opencode")!;
+    const hydratedAgy = readStartupModelCache("cached-agy")!;
+    expect(hydratedOpenCode.options[0]?.loopbackOrigin).toBe(v1Tag);
+    expect(hydratedAgy.options[0]?.loopbackOrigin).toBe(originOnlyTag);
+
+    const described = withModelProviderRoutes([
+      { instanceId: "cached-opencode", driverKind: "opencodeGo", models: hydratedOpenCode },
+      { instanceId: "cached-agy", driverKind: "antigravityAgent", models: hydratedAgy },
+    ], {}) as Array<{ models: ModelCatalog }>;
+
+    expect(described[1].models.options[0]?.providerRoute).toEqual({
+      id: "configured:fedcba0987654321",
+      label: "Raven (Local)",
+      provenance: "configured",
+      connectionGroup: v1Group,
+    });
+    expect(Object.hasOwn(described[0].models.options[0]!, "loopbackOrigin")).toBe(false);
+    expect(Object.hasOwn(described[1].models.options[0]!, "loopbackOrigin")).toBe(false);
+    expect(JSON.stringify(described)).not.toContain("loopbackOrigin");
+    expect(JSON.stringify(described)).not.toContain("127.0.0.1:7474");
   });
 
   it("does not wait for a slow refresh when a later start already has a catalog", async () => {

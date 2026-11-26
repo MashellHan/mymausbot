@@ -196,3 +196,32 @@ it("validates and maps canonical edition/repo selections in both directions", ()
   }
   expect(selectionFromGithubPath("/github/media/demo.png")).toEqual({ ok: false });
 });
+
+it("binds the NetworkX demo to its exact edition and repo without changing lifecycle rules", () => {
+  const path = "/github/demo/networkx-pipeline-audit/";
+  const editionKey = "2026-11-26", repo = "networkx/networkx";
+  const accepted = { ok: true, selection: { editionKey, repo } };
+  expect(selectionFromGithubPath(path, editionKey, repo)).toEqual(accepted);
+  expect(selectionFromGithubPath(`${path}#pipeline`, editionKey, repo)).toEqual(accepted);
+  for (const type of ["leaving", "shown"] as const) {
+    expect(selectionFromGithubPath(path, undefined, undefined, type)).toEqual(accepted);
+    expect(selectionFromGithubPath(path, editionKey, repo, type)).toEqual(accepted);
+    expect(selectionFromGithubPath(path, editionKey, undefined, type)).toEqual({ ok: false });
+    expect(selectionFromGithubPath(path, undefined, repo, type)).toEqual({ ok: false });
+    expect(selectionFromGithubPath(path, null, null, type)).toEqual({ ok: false });
+    expect(selectionFromGithubPath(path, "2026-11-25", repo, type)).toEqual({ ok: false });
+    expect(selectionFromGithubPath(path, editionKey, "qlustered/deepdiff", type)).toEqual({ ok: false });
+  }
+  const rejected: ReadonlyArray<Parameters<typeof selectionFromGithubPath>> = [
+    [path], [path, null, null], [path, editionKey], [path, undefined, repo],
+    [path, "2026-11-25", repo], [path, "2026-11-31", repo],
+    [path, editionKey, "qlustered/deepdiff"], [path, editionKey, "NetworkX/networkx"],
+    [path, editionKey, "networkx/../networkx"],
+  ];
+  for (const args of rejected) expect(selectionFromGithubPath(...args)).toEqual({ ok: false });
+  for (const denied of [path.slice(0, -1), `${path}?view=pipeline`, "/github/demo/networkx-pipeline-audit-lab/",
+    "/github/demo/networkx%2dpipeline-audit/", `${path}index.html`, `${path}results.json`, `${path}preview.png`,
+    `${path}networkx-pipeline-audit-lab-source.zip`]) {
+    expect(selectionFromGithubPath(denied, editionKey, repo)).toEqual({ ok: false });
+  }
+});
