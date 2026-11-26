@@ -108,6 +108,35 @@ describe("web-push-crypto", () => {
         ...keys,
       }),
     ).toThrow(/mailto:|https:/);
+    for (const badSubject of [
+      "mailto:notifications@openmausbot.invalid",
+      "mailto:ops@localhost",
+      "mailto:ops@host.local",
+      "mailto:missing-domain",
+      "https://openmausbot.invalid",
+      "https://localhost:3000",
+      "https://sub.localhost",
+      "https://127.0.0.1:8443",
+      "https://[::1]",
+      "https://mac.local",
+    ]) {
+      expect(
+        () =>
+          buildVapidHeaders({
+            endpoint: "https://web.push.apple.com/abc",
+            subject: badSubject,
+            ...keys,
+          }),
+        badSubject,
+      ).toThrow();
+    }
+    const httpsHeaders = buildVapidHeaders({
+      endpoint: "https://web.push.apple.com/abc",
+      subject: "https://openmausbot.com",
+      ...keys,
+    });
+    const claims = JSON.parse(Buffer.from(httpsHeaders.jwt.split(".")[1]!, "base64url").toString("utf8")) as { sub: string };
+    expect(claims.sub).toBe("https://openmausbot.com");
   });
 
   it("encrypts RFC 8291 aes128gcm payloads that round-trip cleanly with the subscriber keys", () => {

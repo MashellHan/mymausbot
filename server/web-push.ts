@@ -3,7 +3,7 @@
  */
 import { lookup as dnsLookup } from "node:dns/promises";
 import type { LookupAddress } from "node:dns";
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { request as httpsRequest } from "node:https";
 import type { LookupFunction } from "node:net";
 import { dirname, join } from "node:path";
@@ -31,6 +31,7 @@ import {
 } from "../shared/web-push.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { PUSH_DEVICE_KEY } from "./phone-push.ts";
+import { PWA_BRIDGE_CONFIG_FILE, loadPwaBridgeConfig } from "./pwa-bridge-config.ts";
 import { conversationLanguage, serverLine, type ServerLineKey } from "./server-lines.ts";
 import {
   buildVapidHeaders,
@@ -40,6 +41,7 @@ import {
   isValidVapidKeyPair,
   normalizeAuthSecret,
   normalizeP256dhKey,
+  validateVapidSubject,
   type VapidKeyPair,
 } from "./web-push-crypto.ts";
 import {
@@ -59,7 +61,34 @@ export {
 
 export const WEB_PUSH_VAPID_FILE = "web-push-vapid.json";
 export const WEB_PUSH_SUBSCRIPTIONS_FILE = "web-push-subscriptions.json";
-export const DEFAULT_VAPID_SUBJECT = "mailto:notifications@openmausbot.invalid";
+// Apple APNs Web Push rejects RFC 2606 .invalid domains in VAPID sub with HTTP 403 BadJwtToken.
+export const DEFAULT_VAPID_SUBJECT = "https://openmausbot.com";
+
+function tryValidVapidSubject(raw: string | undefined, httpsOnly = false): string | null {
+  const trimmed = raw?.trim();
+  if (!trimmed) return null;
+  try {
+    const validated = validateVapidSubject(trimmed);
+    if (httpsOnly && new URL(validated).protocol !== "https:") return null;
+    return validated;
+  } catch {
+    return null;
+  }
+}
+
+export function defaultVapidSubject(dataDir: string, env: NodeJS.ProcessEnv = process.env): string {
+  const fromEnv = tryValidVapidSubject(env.OMB_WEB_PUSH_SUBJECT);
+  if (fromEnv) return fromEnv;
+  if (existsSync(join(dataDir, PWA_BRIDGE_CONFIG_FILE))) {
+    try {
+      const fromBridge = tryValidVapidSubject(loadPwaBridgeConfig(dataDir).pwaOrigin, true);
+      if (fromBridge) return fromBridge;
+    } catch {
+      return DEFAULT_VAPID_SUBJECT;
+    }
+  }
+  return DEFAULT_VAPID_SUBJECT;
+}
 
 export const MAX_WEB_PUSH_SUBSCRIPTIONS = 50;
 export const MAX_WEB_PUSH_SUBSCRIPTIONS_PER_DEVICE = 4;
@@ -411,7 +440,7 @@ export class WebPushService {
     this.options = options;
     this.vapidFile = join(options.dataDir, WEB_PUSH_VAPID_FILE);
     this.subscriptionsFile = join(options.dataDir, WEB_PUSH_SUBSCRIPTIONS_FILE);
-    this.subject = options.subject ?? DEFAULT_VAPID_SUBJECT;
+    this.subject = options.subject ?? defaultVapidSubject(options.dataDir);
     this.now = options.now ?? Date.now;
     this.log = options.log ?? ((line) => console.log(line));
     this.timers = options.timers ?? {
@@ -882,6 +911,9 @@ export class WebPushService {
       return "paused";
     }
     if (answer.status >= 500 || answer.status === 0) return "retry";
+    if (answer.status >= 400 && answer.status < 500) {
+      this.log(`[web-push] delivery rejected by ${resolved.url.origin} (HTTP ${answer.status})`);
+    }
     return "failed";
   }
 }
