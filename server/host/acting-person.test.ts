@@ -67,6 +67,11 @@ describe("a turn started by a person's own line acts for them", () => {
     expect(world({ threads: { t: [ask("m1", 10)] }, direct: { t: request("g1", { messageId: "m1" }) } }).people.requester("t", "g1"), "a bot's line").toBeNull();
     expect(world({ threads: { t: [said("m1", 10, undefined)] }, direct: { t: request("g1", { messageId: "m1" }) } }).people.requester("t", "g1")).toBeNull();
     expect(world({ threads: { t: [said("m1", 10, "not-a-person-key")] }, direct: { t: request("g1", { messageId: "m1" }) } }).people.requester("t", "g1")).toBeNull();
+    expect(world({ threads: { t: [said("m1", 10, ADA)] }, direct: { t: request("g1", { messageId: "m1", origin: OUTSIDE }) } }).people.requester("t", "g1"), "outside origin never attributes a person").toBeNull();
+    expect(world({ threads: { t: [said("m1", 10, ADA, { relayed: true })] }, direct: { t: request("g1", { messageId: "m1" }) } }).people.requester("t", "g1"), "relayed user line").toBeNull();
+    expect(world({ threads: { t: [said("m1", 10, ADA, { fromApp: { messageId: "m0", title: "App" } })] }, direct: { t: request("g1", { messageId: "m1" }) } }).people.requester("t", "g1"), "app-generated line").toBeNull();
+    expect(world({ threads: { t: [said("m1", 10, ADA, { automated: true })] }, direct: { t: request("g1", { messageId: "m1" }) } }).people.requester("t", "g1"), "automated line").toBeNull();
+    expect(world({ threads: { t: [said("m1", 10, ADA, { kind: "activity" })] }, direct: { t: request("g1", { messageId: "m1" }) } }).people.requester("t", "g1"), "non-text message kind").toBeNull();
   });
 
   it("stops acting for them once someone else's words join it: a line sent in, or an answer to one of its cards", () => {
@@ -77,6 +82,7 @@ describe("a turn started by a person's own line acts for them", () => {
     expect(world({ threads: { t: [...base, said("s1", 12, BEN, { steered: true })] }, direct }).people.requester("t", "g1"), "Ben's line sent into her turn").toBeNull();
     expect(world({ threads: { t: [...base, said("s1", 12, undefined, { steered: true })] }, direct }).people.requester("t", "g1"), "a line from someone the server can't name").toBeNull();
     expect(world({ threads: { t: [...base, said("r1", 12, undefined, { relayed: true })] }, direct }).people.requester("t", "g1"), "a line another app relayed").toBeNull();
+    expect(world({ threads: { t: [...base, said("f1", 12, undefined, { fromApp: { title: "App" } })] }, direct }).people.requester("t", "g1"), "an unattributed app line").toBeNull();
     const card = (person: string) => ({ id: "c1", at: 12, role: "bot", card: { answered: "yes", answeredBy: { kind: "session", person } } });
     expect(world({ threads: { t: [...base, card(ADA)] }, direct }).people.requester("t", "g1")).toBe(ADA);
     expect(world({ threads: { t: [...base, card(BEN)] }, direct }).people.requester("t", "g1"), "Ben answered her turn's card").toBeNull();
