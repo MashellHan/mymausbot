@@ -33,9 +33,12 @@ interface AgySettingsInfo {
   byLabel: Map<string, AgyCustomModelEntry>;
 }
 
+const MAX_ACTIVE_STEP_MS = 5 * 60 * 1000;
+
 interface TokenSample {
   at: number;
   tokens: number;
+  durationMs: number;
   observation: DailyTokenObservation;
 }
 
@@ -244,12 +247,16 @@ function agyWindowUsage(samples: readonly TokenSample[], cutoff: number, verifie
     return {
       coverage: "ready",
       knownTokens: 0,
+      activeSeconds: 0,
       estimatedCost: project([{ input: 0, output: 0, cacheRead: 0, models: [] }], "ready").estimatedCost,
     };
   }
+  const activeMs = observed.reduce((sum, row) => sum + row.durationMs, 0);
+  const activeSeconds = activeMs > 0 ? Math.max(1, Math.round(activeMs / 1000)) : null;
   return {
     coverage: "partial",
     knownTokens,
+    ...(activeSeconds !== null ? { activeSeconds } : {}),
     estimatedCost: project(observed.map(({ observation }) => observation), "partial").estimatedCost,
   };
 }
@@ -296,6 +303,8 @@ export async function readAgySession(
     const samples: TokenSample[] = [];
     let sessionStartedAt: number | null = null;
     let lastActivityAt: number | null = null;
+    let prevEventAt: number | null = null;
+    let pendingStepMs = 0;
     let model: string | null = configured?.model ?? null;
     let reasoningEffort: string | null = configured?.effort ?? null;
     let contextWindow: number | null = configured?.contextWindow ?? null;
@@ -335,6 +344,13 @@ export async function readAgySession(
       if (at !== null) {
         if (sessionStartedAt === null || at < sessionStartedAt) sessionStartedAt = at;
         if (lastActivityAt === null || at > lastActivityAt) lastActivityAt = at;
+        if (row.type === "USER_INPUT") {
+          pendingStepMs = 0;
+        } else if (prevEventAt !== null) {
+          const gap = at - prevEventAt;
+          if (gap > 0 && gap <= MAX_ACTIVE_STEP_MS) pendingStepMs += gap;
+        }
+        prevEventAt = at;
       }
 
       const type = row.type;
@@ -369,7 +385,11 @@ export async function readAgySession(
           const total = input + output + cacheRead;
           if (at !== null && at <= now && at > now - 7 * DAY_MS && Number.isSafeInteger(total) && total > 0) {
             const models = model ? [{ provider: "agy", model, input, output, cacheRead }] : [];
-            samples.push({ at, tokens: total, observation: { input, output, cacheRead, models } });
+            const durationMs = pendingStepMs > 0 ? pendingStepMs : 1000;
+            pendingStepMs = 0;
+            samples.push({ at, tokens: total, durationMs, observation: { input, output, cacheRead, models } });
+          } else {
+            pendingStepMs = 0;
           }
         }
         if (Array.isArray(row.tool_calls)) {

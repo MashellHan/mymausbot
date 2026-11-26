@@ -580,7 +580,7 @@ describe("local Agent Team provider", () => {
     const [missingSplit, unknownPrice] = (await provider.get()).teams[0]!.agents;
     expect(missingSplit!.tokenUsage24h).toMatchObject({ coverage: "ready", knownTokens: 230, estimatedCost: { coverage: "partial" } });
     expect(missingSplit!.tokenUsage24h!.estimatedCost.usd).toBeCloseTo(0.0006, 12);
-    expect(unknownPrice!.tokenUsage24h).toEqual({ coverage: "ready", knownTokens: 50, estimatedCost: { coverage: "unavailable", usd: null } });
+    expect(unknownPrice!.tokenUsage24h).toEqual({ coverage: "ready", knownTokens: 50, activeSeconds: 1, estimatedCost: { coverage: "unavailable", usd: null } });
   });
 
   it("distinguishes known zero from short-session unavailability and partial lower bounds", async () => {
@@ -632,7 +632,7 @@ describe("local Agent Team provider", () => {
     } }) + "\n");
     time = Date.UTC(2026, 10, 9, 12);
     const [knownZero, shortEmpty, shortPartial] = (await provider.get()).teams[0]!.agents;
-    expect(knownZero!.tokenUsage24h).toEqual({ coverage: "ready", knownTokens: 0, estimatedCost: { coverage: "ready", usd: 0 } });
+    expect(knownZero!.tokenUsage24h).toEqual({ coverage: "ready", knownTokens: 0, activeSeconds: 0, estimatedCost: { coverage: "ready", usd: 0 } });
     expect(knownZero!.tokenUsage7d).toEqual({ coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null } });
     expect(shortEmpty!.tokenUsage24h).toEqual({ coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null } });
     expect(shortPartial!.tokenUsage24h).toMatchObject({ coverage: "partial", knownTokens: 130, estimatedCost: { coverage: "partial" } });
