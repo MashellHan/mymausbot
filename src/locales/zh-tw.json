@@ -1382,7 +1382,7 @@
   "botPanel.library.memoryError": "目前無法讀取記憶檔案。",
   "botPanel.library.memoryOff": "{name} 的記憶已關閉。",
   "botPanel.library.pages": "頁面",
-  "botPanel.library.scope": "來自這個對話",
+  "botPanel.library.showAll": "顯示全部",
   "botPanel.memory.addPlaceholder": "告訴 {name} 要記住的事",
   "botPanel.memory.editText": "以純文字編輯",
   "botPanel.memory.empty": "目前還沒有記住任何內容。",

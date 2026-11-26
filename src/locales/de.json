@@ -4188,6 +4188,7 @@
   "server.checkWork.stopped": "du hast die Prüfung gestoppt",
   "server.checkWork.turnedOff": "Vor dem Abschluss prüfen wurde ausgeschaltet",
   "server.checkWork.restarted": "die App wurde neu gestartet",
+  "botPanel.library.showAll": "Alle anzeigen",
   "server.checkBack.pending": "Schaut {when} wieder nach",
   "server.checkBack.started": "Hat {when} wieder nachgeschaut",
   "server.checkBack.cancelled": "Nachschauen abgebrochen",
