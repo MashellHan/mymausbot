@@ -18,13 +18,20 @@ export function ModelContextWindow({ selection, defaultTokens, disabled, onChang
   const [open, setOpen] = useState(false);
   const id = useId();
   const current = selection.contextWindowTokens;
-  const autoLabel = typeof defaultTokens === "number" && Number.isSafeInteger(defaultTokens) && defaultTokens > 0
-    ? `${t("model.simple.auto")} (${defaultTokens.toLocaleString()})`
+  const maxTokens = typeof defaultTokens === "number" && Number.isSafeInteger(defaultTokens) && defaultTokens > 0
+    ? defaultTokens
+    : undefined;
+  const autoLabel = maxTokens !== undefined
+    ? `${t("model.simple.auto")} (${maxTokens.toLocaleString()})`
     : t("model.simple.auto");
-  const options = [...new Set([...WINDOW_OPTIONS, ...(current === undefined ? [] : [current])])].sort((a, b) => a - b);
+  const supported = maxTokens !== undefined
+    ? WINDOW_OPTIONS.filter((tokens) => tokens <= maxTokens)
+    : WINDOW_OPTIONS;
+  const options = [...new Set([...supported, ...(current === undefined ? [] : [current])])].sort((a, b) => a - b);
+  const isUnsupported = (tokens: number) => maxTokens !== undefined && tokens > maxTokens;
   const apply = (next: number | undefined) => {
     if (disabled || next === selection.contextWindowTokens) return;
-    if (next !== undefined && (!Number.isSafeInteger(next) || next < MIN_CONTEXT_WINDOW_TOKENS || next > MAX_CONTEXT_WINDOW_TOKENS)) return;
+    if (next !== undefined && (!Number.isSafeInteger(next) || next < MIN_CONTEXT_WINDOW_TOKENS || next > MAX_CONTEXT_WINDOW_TOKENS || isUnsupported(next))) return;
     const { contextWindowTokens: _window, ...model } = selection;
     onChange(next === undefined ? model : { ...model, contextWindowTokens: next });
   };
@@ -50,7 +57,12 @@ export function ModelContextWindow({ selection, defaultTokens, disabled, onChang
           }
         }}>
         <option value="auto">{autoLabel}</option>
-        {options.map((tokens) => <option key={tokens} value={tokens}>{tokens.toLocaleString()}</option>)}
+        {options.map((tokens) => {
+          const unsupported = isUnsupported(tokens);
+          return <option key={tokens} value={tokens} disabled={unsupported}>
+            {unsupported ? `${tokens.toLocaleString()} (${t("model.variant.unavailable")})` : tokens.toLocaleString()}
+          </option>;
+        })}
       </Select>
     </div>}
   </div>;

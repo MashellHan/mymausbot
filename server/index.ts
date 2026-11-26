@@ -2619,6 +2619,7 @@ function checkedModelSelection(
   if (selection.contextWindowTokens !== undefined && target?.adapter.capabilities.configurableContextWindow !== true) {
     return { ok: false, status: 400, error: "this engine cannot configure its context window" };
   }
+  if (selection.contextWindowTokens !== undefined && typeof option?.contextWindow === "number" && option.contextWindow > 0 && selection.contextWindowTokens > option.contextWindow) return { ok: false, status: 400, error: "contextWindowTokens exceeds this model's context window" };
   if (providerInstancesChanging.has(selection.instanceId)) {
     return { ok: false, status: 409, ...userError("serverError.model.accountUpdating") };
   }
