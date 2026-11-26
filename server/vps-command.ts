@@ -21,6 +21,12 @@ export type VpsCommandRunner = (
 
 const STREAM_CAP_CHARS = 16 * 1024 * 1024;
 
+/** SSH never got through (or the command ran out of time): unlike a Docker refusal, nothing on the host answered. */
+export class VpsHostUnreachableError extends Error {}
+
+// Docker reports its own SSH transport failing on one "error during connect" line that quotes ssh's words after "stderr=".
+// The container command shares that stderr, so ssh's words anywhere else are the command's own output.
+const DOCKER_SSH_TRANSPORT_FAILURE = /^error during connect: .*\bstderr=ssh: (?:Could not resolve hostname|connect to host \S+ port \d+:)/im;
 function tailCollector() {
   const chunks: string[] = [];
   let total = 0;
@@ -100,8 +106,10 @@ export async function defaultRunner(args: string[], options: VpsCommandOptions =
       if (failure) return;
       settle(() => {
         if (code === 0) return resolve({ stdout: stdout.text(), stderr: stderr.text() });
-        const detail = stderr.text().trim().slice(-1000);
-        reject(new Error(detail || `Docker-over-SSH exited ${code ?? signal ?? "without a status"}`));
+        const captured = stderr.text().trim();
+        const message = captured.slice(-1000) || `Docker-over-SSH exited ${code ?? signal ?? "without a status"}`;
+        const error = DOCKER_SSH_TRANSPORT_FAILURE.test(captured) ? new VpsHostUnreachableError(message) : new Error(message);
+        reject(Object.assign(error, { exitCode: code, stdout: stdout.text(), stderr: stderr.text() }));
       });
     });
     try {

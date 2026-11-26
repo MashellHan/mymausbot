@@ -3906,5 +3906,6 @@
   "whatsNew.team.sales": "Ventes",
   "whatsNew.team.start": "Créer une équipe",
   "whatsNew.team.support": "Support",
-  "whatsNew.team.title": "Des bots partagés pour toute votre équipe"
+  "whatsNew.team.title": "Des bots partagés pour toute votre équipe",
+  "server.teammates.noLongerWaiting": "{who} ne vous attend plus"
 }

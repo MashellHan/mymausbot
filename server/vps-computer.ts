@@ -24,7 +24,7 @@ import { PIDS_LIMIT, raisePidsLimit } from "./container-limits.ts";
 import { DATA_DIR, isValidSshAlias, vpsSshAlias, type AppConfig } from "./config.ts";
 import { augmentedPath } from "./env-path.ts";
 import { COMMAND_TIMEOUT_KILL_GRACE_MS, defaultRunner, type VpsCommandRunner } from "./vps-command.ts";
-export { defaultRunner, type VpsCommandOptions, type VpsCommandRunner } from "./vps-command.ts";
+export { defaultRunner, VpsHostUnreachableError, type VpsCommandOptions, type VpsCommandRunner } from "./vps-command.ts";
 import { prepareVpsSsh } from "./vps-ssh.ts";
 import { loadEnvironmentId } from "./environment.ts";
 import { SPAWNED_PROXIES } from "./proxy-paths.ts";

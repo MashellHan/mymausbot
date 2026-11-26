@@ -7071,5 +7071,6 @@
   "workspaces.upgraded": "Ogni installazione in esecuzione è stata riavviata sulla nuova versione.",
   "workspaces.users": "Utenti",
   "workspaces.usersTitle": "Chi può accedere a {slug}",
-  "workspaces.working": "Operazione in corso…"
+  "workspaces.working": "Operazione in corso…",
+  "server.teammates.noLongerWaiting": "{who} non ti aspetta più"
 }

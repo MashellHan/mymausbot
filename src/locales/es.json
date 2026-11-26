@@ -6505,5 +6505,6 @@
   "workspaces.upgraded": "Todas las instalaciones en ejecución se reiniciaron con la nueva versión.",
   "workspaces.users": "Usuarios",
   "workspaces.usersTitle": "Quién puede iniciar sesión en {slug}",
-  "workspaces.working": "Trabajando…"
+  "workspaces.working": "Trabajando…",
+  "server.teammates.noLongerWaiting": "{who} ya no te espera"
 }
