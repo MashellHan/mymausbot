@@ -380,11 +380,11 @@ describe("complete CI and trusted QA health", () => {
     for (const id of Object.keys(workflow.jobs).filter((id) => !["gate", "deploy-composio-broker", "shadow"].includes(id))) {
       expect(jobs.some((job) => job.id === id), id).toBe(true);
     }
-    expect(jobs.filter((job) => job.id === "vitest")).toHaveLength(10);
+    expect(jobs.filter((job) => job.id === "vitest")).toHaveLength(11);
     const observed = jobs.map((job) => ({ ...job, status: "completed", conclusion: "success" }));
     expect(inspectJobs(jobs, observed).passed).toBe(true);
-    expect(inspectJobs(jobs, observed.filter((job) => job.name !== "vitest (macos-latest, all shard 10/10)")))
-      .toMatchObject({ passed: false, missing: ["vitest (macos-latest, all shard 10/10)"] });
+    expect(inspectJobs(jobs, observed.filter((job) => job.name !== "vitest (macos-latest, all shard 11/11)")))
+      .toMatchObject({ passed: false, missing: ["vitest (macos-latest, all shard 11/11)"] });
     expect(inspectJobs(jobs, observed.slice(1))).toMatchObject({ passed: false, missing: [jobs[0].name] });
     for (const conclusion of ["skipped", "cancelled", "timed_out", "failure"]) expect(inspectJobs(jobs, [{ ...observed[0], conclusion }, ...observed.slice(1)]).passed).toBe(false);
   });
@@ -394,7 +394,7 @@ describe("complete CI and trusted QA health", () => {
     const narrow = narrowPlan();
     expect(plan.outputs.expected_jobs[0]).toEqual({ id: "static", name: "typecheck + lint", build: true, linux: false });
     expect(narrow.outputs.expected_jobs[0]).toEqual({ id: "static", name: "typecheck + lint", build: true, linux: false });
-    expect(plan.outputs.expected_jobs).toHaveLength(20);
+    expect(plan.outputs.expected_jobs).toHaveLength(21);
     expect(plan.outputs.platform_policy).toEqual(PLATFORM_POLICY);
     expect(fullPushPlan(plan)).toBe(true);
     expect(fullPushPlan(pushPlan({ ...ciOutputs(FULL_SCOPE, ALL_OS), boat_static: true }))).toBe(true);
@@ -492,7 +492,7 @@ describe("complete CI and trusted QA health", () => {
       required_jobs: selected.jobs.filter((id) => MERGE_JOBS.includes(id)), expected_jobs: expectedJobs(selected) } };
     const current = await reportRun(run.id, { api, readArtifact, repository });
     expect(current).toMatchObject({ executionComplete: false, testsPassed: false,
-      missing: expect.arrayContaining(["vitest (macos-latest, all shard 1/10)"]), platformPolicy: PLATFORM_POLICY });
+      missing: expect.arrayContaining(["vitest (macos-latest, all shard 1/11)"]), platformPolicy: PLATFORM_POLICY });
     artifacts = artifacts.filter((item) => !item.name.startsWith("qa-plan"));
     await expect(reportRun(run.id, { api, readArtifact, repository })).rejects.toThrow("Trusted validation plan unavailable");
     artifacts = [{ name: "qa-plan-attempt-1", workflow_run: { id: 999, head_sha: run.head_sha } }, ...artifacts];

@@ -10,7 +10,7 @@ const run = { id: 100, event: "pull_request", path: ".github/workflows/ci.yml", 
   head_sha: "a".repeat(40), status: "completed", conclusion: "failure", run_attempt: 3, pull_requests: [association] };
 const repair = { state: "open", number: 12, base: { ref: "main", repo }, head: { sha: run.head_sha, ref: run.head_branch, repo },
   labels: [{ name: "qa:repair" }], body: "QA-Repair: #7" };
-const shard = "vitest (macos-latest, all shard 9/10)";
+const shard = "vitest (macos-latest, all shard 9/11)";
 const job = { run_id: run.id, run_attempt: run.run_attempt, status: "completed", id: 9, name: shard, conclusion: "cancelled",
   runner_id: 0, runner_name: "", steps: [] as { name: string; conclusion: string }[] };
 const gate = { ...job, id: 10, name: "CI", runner_id: 19, runner_name: "GitHub Actions", conclusion: "failure",
