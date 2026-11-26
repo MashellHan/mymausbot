@@ -74,7 +74,7 @@ export function analyzeTranscriptRows(rows, cutoffMs) {
           else if (name === "run_command") {
             const cmd = String(tc?.args?.CommandLine || "");
             if (/\b(?:tsc|typecheck)\b/.test(cmd)) tscRuns += 1;
-            if (/(?:\bpnpm(?:\s+run)?\s+build\b|\bvite\s+build\b|build\.py|\belectron-builder\b|\bpackage:(?:mac|win|linux|arch)\b)/.test(cmd)) buildRuns += 1;
+            if (/(?:\bpnpm(?:\s+run)?\s+build(?::|\b)|\bvite\s+build\b|build\.py|desktop-delivery\.mjs|\belectron-builder\b|\bpackage:(?:mac|win|linux|arch)\b)/.test(cmd)) buildRuns += 1;
             if (/\bcheck:ready\b/.test(cmd)) checkReadyRuns += 1;
             if (/\bvitest\b/.test(cmd)) vitestRuns += 1;
           }

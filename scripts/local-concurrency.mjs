@@ -35,7 +35,7 @@ export function defaultDetectDesktopBuildProcess() {
       const pid = Number(match[1]);
       if (pid === process.pid) return false;
       const args = match[2];
-      return /(?:desktop-job.*build\.py|\belectron-builder\b|\bpnpm(?:\s+run)?\s+package(?::|\b))/.test(args);
+      return /(?:desktop-job.*build\.py|scripts\/desktop-delivery\.mjs\b|\belectron-builder\b|\bpnpm(?:\s+run)?\s+(?:package|delivery:desktop)(?::|\b))/.test(args);
     });
   } catch {
     return false;
@@ -176,6 +176,12 @@ function tryCreateExclusiveLock(filePath, payload) {
   }
 }
 
+export function resolveBuildLockEnabled(env = process.env) {
+  if (env.OMB_BUILD_LOCK === "0" || env.OMB_LOCAL_LOCK_BYPASS === "1") return false;
+  if (env.OMB_BUILD_LOCK === "1") return true;
+  return !env.CI;
+}
+
 export function acquireDesktopBuildLock({
   label = "desktop-build",
   cwd = process.cwd(),
@@ -185,7 +191,7 @@ export function acquireDesktopBuildLock({
   now = Date.now,
   checkPidAlive = isProcessAlive,
 } = {}) {
-  if (env.CI || env.OMB_LOCAL_LOCK_BYPASS === "1") {
+  if (!resolveBuildLockEnabled(env)) {
     return { bypassed: true, release() {} };
   }
   mkdirSync(lockDir, { recursive: true, mode: 0o700 });
