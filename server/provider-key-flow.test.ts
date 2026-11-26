@@ -98,6 +98,9 @@ it("saving and replacing a workspace key reaches an existing bot's next request 
   }
 });
 
+/** #6436: an OpenAI-compatible model with no listed efforts offers the manual levels. */
+const EFFORTS = ["low", "medium", "high", "xhigh", "max"].map((id) => ({ id, label: id }));
+
 it("switching the workspace endpoint moves discovery and existing chats without changing a private connection", async () => {
   const received: Array<{ provider: string; path: string; key: string }> = [];
   const providers = ["first", "second"].map((name) => createServer((req, res) => {
@@ -168,8 +171,7 @@ it("switching the workspace endpoint moves discovery and existing chats without 
       .not.toContain("Bearer fixture-second-key");
     const providerRoute = { id: "connection", provenance: "configured" };
     expect(instances.find((instance: { instanceId: string }) => instance.instanceId === "openaiCompat").models.options)
-      .toEqual([{ id: "fixture-shared-model", label: "fixture-shared-model", custom: true, providerRoute },
-        { id: "fixture-second-model", label: "fixture-second-model", custom: true, providerRoute }]);
+      .toEqual(["fixture-shared-model", "fixture-second-model"].map((id) => ({ id, label: id, custom: true, providerRoute, variants: EFFORTS })));
     await send(bot, "second provider reply");
     expect(received).toContainEqual({ provider: "second", path: "/v1/chat/completions", key: "Bearer fixture-second-key" });
 
