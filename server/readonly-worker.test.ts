@@ -11,6 +11,7 @@ import {
   buildReadOnlyContextSnapshot,
   buildReadOnlyWorkerPrompt,
   buildWorkerIntakeMetadata,
+  createReadOnlyToolScope,
   createReadOnlyWorkerPolicy,
   DEFAULT_MAX_CONCURRENT_WORKERS,
   evaluateReadOnlyWorkerEligibility,
@@ -359,11 +360,17 @@ describe("WriteLockGuard, policy, tool authorization, and TurnInput sanitization
       text: "Question",
       approvalMode: "auto-edit",
       approvalModeNow: () => "full",
+      toolScope: { allow: ["native:*"] },
       sessionReset: false,
       ephemeral: false,
       resumeCursor: { sessionId: "main-session" },
       images: [{ path: "/tmp/a.png", mime: "image/png", bytes: 12 }],
+      videos: [{ path: "/tmp/a.mp4", mime: "video/mp4", bytes: 120 }],
       preloadBrowserTools: true,
+      mcpFromUserConfig: true,
+      botSettingsFile: "/tmp/.claude/settings.json",
+      userSkillsDir: "/tmp/skills",
+      skillFiles: ["/tmp/skills/a/SKILL.md"],
       integrations: {
         agents: {
           sendMessage: async () => "ok",
@@ -377,11 +384,17 @@ describe("WriteLockGuard, policy, tool authorization, and TurnInput sanitization
     expect(sanitized.threadId).toBe("readonly-worker:t-1:ro_123");
     expect(sanitized.approvalMode).toBe("ask");
     expect(sanitized.approvalModeNow?.()).toBe("ask");
+    expect(sanitized.toolScope).toEqual(createReadOnlyToolScope());
     expect(sanitized.sessionReset).toBe(true);
     expect(sanitized.ephemeral).toBe(true);
     expect(sanitized.resumeCursor).toBeUndefined();
     expect(sanitized.images).toBeUndefined();
+    expect("videos" in (sanitized as unknown as Record<string, unknown>)).toBe(false);
     expect(sanitized.preloadBrowserTools).toBe(false);
+    expect(sanitized.mcpFromUserConfig).toBe(false);
+    expect(sanitized.botSettingsFile).toBeUndefined();
+    expect(sanitized.userSkillsDir).toBeUndefined();
+    expect(sanitized.skillFiles).toBeUndefined();
     expect(sanitized.integrations?.agents).toBeDefined();
     expect(sanitized.integrations?.localComputer).toBeUndefined();
     expect(sanitized.integrations?.browser).toBeUndefined();

@@ -211,9 +211,10 @@ export function createProviderAdapterWorkerExecutor(options: ProviderAdapterWork
         }
 
         if (event.type === "item.started" && event.itemType === "tool") {
+          const isCommandEvent = event.step?.activity === "command";
           const verdict = authorizeWorkerToolCall({
             tool: event.title ?? "",
-            commandLine: event.summary,
+            ...(isCommandEvent && event.summary ? { commandLine: event.summary } : {}),
             policy: ctx.policy,
           });
           if (!verdict.allowed) {
@@ -251,6 +252,9 @@ export function createProviderAdapterWorkerExecutor(options: ProviderAdapterWork
         .sendTurn(safeInput)
         .then((res) => {
           startedTurnId = res.turnId;
+          if (settled || ctx.signal.aborted) {
+            void adapter.interruptTurn(ctx.executionThreadId, res.turnId).catch(() => {});
+          }
         })
         .catch((error: unknown) => {
           const message = error instanceof Error ? error.message : String(error);
@@ -740,6 +744,7 @@ export function createReadOnlyWorkerCoordinator(
         if (errorText) record.error = redactSecretsInText(errorText);
 
         let mergedAssistant: WorkerMessage | null = null;
+        const deliverySucceeded = finalState === "completed" && Boolean(finalText);
         try {
           const merged = deps.timeline.commitWorkerReply({
             threadId: request.threadId,
@@ -750,9 +755,9 @@ export function createReadOnlyWorkerCoordinator(
             userText: escapeNotes(request.text),
             sendId: request.sendId,
             sender: request.sender,
-            replyText: finalState === "completed" ? finalText : "",
+            replyText: deliverySucceeded ? finalText : "",
             itemId: `${ids.workerTurnId}:reply`,
-            succeeded: finalState === "completed" && Boolean(finalText),
+            succeeded: deliverySucceeded,
             now: completedAt,
           });
           mergedAssistant = merged.assistantMessage;
@@ -761,7 +766,7 @@ export function createReadOnlyWorkerCoordinator(
           releaseSlot(slot);
         }
 
-        emitIntakeFrame(record, finalState === "completed" ? "answered" : "superseded", record.error);
+        emitIntakeFrame(record, deliverySucceeded ? "answered" : "superseded", record.error);
 
         return {
           workerId: ids.workerId,

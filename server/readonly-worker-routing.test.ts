@@ -280,7 +280,7 @@ describe("createReadOnlyWorkerCoordinator & SSE frame isolation", () => {
     expect(outcome2.state).toBe("failed");
     expect(outcome2.error).toContain("forbidden in read-only concurrent mode");
 
-    // Case 3: Allowed read tool followed by answer completes cleanly.
+    // Case 3: Allowed read tool with non-command display summary completes cleanly.
     const third = await coordinator.dispatch({
       threadId: "t-1",
       botId: "bot-1",
@@ -302,6 +302,8 @@ describe("createReadOnlyWorkerCoordinator & SSE frame isolation", () => {
       type: "item.started",
       itemType: "tool",
       title: "Read",
+      summary: "README.md (don't fail on unmatched apostrophe or summary text)",
+      step: { activity: "read", target: "README.md" },
     });
     adapter.emit({
       eventId: "ev-delta",
@@ -328,6 +330,41 @@ describe("createReadOnlyWorkerCoordinator & SSE frame isolation", () => {
     expect(outcome3).toMatchObject({
       state: "completed",
       text: "OpenMausBot",
+    });
+
+    // Case 4: Pre-ACK abort interrupts the turn once sendTurn resolves.
+    let resolveDelayed!: (res: { turnId: string }) => void;
+    const delayedAdapter: Pick<ProviderAdapter, "provider" | "sendTurn" | "interruptTurn" | "respondToRequest" | "onEvent"> = {
+      provider: "claude",
+      onEvent: () => () => {},
+      sendTurn: () =>
+        new Promise((resolve) => {
+          resolveDelayed = resolve;
+        }),
+      interruptTurn: async (threadId, turnId) => {
+        adapter.interrupted.push({ threadId, turnId });
+      },
+      respondToRequest: async () => "rejected",
+    };
+    const delayedCoord = createReadOnlyWorkerCoordinator({
+      timeline: createReadOnlyTimelineAdapter({ store }),
+      execute: createProviderAdapterWorkerExecutor({ adapter: delayedAdapter }),
+    });
+    const fourth = await delayedCoord.dispatch({
+      threadId: "t-1",
+      botId: "bot-1",
+      parentTurnId: "turn-main",
+      primaryTurnActive: true,
+      text: "What is MCP?",
+    });
+    expect(fourth.accepted).toBe(true);
+    if (!fourth.accepted) return;
+    await delayedCoord.cancelWorker(fourth.workerId, "Aborted before ACK");
+    resolveDelayed({ turnId: "late-turn-ack" });
+    await Promise.resolve();
+    expect(adapter.interrupted).toContainEqual({
+      threadId: fourth.executionThreadId,
+      turnId: "late-turn-ack",
     });
   });
 
