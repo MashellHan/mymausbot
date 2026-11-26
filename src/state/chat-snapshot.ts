@@ -28,7 +28,7 @@ export async function readChatSnapshot(current: () => Pick<AppState, "selectedId
     if (!shortHeld(owner) || filled.has(owner.threadId)) break;
     filled.add(owner.threadId);
     const page = await read<ThreadPage>(`/api/threads/${encodeURIComponent(owner.threadId)}/messages?limit=${MESSAGE_PAGE_SIZE}`).catch(() => null);
-    if (!page) break;
+    if (!page || !Array.isArray(page.messages)) break;
     snapshot.bots = snapshot.bots.map((bot) => bot.id === owner.id && bot.threadId === owner.threadId
       ? { ...bot, messages: page.messages, hasMore: Boolean(page.hasMore), ...(page.activeLeafId !== undefined ? { activeLeafId: page.activeLeafId } : {}) }
       : bot);

@@ -14,6 +14,7 @@ import {
   initialState,
   liveCallFromFrame,
   loadSnapshotBoundary,
+  MESSAGE_PAGE_SIZE,
   openBot,
   openThread,
   persistBotUpdate,
@@ -2975,9 +2976,14 @@ describe("restoring the open conversation", () => {
         setItem: (key: string, value: string) => void stored.set(key, value),
       });
       vi.stubGlobal("EventSource", FixtureEventSource);
-      vi.stubGlobal("fetch", (path: string) =>
-        path.startsWith("/api/bots?") ? json({ bots, groups: [room] }) : json(answers[path.replace(/\?since=[^&]*$/, "")] ?? {}),
-      );
+      vi.stubGlobal("fetch", (path: string) => {
+        if (path.startsWith("/api/bots?")) return json({ bots, groups: [room] });
+        const fullPage = /^\/api\/threads\/([^/]+)\/messages\?limit=/.exec(path);
+        const owner = fullPage ? bots.find((candidate) => candidate.threadId === decodeURIComponent(fullPage[1]!)) : undefined;
+        return owner
+          ? json({ messages: owner.messages, hasMore: owner.hasMore, activeLeafId: owner.activeLeafId })
+          : json(answers[path.replace(/\?since=[^&]*$/, "")] ?? {});
+      });
 
       container = document.createElement("div");
       document.body.append(container);
@@ -3047,8 +3053,14 @@ describe("restoring the open conversation", () => {
     });
 
     it("does not report an older-page failure after returning to the same branch", async () => {
-      const message = { id: "m1", at: 1, role: "user", kind: "text", text: "start" } as Message;
-      const { stream } = await boot({}, undefined, [{ ...first, messages: [message], hasMore: true, activeLeafId: "m1" }, second]);
+      const messages = Array.from({ length: MESSAGE_PAGE_SIZE }, (_, index) => ({
+        id: `m${index + 1}`,
+        at: index + 1,
+        role: "user",
+        kind: "text",
+        text: "start",
+      }) as Message);
+      const { stream } = await boot({}, undefined, [{ ...first, messages, hasMore: true, activeLeafId: "m1" }, second]);
       stream.send(hello());
       await settle();
       let rejectPage!: (error: Error) => void;
@@ -3068,10 +3080,16 @@ describe("restoring the open conversation", () => {
     });
 
     it("keeps the current conversation's older-page error when another page fails late", async () => {
-      const message = { id: "m1", at: 1, role: "user", kind: "text", text: "start" } as Message;
+      const messages = Array.from({ length: MESSAGE_PAGE_SIZE }, (_, index) => ({
+        id: `m${index + 1}`,
+        at: index + 1,
+        role: "user",
+        kind: "text",
+        text: "start",
+      }) as Message);
       const { stream } = await boot({}, undefined, [
-        { ...first, messages: [message], hasMore: true },
-        { ...second, messages: [message], hasMore: true },
+        { ...first, messages, hasMore: true },
+        { ...second, messages, hasMore: true },
       ]);
       stream.send(hello());
       await settle();
