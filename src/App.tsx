@@ -375,8 +375,10 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   }, [dispatch]);
 
   const framed = windowFramed(capabilities);
+  // The sidebar is on screen, so its update button is too. In Simple that button is the one; the top bar leaves its own out.
+  const sidebarShown = !calendarFocus && (sidebarInline || drawerOpen);
   const strips = <>
-    <UpdateBanner sidebarIndicator={framed || (!calendarFocus && (sidebarInline || drawerOpen))} />
+    <UpdateBanner sidebarIndicator={framed || sidebarShown} />
     <CloudAsleepStrip />
     <LiveConnectionStrip connected={state.connected} hydrated={state.hydrated === true} cachedHydrated={state.cachedHydrated === true} />
     {remotePwa && <PwaLiveActivityBar onJump={hideDrawer} />}
@@ -388,7 +390,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
     <RawPresentation value={interfaceMode === "raw"}>
     <MiniAppsHost enabled={state.computerOpen && (!!bot || !!group) && !remoteClient}>
     <div data-look="app" data-interface-mode={interfaceMode} data-raw-mac-frame={interfaceMode === "raw" && framed && capabilities.windowChrome === "mac-inset" ? "" : undefined} className={cn("flex h-full flex-col", framed && "bg-frame")} onClickCapture={drawerOpen ? noteDrawerAction : undefined} onKeyDownCapture={drawerOpen ? noteDrawerAction : undefined}>
-      <WindowFrameBar notifications={notificationTray} />
+      <WindowFrameBar notifications={notificationTray} sidebarUpdate={!advanced && sidebarShown} />
       <BotLimitPopup />
       <ConversationShareDialogs />
       {!framed && strips}
