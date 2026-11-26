@@ -257,4 +257,47 @@ describe("Antigravity CLI (agy) support in Agent Team", () => {
     expect(member.messagePreview).toBe("Started upstream theme sync; running tests now.");
     expect(member.taskHint).toBe("Implement upstream theme sync.");
   });
+
+  it("caches pane process-info per stable occupant for 30s and re-probes immediately when occupant changes", async () => {
+    let clock = Date.UTC(2026, 10, 26, 8, 0);
+    const { home, project } = await createAgyFixture(clock);
+    let processInfoCalls = 0;
+    let terminalId = "term_agy_1";
+    const run = async (args: readonly string[]) => {
+      if (args.includes("workspace")) return JSON.stringify({ result: { workspaces: [{ workspace_id: "w6", label: "mymausbot" }] } });
+      if (args.includes("process-info")) {
+        processInfoCalls += 1;
+        return JSON.stringify({
+          result: {
+            process_info: {
+              pane_id: "w6:p5",
+              foreground_processes: [{ argv: ["antigravity", "--model", "gemini-4-neon-1m"] }],
+            },
+          },
+        });
+      }
+      return JSON.stringify({
+        result: {
+          agents: [{
+            pane_id: "w6:p5", workspace_id: "w6", name: "mausbot-review", agent: "agy", agent_status: "idle",
+            cwd: project, terminal_id: terminalId,
+            agent_session: { agent: "agy", kind: "id", source: "herdr:antigravity_cli", value: SESSION },
+          }],
+        },
+      });
+    };
+    const teams = createLocalAgentTeamsProvider({ home, codexHome: join(home, ".codex"), run, now: () => clock });
+    await teams.get(true);
+    expect(processInfoCalls).toBe(1);
+    clock += 5_000;
+    await teams.get(true);
+    expect(processInfoCalls).toBe(1);
+    clock += 31_000;
+    await teams.get(true);
+    expect(processInfoCalls).toBe(2);
+    terminalId = "term_agy_2";
+    clock += 2_000;
+    await teams.get(true);
+    expect(processInfoCalls).toBe(3);
+  });
 });

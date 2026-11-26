@@ -605,7 +605,11 @@ export interface ResolveOptions {
   restricted?(session: SessionRecord, method: string, path: string, url: URL): string | null;
   /** The sentence a person reads when their session lacks the scope for this request; null keeps the bare refusal. */
   scopeRefusal?(method: string, path: string): string | null;
+  /** Verifies a DPoP proof for bearer sessions bound to a public key; returns null on success or a refusal message. */
+  verifyDpop?(req: IncomingMessage, session: SessionRecord, method: string, url: URL): string | null;
 }
+
+const dpopVerifiedRequests = new WeakMap<IncomingMessage, string>();
 
 const CLI_OWNER_HEADER = "x-openmausbot-cli-owner";
 const CLI_OWNER_ROUTE = /^\/api\/auth\/pairing$/;
@@ -670,6 +674,18 @@ export function resolveRequestAuth(req: IncomingMessage, options: ResolveOptions
     if (via === "cookie" && !isSameOrigin(req)) return deny(403, "forbidden: cross-origin request");
     // A browser sign-in's session is its cookie, never a bearer token.
     if (via === "bearer" && session.cookieOnly) return deny(401, "unauthorized: this session belongs to a browser; sign in with a pairing code");
+    if (via === "cookie" && session.dpopJwk) return deny(401, "unauthorized: DPoP-bound session requires Bearer authentication");
+    if (via === "bearer" && session.dpopJwk) {
+      const dpopHeader = typeof req.headers.dpop === "string" ? req.headers.dpop : "";
+      const verifiedKey = `${session.id}:${method.toUpperCase()}:${options.url.pathname}${options.url.search}:${dpopHeader}`;
+      if (options.verifyDpop) {
+        const refusal = options.verifyDpop(req, session, method, options.url);
+        if (refusal !== null) return deny(401, refusal || "unauthorized: DPoP proof required");
+        dpopVerifiedRequests.set(req, verifiedKey);
+      } else if (dpopVerifiedRequests.get(req) !== verifiedKey) {
+        return deny(401, "unauthorized: DPoP proof required");
+      }
+    }
     if (via === "cookie" && session.cookieOnly && (!["GET", "HEAD", "OPTIONS"].includes(method) || mutatingPublicRoute(method, path)) &&
       !provesSameOrigin(req)) {
       return deny(403, "forbidden: this browser's session makes changes only from its own page");

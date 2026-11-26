@@ -553,7 +553,7 @@ import {
 } from "./request-auth.ts";
 import { cookieMaxAgeSeconds, formatPairingCode, pairingRequest, SessionRegistry, type SessionRecord } from "./sessions.ts"; import type { PairingErrorCode } from "../shared/pairing-code.ts";
 import { ThreadStarters } from "./thread-starters.ts"; import { createConversationShares } from "./host/conversation-shares.ts"; import { createTeamMemorySaves } from "./host/team-memory-saves.ts"; import { createConversationSharing } from "./routes/conversation-share.ts";
-import { startPhoneRelay } from "./phone-relay.ts"; import { isPwaBridgeRequest, pwaBridgePairingRefusal, startPwaBridge } from "./pwa-bridge.ts"; import { createPwaBridgeRoutes } from "./routes/pwa-bridge.ts";
+import { startPhoneRelay } from "./phone-relay.ts"; import { isPwaBridgeRequest, pwaBridgeBodySha256, pwaBridgePairingRefusal, startPwaBridge } from "./pwa-bridge.ts"; import { DpopVerifier, parseDpopPublicJwk, verifyRequestDpop } from "./pwa-dpop.ts"; import { createPwaBridgeRoutes } from "./routes/pwa-bridge.ts";
 import {
   appendAdminAction,
   BOT_AUDIT_FIELDS,
@@ -694,7 +694,7 @@ const sessions = new SessionRegistry({
     return (email) => allowedScopes(email, membership);
   },
   portalMembership: hostedWorkspaceConfiguration()?.portalMembership === true, recheckMs: 1_000,
-}); onConfigSaved(() => sessions.membershipChanged());
+}); onConfigSaved(() => sessions.membershipChanged()); const dpopVerifier = new DpopVerifier();
 const deviceLinks = new DeviceLinks(); const sharedComputers = new SharedComputers(id => sessions.isLive(id), new LentComputers(join(DATA_DIR, "lent-computers.json")), deviceLinks, lentCopies); sharedComputers.wokeAt = () => cloudPowerNow()?.sleptUntil() ?? null; let startedFromSleep = false;
 // A Cloud home's secrets come over the launcher's pipe, never this process's environment.
 const CLOUD_SECRETS = BOOT_CLOUD_SECRETS;
@@ -12637,10 +12637,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       const body = await readBody(req, 8_192);
       const credential = typeof body?.credential === "string" ? body.credential : typeof body?.code === "string" ? body.code : "";
-      const label = typeof body?.deviceName === "string" ? body.deviceName : "";
-      const attemptId = typeof body?.pairRequestId === "string" ? body.pairRequestId : undefined;
+      const label = typeof body?.deviceName === "string" ? body.deviceName : "", attemptId = typeof body?.pairRequestId === "string" ? body.pairRequestId : undefined;
+      const dpopJwk = body?.dpopPublicKey === undefined ? undefined : parseDpopPublicJwk(body.dpopPublicKey); if (dpopJwk === null) return json(res, 400, { error: "invalid DPoP public key", code: "pairing_bad_request" satisfies PairingErrorCode });
       const relayRefusal = phoneRelay?.pairingRefusal(req, credential) ?? pwaBridgePairingRefusal(req, credential); if (relayRefusal) return json(res, 400, { error: relayRefusal, code: "pairing_qr_only" satisfies PairingErrorCode });
-      const paired = sessions.exchange({ code: credential, label, attemptId, source: requestSource(req), fallbackLabel: labelFromUserAgent(req.headers["user-agent"]), ...(isPwaBridgeRequest(req) ? { pwa: true } : {}) });
+      const paired = sessions.exchange({ code: credential, label, attemptId, source: requestSource(req), fallbackLabel: labelFromUserAgent(req.headers["user-agent"]), ...(isPwaBridgeRequest(req) ? { pwa: true } : {}), ...(dpopJwk ? { dpopJwk } : {}) });
       if (!paired.ok) {
         console.warn(`pairing refused from ${requestSource(req)}: ${paired.error}`);
         return json(res, paired.status, { ...refusalBody(paired), code: paired.code });
@@ -12667,7 +12667,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       companionMutationToken,
       features: { sharedComputers: lendingEnabled() },
       loopbackTrust: LOOPBACK.trust,
-      cliOwnerToken, trustLocalBrowser: LOOPBACK.localBrowsers, restricted: (session, m, p, u) => linkSessionRefusal(session, m, p) ?? (CLOUD_TEAM ? moveInRefusal(session, m, p, u) : null), scopeRefusal: (m, p) => liveScopeRefusal(cfg, m, p),
+      cliOwnerToken, trustLocalBrowser: LOOPBACK.localBrowsers, restricted: (session, m, p, u) => linkSessionRefusal(session, m, p) ?? (CLOUD_TEAM ? moveInRefusal(session, m, p, u) : null), scopeRefusal: (m, p) => liveScopeRefusal(cfg, m, p), verifyDpop: (r, s, m, u) => verifyRequestDpop(dpopVerifier, r, s, m, u, pwaBridgeBodySha256(r)),
     });
     // The session term slides on use, so re-issue the cookie on every cookie request; handlers that clear it later overwrite this header.
     if (gate.auth?.kind === "session" && gate.auth.via === "cookie") {

@@ -13,22 +13,28 @@ read `git show origin/main:docs/MAUSBOT-VALIDATION.md` and the current playbook
 before proceeding. A missing file in that checkout is not a missing policy.
 
 - Use `pnpm check:plan`, `pnpm check:edit` and one `pnpm check:ready` for handoff.
-  Global typecheck belongs in CI. When a local type check is necessary, use
-  `pnpm typecheck --project ui` or `--project server`; it revalidates compiler
-  state in this worktree. `pnpm build` includes typecheck, so do not prefix it
-  with another identical check. Retain the normal push hook.
-- Before implementation, record acceptance, evidence/dependencies and the first
-  candidate in the existing task brief, following the playbook's engineering
-  rules. Update that brief when scope changes; do not add an approval stage.
+  Feature devs do **not** run local `pnpm typecheck`, `tsc`, `pnpm build`, or App
+  packaging; GitHub CI runs `typecheck + lint` and full checks in the cloud, and
+  one dedicated build owner (`mausbot-front`, coordinated by Lead) batches merged
+  `origin/main` PRs into a single serialized desktop build (never per-PR). During
+  iteration, run only the 1–3 affected test files and never poll `manage_task()`
+  in a loop. Retain the normal push hook.
+- Keep PR handoffs lean: put Acceptance, Scope and Checks as 3–5 bullets inside
+  the PR description instead of standalone multi-page briefs, and open small
+  ready PRs early. Update when scope changes; do not add an approval stage.
 - Freeze a coherent source candidate and start review/CI alongside remaining
   isolated UI acceptance. Pending evidence stays pending; only changed inputs,
   findings or a failed check justify another check/review of that scope.
 - Run `pnpm check:fixtures` before running a new or edited Electron fixture.
   Reuse its existing async entry, scoped selectors and bounded phase waits.
-- One owner builds and updates the App. Follow `docs/MAUSBOT-LOCAL-RUNBOOK.md`:
+- One owner (`mausbot-front`) builds and updates the App in **batched** runs
+  coordinated by Lead (never per-PR). Follow `docs/MAUSBOT-LOCAL-RUNBOOK.md`:
   run `check:delivery request` before building, retain package/startup checks,
-  and reuse `check:delivery routines` / `inventory` for their preservation checks.
+  reuse `check:delivery routines` / `inventory` for preservation checks, and
+  keep at most 3 recent delivery backup directories under `.omb-scratch/*-delivery-*`.
   Those read-only checks grant no live mutation or test waiver.
+- Run `pnpm team:health` (read-only) to inspect team latency, poll loops, local
+  `tsc`/build violations, CPU load, stale worktrees, and backup counts.
 - Route nonblocking corrections through Lead in one batch at a safe boundary.
   Keep cleanup, unrelated QA and new features outside the active delivery.
 

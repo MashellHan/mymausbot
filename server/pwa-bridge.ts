@@ -1,5 +1,6 @@
 // Outbound WSS bridge client (`omb-pwa-bridge.v1`) connecting the local Mac server to the DO relay and dispatching
 // sanitized, allowlisted requests to `handleRequest` over an in-memory socket without loopback trust.
+import { createHash } from "node:crypto";
 import {
   Agent,
   createServer,
@@ -76,10 +77,16 @@ export interface PwaBridgeOptions {
 }
 
 const bridgeSockets = new WeakSet<object>();
+const bridgeBodySha256 = new WeakMap<object, string>();
 
 /** True only for requests dispatched through the in-memory PWA bridge virtual socket. */
 export function isPwaBridgeRequest(req: IncomingMessage): boolean {
   return Boolean(req.socket && bridgeSockets.has(req.socket));
+}
+
+/** Lowercase hex SHA-256 of the buffered request body for a PWA bridge request, if present. */
+export function pwaBridgeBodySha256(req: IncomingMessage): string | undefined {
+  return req.socket ? bridgeBodySha256.get(req.socket) : undefined;
 }
 
 export function pwaBridgePairingRefusal(req: IncomingMessage, input: string): string | null {
@@ -314,6 +321,7 @@ export function startPwaBridge(options: PwaBridgeOptions): PwaBridge | null {
     const near = socketLike(rawNear);
     const far = socketLike(rawFar);
     bridgeSockets.add(far);
+    bridgeBodySha256.set(far, createHash("sha256").update(body).digest("hex"));
     streamMeta.set(far, {
       remoteAddr: stream.remoteAddr,
       expectedMethod: stream.method,

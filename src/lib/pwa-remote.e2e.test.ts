@@ -332,9 +332,16 @@ describe("PWA remote transport E2E through local pwa-relay and Mac server fixtur
       relayUrl: relayBase,
       defaultBotId: botId,
       scopes: ["client"],
+      dpopBound: true,
     });
 
-    // 2. readSessionState() and api.listBots() work over the relay using Bearer auth.
+    // 2. readSessionState() and api.listBots() work over the relay using Bearer + DPoP auth,
+    // while a stolen Bearer token without a valid DPoP proof is rejected.
+    const stolenBearerRes = await fetch(`${relayBase}/api/bots`, {
+      headers: { authorization: `Bearer ${getPwaAuth()!.token}` },
+    });
+    expect(stolenBearerRes.status).toBe(401);
+
     const session = await readSessionState();
     expect(session).toMatchObject({ kind: "session", scopes: ["client"] });
 

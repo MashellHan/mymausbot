@@ -1,7 +1,13 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Bot, ConfigStatus, Group, Message } from "@/state/store";
-import { makePwaOwnerKey, OMB_PWA_DB_NAME, OMB_PWA_DB_VERSION } from "./pwa-config";
+import {
+  makePwaOwnerKey,
+  OMB_PWA_DB_NAME,
+  OMB_PWA_DB_VERSION,
+  OMB_PWA_DPOP_STORE,
+  openPwaDb,
+} from "./pwa-config";
 import {
   deletePwaOwnerCache,
   patchPwaPrefs,
@@ -319,14 +325,17 @@ describe("pwa-cache", () => {
     expect(register).toHaveBeenCalledWith("/sw.js", { scope: "/", updateViaCache: "none" });
   });
 
-  it("keeps public/sw.js scoped to static shell caches without touching /api/* or IndexedDB", () => {
+  it("keeps public/sw.js scoped to static shell caches without touching /api/* or IndexedDB", async () => {
     const sw = readFileSync(new URL("../../public/sw.js", import.meta.url), "utf8");
     expect(sw).toContain('pathname.startsWith("/api/")');
     expect(sw).toContain("omb-pwa-shell-");
     expect(sw).not.toContain("indexedDB");
     expect(sw).not.toContain("deleteDatabase");
     expect(OMB_PWA_DB_NAME).toBe("omb-pwa-v1");
-    expect(OMB_PWA_DB_VERSION).toBe(3);
+    expect(OMB_PWA_DB_VERSION).toBe(4);
+    const db = await openPwaDb(createFakeIdbFactory());
+    expect(db?.objectStoreNames.contains(OMB_PWA_DPOP_STORE)).toBe(true);
+    db?.close();
   });
 
   it("never caches or serves redirected responses for navigation or HTML fallbacks for /assets/*", async () => {
