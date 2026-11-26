@@ -33,14 +33,16 @@ function assertDocumentFolder(botId: string): void {
   }
 }
 
-function writeBotDocument(botId: string, name: typeof SOUL_FILE | typeof AGENTS_FILE, text: string): void {
+function writeBotDocument(botId: string, name: typeof SOUL_FILE | typeof AGENTS_FILE, text: string, durable = true): void {
   assertDocumentFolder(botId);
   mkdirSync(botFolder(botId), { recursive: true, mode: 0o700 });
-  writeFileAtomic(join(botFolder(botId), name), text, { mode: 0o600 });
+  writeFileAtomic(join(botFolder(botId), name), text, { mode: 0o600, durable });
 }
 
-export function writeSoulMirror(botId: string, soul: string): void {
-  writeBotDocument(botId, SOUL_FILE, soul);
+/** Private modes: standing instructions can describe a person's work in detail. `durable: false` skips the disk sync for
+ * a mirror of text that is already saved with the bot: a power loss can then leave the file empty, which reads as drift. */
+export function writeSoulMirror(botId: string, soul: string, durable = true): void {
+  writeBotDocument(botId, SOUL_FILE, soul, durable);
 }
 
 function readBotDocument(botId: string, name: typeof SOUL_FILE | typeof AGENTS_FILE): string | undefined {
