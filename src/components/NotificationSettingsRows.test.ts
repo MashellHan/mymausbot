@@ -3,7 +3,8 @@ import { act, createElement, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { setLocale } from "@/lib/i18n";
-import { DeviceNotificationsRow } from "./NotificationSettingsRows";
+import { setActivePwaAuth } from "@/lib/pwa-transport";
+import { DeviceNotificationsRow, NotificationRows } from "./NotificationSettingsRows";
 
 const fixture = vi.hoisted(() => ({ optedIn: true, setFinishedNotifications: vi.fn() }));
 vi.mock("@/lib/notification-preferences", () => ({
@@ -13,6 +14,9 @@ vi.mock("@/lib/notification-preferences", () => ({
   setNotificationFeed: vi.fn(),
   useFinishedNotifications: () => fixture.optedIn,
   setFinishedNotifications: fixture.setFinishedNotifications,
+}));
+vi.mock("./WebPushSettingsSection", () => ({
+  WebPushSettingsSection: () => createElement("div", { "data-web-push-section": "" }),
 }));
 
 let root: Root | undefined;
@@ -35,6 +39,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  setActivePwaAuth(null);
   if (root) await act(async () => root!.unmount());
   container.remove();
   vi.restoreAllMocks();
@@ -104,4 +109,25 @@ it("ignores hidden pages and stops listening once unmounted", async () => {
   await resume("visibilitychange");
   await resume("focus");
   expect(readPermission).not.toHaveBeenCalled();
+});
+
+it("renders WebPushSettingsSection only in paired remote PWA mode and falls back to DeviceNotificationsRow locally", async () => {
+  setActivePwaAuth(null);
+  await act(async () => root!.render(createElement(StrictMode, null, createElement(NotificationRows))));
+  expect(container.querySelector("[data-web-push-section]")).toBeNull();
+  expect(container.textContent).toContain("Notifications on this device");
+
+  setActivePwaAuth({
+    ownerKey: "https://relay.mxhan.com::env::s1",
+    relayUrl: "https://relay.mxhan.com",
+    token: "omb_sess_1",
+    deviceId: "d1",
+    environmentId: "env",
+    sessionId: "s1",
+    serverName: "Mac",
+    scopes: ["client"],
+    pairedAt: 1,
+  });
+  await act(async () => root!.render(createElement(StrictMode, null, createElement(NotificationRows))));
+  expect(container.querySelector("[data-web-push-section]")).not.toBeNull();
 });

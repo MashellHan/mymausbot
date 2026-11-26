@@ -7,6 +7,7 @@ import {
   resolveThreadRefs,
   serializeThreadRefs,
   splitThreadRefsForDisplay,
+  takePwaNotificationTargetFromLocation,
   takeThreadLinkFromLocation,
   threadRefUrl,
   threadWebRefUrl,
@@ -155,6 +156,22 @@ describe("a thread named in the web app's address", () => {
     expect(untouched).not.toHaveBeenCalled();
     vi.stubGlobal("window", {});
     expect(takeThreadLinkFromLocation()).toBeNull();
+  });
+
+  it("extracts PWA Web Push deep-link targets and preserves unrelated params", () => {
+    const replaceState = at("?lang=zh&bot=scout&thread=t-9&group=g-1&notificationId=n-2", "#top");
+    expect(takePwaNotificationTargetFromLocation()).toEqual({
+      botId: "scout",
+      threadId: "t-9",
+      groupId: "g-1",
+      notificationId: "n-2",
+    });
+    expect(replaceState).toHaveBeenCalledWith(null, "", "/?lang=zh#top");
+
+    at("?group=room-1");
+    expect(takePwaNotificationTargetFromLocation()).toEqual({ groupId: "room-1" });
+    at("?lang=en");
+    expect(takePwaNotificationTargetFromLocation()).toBeNull();
   });
 });
 
