@@ -243,7 +243,7 @@ posixOnly("mid-turn steering e2e", () => {
       const restarted = await api("POST", `/api/bots/${created.id}/messages`, { text: "start over with this", followUp: "restart" });
       expect(restarted.status).toBe(202);
       expect(restarted.body).toMatchObject({ ok: true, queued: true, queueId: expect.any(String) });
-      await waitFor(async () => (await getBot(created.id)).messages.some((m: any) => m.role === "user" && m.text === "start over with this"),
+      await waitFor(async () => (await getBot(created.id)).messages.find((m: any) => m.role === "user" && m.text === "start over with this")?.intake?.state === "processing",
         "the restarted turn to begin with the message");
     } finally {
       writeFileSync(steerFinishGate, "finish");
@@ -264,7 +264,7 @@ posixOnly("mid-turn steering e2e", () => {
     await waitFor(async () => (await getBot(created.id)).busy === true, "the hung turn to start");
     const restarted = await api("POST", `/api/bots/${created.id}/messages`, { text: "second", followUp: "restart" });
     expect(restarted.body).toMatchObject({ ok: true, queued: true });
-    await waitFor(async () => (await getBot(created.id)).messages.some((m: any) => m.text === "second"), "the message to begin its own turn");
+    await waitFor(async () => (await getBot(created.id)).messages.find((m: any) => m.text === "second")?.intake?.state === "processing", "the message to begin its own turn");
     await api("POST", `/api/bots/${created.id}/interrupt`);
     await waitFor(async () => (await getBot(created.id)).busy === false, "the restarted turn to settle");
   }, 30_000);
@@ -614,14 +614,18 @@ posixOnly("mid-turn steering e2e", () => {
     expect(queued.body.queued).toBe(true);
     expect(typeof queued.body.queueId).toBe("string");
     expect(queued.body.threadId).toBe(created.threadId);
-    expect((await getBot(created.id)).messages.some((m: any) => m.text === "second")).toBe(false);
+    const pendingRow = (await getBot(created.id)).messages.find((m: any) => m.text === "second");
+    expect(pendingRow).toMatchObject({
+      text: "second",
+      sender: PAIRED,
+      intake: { mode: "progressive-continue", state: "received" },
+    });
     await api("POST", `/api/bots/${created.id}/interrupt`);
     await waitFor(
-      async () => (await getBot(created.id)).messages.some((m: any) => m.text === "second"),
+      async () => (await getBot(created.id)).messages.find((m: any) => m.text === "second")?.intake?.state === "processing",
       "the queued message to begin its turn",
     );
     const drained = (await getBot(created.id)).messages.find((m: any) => m.text === "second");
-    expect(drained.queueId).toBe(queued.body.queueId);
     expect(drained.sender).toEqual(PAIRED);
     await api("POST", `/api/bots/${created.id}/interrupt`);
     await waitFor(async () => (await getBot(created.id)).busy === false, "the queued turn to settle");
@@ -753,7 +757,8 @@ posixOnly("mid-turn steering e2e", () => {
     const person = await asPairedPerson();
     const queued = await person("POST", `/api/bots/${created.id}/messages`, { text: "steer these queued words" });
     expect(queued.body).toMatchObject({ ok: true, queued: true });
-    expect((await getBot(created.id)).messages.some((m: any) => m.text === "steer these queued words")).toBe(false);
+    expect((await getBot(created.id)).messages.find((m: any) => m.text === "steer these queued words")?.intake)
+      .toMatchObject({ mode: "progressive-continue", state: "received" });
 
     rmSync(codexSteerGate, { force: true });
     const steered = await api("POST", `/api/bots/${created.id}/queue/${queued.body.queueId}/steer`, {
@@ -762,7 +767,9 @@ posixOnly("mid-turn steering e2e", () => {
     expect(steered.status).toBe(200);
     expect(steered.body.steered).toBe(true);
     expect(steered.body.queueIds).toEqual([queued.body.queueId]);
-    const folded = (await getBot(created.id)).messages.find((m: any) => m.text === "steer these queued words");
+    const foldedMatches = (await getBot(created.id)).messages.filter((m: any) => m.text === "steer these queued words");
+    expect(foldedMatches).toHaveLength(1);
+    const folded = foldedMatches[0];
     expect(folded.steered).toBe(true);
     expect(folded.sender).toEqual(PAIRED);
     expect(steered.body.messages[0].sender).toEqual(PAIRED);
@@ -787,11 +794,12 @@ posixOnly("mid-turn steering e2e", () => {
     expect(still.status).toBe(200);
     expect(still.body).toMatchObject({ ok: true, queued: true });
     expect((await getBot(created.id)).busy).toBe(true);
-    expect((await getBot(created.id)).messages.some((m: any) => m.text === "second")).toBe(false);
+    expect((await getBot(created.id)).messages.find((m: any) => m.text === "second")?.intake)
+      .toMatchObject({ mode: "progressive-continue", state: "received" });
 
     await api("POST", `/api/bots/${created.id}/interrupt`);
     await waitFor(
-      async () => (await getBot(created.id)).messages.some((m: any) => m.text === "second"),
+      async () => (await getBot(created.id)).messages.find((m: any) => m.text === "second")?.intake?.state === "processing",
       "the preserved queue to drain",
     );
     await api("POST", `/api/bots/${created.id}/interrupt`);
@@ -1060,13 +1068,49 @@ posixOnly("mid-turn steering e2e", () => {
     expect(still.body).toMatchObject({ ok: true, queued: true, blockedBy: "images" });
     expect(still.body.steered).toBeUndefined();
     expect((await getBot(created.id)).busy).toBe(true);
-    expect((await getBot(created.id)).messages.some((m: any) => m.text === imageText)).toBe(false);
+    expect((await getBot(created.id)).messages.find((m: any) => m.text === imageText)?.intake)
+      .toMatchObject({ mode: "progressive-continue", state: "received" });
     const nativeRows = readFileSync(join(home, ".openmausbot", "native", `${created.threadId}.ndjson`), "utf8")
       .trim().split("\n").map((line) => JSON.parse(line));
     expect(nativeRows.filter((row) => row.dir === "out" && row.msg?.method === "turn/steer")).toHaveLength(0);
 
     expect((await api("DELETE", `/api/bots/${created.id}/queue/${queued.body.queueId}`, { threadId: created.threadId })).status).toBe(200);
+    expect((await getBot(created.id)).messages.find((m: any) => m.text === imageText)).toMatchObject({
+      requestCancelled: true,
+      intake: { mode: "progressive-continue", state: "superseded" },
+    });
     await api("POST", `/api/bots/${created.id}/interrupt`);
     await waitFor(async () => (await getBot(created.id)).busy === false, "the codex turn to settle");
   }, 40_000);
+
+  it("soft-redirect during an ACP turn uses protocol session/cancel without SIGTERM, marks superseded, and carries context forward", async () => {
+    const created = (await api("POST", "/api/bots")).body.bot;
+    await api("PATCH", `/api/bots/${created.id}`, { modelSelection: { instanceId: "acp", model: "fake-model" } });
+    expect((await api("POST", `/api/bots/${created.id}/messages`, { text: "Audit the old storage layer" })).status).toBe(202);
+    await waitFor(async () => (await getBot(created.id)).busy === true, "the ACP turn to start");
+
+    const redirect = await api("POST", `/api/bots/${created.id}/messages`, {
+      text: "Cancel that and inspect auth boundaries instead",
+    });
+    expect(redirect.status).toBe(202);
+    expect(redirect.body).toMatchObject({
+      ok: true,
+      queued: true,
+      intake: { mode: "soft-redirect" },
+    });
+
+    await waitFor(
+      async () =>
+        (await getBot(created.id)).messages.find((m: any) => m.text === "Cancel that and inspect auth boundaries instead")?.intake?.state === "processing",
+      "the soft-redirect follow-up to start running",
+    );
+    const bot = await getBot(created.id);
+    expect(bot.messages.find((m: any) => m.text === "Audit the old storage layer")?.intake).toMatchObject({
+      state: "superseded",
+    });
+    expect(stderr).not.toContain("signal SIGTERM");
+
+    await api("POST", `/api/bots/${created.id}/interrupt`);
+    await waitFor(async () => (await getBot(created.id)).busy === false, "the redirected turn to settle");
+  }, 30_000);
 });
