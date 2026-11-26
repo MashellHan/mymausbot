@@ -7206,5 +7206,8 @@
   "workspaces.users": "Użytkownicy",
   "workspaces.usersTitle": "Kto może się logować do {slug}",
   "workspaces.working": "Trwa…",
-  "server.teammates.noLongerWaiting": "{who} już na ciebie nie czeka"
+  "server.teammates.noLongerWaiting": "{who} już na ciebie nie czeka",
+  "decider.provider.line": "Albo użyj klucza innego dostawcy dla tych małych modeli.",
+  "computer.worksOnHintServer": "Wybierz, gdzie pracuje ten bot. Komputera udostępnionego z aplikacji {app} na komputer nie wybiera się tutaj: po prostu poproś bota, żeby go użył.",
+  "settings.ai.otherServicesLine": "Klucze do głosów, komputerów, aplikacji i pomocników, poza twoimi głównymi modelami."
 }
