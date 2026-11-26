@@ -7259,5 +7259,6 @@
   "workspaces.upgraded": "Все работающие установки перезапущены на новом выпуске.",
   "workspaces.users": "Пользователи",
   "workspaces.usersTitle": "Кто может входить в {slug}",
-  "workspaces.working": "Выполняется…"
+  "workspaces.working": "Выполняется…",
+  "server.teammates.noLongerWaiting": "{who} больше не ждёт вас"
 }

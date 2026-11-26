@@ -8048,5 +8048,6 @@
   "workspaces.upgraded": "稼働中のすべてのインストール環境を新しいリリースで再起動しました。",
   "workspaces.users": "ユーザー",
   "workspaces.usersTitle": "{slug} にサインインできる人",
-  "workspaces.working": "処理中…"
+  "workspaces.working": "処理中…",
+  "server.teammates.noLongerWaiting": "{who} はもうあなたを待っていません"
 }

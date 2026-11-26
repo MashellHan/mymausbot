@@ -7738,5 +7738,6 @@
   "workspaces.upgraded": "실행 중인 모든 설치가 새 릴리스로 다시 시작됐어요.",
   "workspaces.users": "사용자",
   "workspaces.usersTitle": "{slug}에 로그인할 수 있는 사람",
-  "workspaces.working": "작업 중…"
+  "workspaces.working": "작업 중…",
+  "server.teammates.noLongerWaiting": "{who}이(가) 더 이상 회원님을 기다리지 않아요"
 }

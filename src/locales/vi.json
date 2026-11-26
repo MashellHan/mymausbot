@@ -5998,5 +5998,6 @@
   "workspaces.upgraded": "Mọi bản cài đặt đang chạy đã khởi động lại trên phiên bản mới.",
   "workspaces.users": "Người dùng",
   "workspaces.usersTitle": "Những ai có thể đăng nhập vào {slug}",
-  "workspaces.working": "Đang xử lý…"
+  "workspaces.working": "Đang xử lý…",
+  "server.teammates.noLongerWaiting": "{who} không còn chờ bạn nữa"
 }

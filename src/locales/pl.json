@@ -7205,5 +7205,6 @@
   "workspaces.upgraded": "Każda działająca instalacja została uruchomiona ponownie na nowej wersji.",
   "workspaces.users": "Użytkownicy",
   "workspaces.usersTitle": "Kto może się logować do {slug}",
-  "workspaces.working": "Trwa…"
+  "workspaces.working": "Trwa…",
+  "server.teammates.noLongerWaiting": "{who} już na ciebie nie czeka"
 }

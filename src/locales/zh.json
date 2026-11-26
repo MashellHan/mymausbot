@@ -893,6 +893,8 @@
   "backup.exportPassword": "备份密码",
   "backup.exportShort": "有密码保护。不包含已保存的登录信息。",
   "backup.exporting": "正在创建加密备份…",
+  "backup.exportReconnecting": "正在重新连接以检查备份…",
+  "backup.exportUnavailable": "此备份已不可用。请重新导出并输入备份密码。",
   "backup.file": "备份文件",
   "backup.files": "文件",
   "backup.groups": "群组",
@@ -10805,5 +10807,10 @@
   "server.reach.placeMovedNew": "{bot} 现在在{to}上工作，这是一台新的、从空白开始的机器。它在{from}上的文件仍然在那里，没有丢失任何东西。",
   "server.reach.place.myCloud": "My Cloud",
   "server.reach.place.thisCloud": "这个 Cloud",
-  "server.reach.place.cloudDesktop": "云端桌面"
+  "server.reach.place.cloudDesktop": "云端桌面",
+  "server.teammates.noLongerWaiting": "{who} 不再等你了",
+  "chat.notice.waitingPasswordElsewhere": "正在等你在 @{name} 里填写{label}",
+  "chat.notice.waitingSignInElsewhere": "正在等你在 @{name} 里登录 {label}",
+  "chat.notice.waitingConnectElsewhere": "正在等你在 @{name} 里连接 {label}",
+  "chat.notice.waitingReviewElsewhere": "正在等你在 @{name} 里审阅"
 }
