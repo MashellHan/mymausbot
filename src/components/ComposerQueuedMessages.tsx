@@ -64,6 +64,7 @@ export function QueuedComposerMessages({
   onSteer?: () => void;
   steerMode?: "all" | "next";
   steering?: boolean;
+  /** When live steer is unavailable, never surface a blocking "Stop and send" interrupt button above the composer. */
   steerInterrupts?: boolean;
   held?: boolean;
   onCancel: (queueId: string) => void;
@@ -72,28 +73,19 @@ export function QueuedComposerMessages({
   if (!items.length) return null;
 
   const multiple = items.length > 1;
+  const canSteerHead = Boolean(onSteer) && !steerInterrupts;
   const steerLabel = steering
     ? t("composer.queued.steering")
-    : steerInterrupts
-      ? multiple
-        ? t(steerMode === "all" ? "composer.queued.stopAndSendAll" : "composer.queued.stopAndSendNext")
-        : t("composer.queued.stopAndSend")
-      : multiple
-        ? steerMode === "all"
-          ? t("composer.queued.steerAll")
-          : t("composer.queued.steerNext")
-        : t("composer.queued.steer");
-  const steerDescription = steerInterrupts
-    ? multiple
-      ? steerMode === "all"
-        ? t("composer.queued.steerAllInterruptHint", { count: items.length })
-        : t("composer.queued.steerNextInterruptHint")
-      : t("composer.queued.steerInterruptHint")
     : multiple
       ? steerMode === "all"
-        ? t("composer.queued.steerAllHint", { count: items.length })
-        : t("composer.queued.steerNextHint")
-      : t("composer.queued.steerHint");
+        ? t("composer.queued.steerAll")
+        : t("composer.queued.steerNext")
+      : t("composer.queued.steer");
+  const steerDescription = multiple
+    ? steerMode === "all"
+      ? t("composer.queued.steerAllHint", { count: items.length })
+      : t("composer.queued.steerNextHint")
+    : t("composer.queued.steerHint");
 
   return (
     <div
@@ -128,12 +120,12 @@ export function QueuedComposerMessages({
             <span dir="auto" className="min-w-0 flex-1 truncate text-[14px] text-ink" title={label}>
               {label}
             </span>
-            {index === 0 && onSteer && (
+            {index === 0 && canSteerHead && (
               <button
                 type="button"
                 onClick={onSteer}
                 disabled={steering}
-                aria-label={steering ? t("composer.queued.steeringAria") : steerInterrupts ? steerLabel : steerDescription}
+                aria-label={steering ? t("composer.queued.steeringAria") : steerDescription}
                 title={steerDescription}
                 className="flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-[13px] font-medium text-ink-secondary outline-none hover:bg-raised-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/60 disabled:cursor-wait disabled:opacity-60"
               >

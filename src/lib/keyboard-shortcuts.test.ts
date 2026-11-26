@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   botCycleStep,
   filterShortcutGroups,
+  isNewThreadShortcut,
   isSidebarToggle,
   SHORTCUT_GROUPS,
   shortcutGroupsFor,
@@ -160,6 +161,20 @@ describe("keyboard shortcut opening guard", () => {
     }
     expect(shouldOpenKeyboardShortcuts(event("?", { ctrlKey: true }))).toBe(false);
     expect(shouldOpenKeyboardShortcuts(event("/", { metaKey: true, shiftKey: true }))).toBe(false);
+  });
+
+  it("accepts Cmd/Ctrl+T only outside inputs, dialogs, composition, and extra modifiers", () => {
+    expect(isNewThreadShortcut(event("t", { metaKey: true }))).toBe(true);
+    expect(isNewThreadShortcut(event("T", { ctrlKey: true }))).toBe(true);
+    expect(isNewThreadShortcut(event("t"))).toBe(false);
+    expect(isNewThreadShortcut(event("t", { metaKey: true, shiftKey: true }))).toBe(false);
+    expect(isNewThreadShortcut(event("t", { metaKey: true, altKey: true }))).toBe(false);
+    expect(isNewThreadShortcut(event("t", { metaKey: true, isComposing: true }))).toBe(false);
+    expect(isNewThreadShortcut(event("t", { metaKey: true, defaultPrevented: true }))).toBe(false);
+    for (const selector of ["input", "textarea", "select", "dialog", "[role=dialog]", "[role=alertdialog]"]) {
+      expect(isNewThreadShortcut(event("t", { metaKey: true, target: new Target(selector) })), selector).toBe(false);
+    }
+    expect(isNewThreadShortcut(event("t", { ctrlKey: true, target: new Target(null, true) }))).toBe(false);
   });
 });
 

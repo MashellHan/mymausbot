@@ -503,6 +503,8 @@ export interface ModelCatalog {
     provider?: string;
     /** Provider identity for grouping, scoped to this exact instance and model catalog. */
     providerRoute?: ModelProviderRoute;
+    /** Opaque hashed loopback origin tag persisted in startup cache for cross-engine grouping; stripped before wire serialization. */
+    loopbackOrigin?: string;
     /** Context window in tokens, when known; sizes the model-facing rebuild. */
     contextWindow?: number;
     /** The supported reasoning choices for this model, when reported. An empty list means no choices. */

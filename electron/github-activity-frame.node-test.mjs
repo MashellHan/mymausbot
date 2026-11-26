@@ -271,6 +271,32 @@ test("allows only the exact DeepDiff demo document route while rejecting lookali
   ]) assert.equal(githubMediaUrlAllowed(url), false, url);
 });
 
+test("allows the exact NetworkX demo document and bounded fragments, not aliases or files", () => {
+  const demo = "https://mxhan.com/github/demo/networkx-pipeline-audit/";
+  for (const url of [demo, `${demo}#pipeline`, `${demo}#${"a".repeat(255)}`]) {
+    assert.equal(githubActivityPageAllowed(url), true, url);
+  }
+  for (const url of [
+    demo.slice(0, -1), `${demo}extra/`, `${demo}?view=pipeline`, `${demo}#${"a".repeat(256)}`,
+    "https://mxhan.com/github/demo/networkx-pipeline-audit-lab/",
+    "https://mxhan.com/github/demo/networkx/",
+    "https://mxhan.com/github/demo/NetworkX-pipeline-audit/",
+    "https://mxhan.com/github/demo/networkx%2dpipeline-audit/",
+    "https://mxhan.com/github/demo/net\tworkx-pipeline-audit/",
+    `${demo} `,
+    "https://mxhan.com/github/demo/./networkx-pipeline-audit/",
+    "https://mxhan.com/github/demo//networkx-pipeline-audit/",
+    "https://other.example/github/demo/networkx-pipeline-audit/",
+    demo.replace("https:", "http:"),
+  ]) assert.equal(githubActivityPageAllowed(url), false, url);
+  assert.equal(githubMediaUrlAllowed(demo), false);
+  for (const file of ["index.html", "results.json", "run_demo.py", "requirements.lock", "README.md", "LICENSE",
+    "networkx-pipeline-audit-lab-source.zip", "preview.png"]) {
+    assert.equal(githubActivityPageAllowed(demo + file), false, file);
+    assert.equal(githubMediaUrlAllowed(demo + file), false, file);
+  }
+});
+
 test("allows only the exact Hypothesis demo document route while rejecting superseded/lookalike/ZIP/subfile/media/query/dot/encoded/other-origin URLs", () => {
   for (const url of [
     "https://mxhan.com/github/demo/hypothesis-orders/",

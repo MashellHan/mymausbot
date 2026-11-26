@@ -1,4 +1,5 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
+import { ArrowUpRight } from "lucide-react";
 import type { Bot, InstanceInfo } from "@/state/store";
 import { engineDisplayName, isCustomOnly } from "@/lib/engine-rail";
 import { modelName } from "@/lib/simple-model-menu";
@@ -25,13 +26,31 @@ function connectionKey(instance: InstanceInfo, route?: ProviderRoute): string {
   return route?.connectionGroup ?? JSON.stringify([instance.instanceId, route?.id ?? "unknown"]);
 }
 
+function routeLabelRank(route: ProviderRoute, driverKind: string): number {
+  const label = route.label?.trim();
+  if (!label) return 0;
+  if (driverKind === "antigravityAgent" && /^antigravity(?:\s*\([^)]*\))?$/i.test(label)) return 1;
+  if (/^[a-z0-9._-]+$/.test(label)) return 2;
+  if (!/[\s(]/.test(label)) return 3;
+  if (/^[a-z0-9._\s()-]+$/.test(label)) return 4;
+  return 5;
+}
+
 function providerGroups(instances: readonly InstanceInfo[]): ProviderGroup[] {
   const groups: ProviderGroup[] = [];
+  const ranks = new Map<string, number>();
   for (const instance of instances) for (const option of instance.models.options) {
     const route = option.providerRoute ?? { id: "unknown", provenance: "unknown" as const };
     const key = connectionKey(instance, route);
+    const rank = routeLabelRank(route, instance.driverKind);
     let group = groups.find((candidate) => candidate.key === key);
-    if (!group) groups.push(group = { key, route, sources: [] });
+    if (!group) {
+      groups.push(group = { key, route, sources: [] });
+      ranks.set(key, rank);
+    } else if (rank > (ranks.get(key) ?? 0)) {
+      group.route = route;
+      ranks.set(key, rank);
+    }
     let source = group.sources.find((candidate) => candidate.instance.instanceId === instance.instanceId);
     if (!source) group.sources.push(source = { instance, options: [] });
     source.options.push(option);
@@ -152,7 +171,12 @@ export function ModelSettingsPanel({ bot, instances, disabled, attention, summar
       </legend>}
       {children}
     </fieldset>
-    {onManage && <button type="button" onClick={onManage}
-      className="rounded-sm text-[12px] text-ink-secondary hover:text-ink focus-visible:outline-2 focus-visible:outline-accent">{t("model.simple.manage")}</button>}
+    {onManage && <div className="flex justify-end pt-1">
+      <button type="button" onClick={onManage}
+        className="text-accent underline underline-offset-4 hover:opacity-80 cursor-pointer inline-flex items-center gap-1 rounded-sm text-[12px] font-medium focus-visible:outline-2 focus-visible:outline-accent">
+        {t("model.simple.manage")}
+        <ArrowUpRight size={13} aria-hidden="true" />
+      </button>
+    </div>}
   </div>;
 }

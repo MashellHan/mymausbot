@@ -7,9 +7,10 @@ import { join } from "node:path";
 import { writeFileAtomic } from "./atomic.ts";
 import * as boat from "./boat.ts";
 import { BOAT_DELETING, BOAT_DELETION_FINISHED, getBoatDeletion } from "./boat-delete-journal.ts";
-import { boatHealth, DEAD_COMPUTER, type BoatHealth } from "./boat-health.ts";
+import { boatHealth, DEAD_COMPUTER, stalledProbe, type BoatHealth } from "./boat-health.ts";
 import { boatReadiness, boatSignals, readBoat, READY_WAIT, type BoatReadiness } from "./boat-ready.ts";
 import { cloudComputerCounters } from "./cloud-computer-counters.ts";
+import { eventLoopStalls } from "./event-loop-stalls.ts";
 import { cloudFailureOf } from "./boat-limit.ts";
 import { DATA_DIR, type AppConfig } from "./config.ts";
 import {
@@ -75,6 +76,8 @@ export interface BoatRecoveryDeps {
   /** The provider's sandbox object, for its state and what it says about a disk restore; null when it could not be read. */
   read?(cfg: AppConfig, boxId: string): Promise<unknown>;
   recheckMs?: number;
+  /** This process's event loop stalled between the two times. */
+  stalled?(from: number, to: number): boolean;
 }
 
 /** Why a computer that is not answering was left as it is, for a run that waited on it. */
@@ -92,6 +95,8 @@ export function createBoatRecovery(deps: BoatRecoveryDeps) {
   const eligible = (owner: string) => deps.eligible?.(owner) ?? true;
   const readiness = deps.readiness ?? boatReadiness;
   const read = deps.read ?? readBoat;
+  const stalls = deps.stalled ? null : eventLoopStalls();
+  const stalled = deps.stalled ?? ((from: number, to: number) => stalls!.stalledBetween(from, to));
   /** When each computer was first seen not answering with its disk still being restored. */
   const restoringSince = new Map<string, number>();
   const recheckMs = deps.recheckMs ?? RECHECK_MS;
@@ -275,17 +280,23 @@ export function createBoatRecovery(deps: BoatRecoveryDeps) {
    * reported). `witness`: before a delete, another computer of this installation must have answered as well. A restart
    * keeps the files, so the provider's own list answering is enough for it: an installation with one computer in use has
    * no witness, and would otherwise never be restarted. */
-  async function stillDown(owner: string, boxId: string, cfg: AppConfig, witness = true): Promise<boolean> {
+  async function stillDown(owner: string, boxId: string, cfg: AppConfig, witness = true): Promise<{ down: boolean } | null> {
+    const sent = now();
     const probe = await boat.probeBoat(cfg, boxId);
     if (probe !== false) {
       if (probe) health.answered(boxId);
       clear(owner, boxId);
-      return false;
+      return { down: false };
     }
-    if (!(await listWorks(cfg))) { unreachable(owner, boxId); return false; }
+    const sample = { elapsedMs: now() - sent, timeoutMs: DEAD_COMPUTER.probeTimeoutMs };
+    if (stalledProbe(sample) || stalled(sent, now())) {
+      deps.log(`cloud computer ${owner}: ${boxId} probe was held up here; recovery waits before deciding`);
+      return null;
+    }
+    if (!(await listWorks(cfg))) { unreachable(owner, boxId); return { down: false }; }
     // An installation whose other computers do not answer either cannot tell a dead machine from its own outage.
-    if (witness && !health.otherAnsweredWithin(boxId, DEAD_COMPUTER.witnessMs)) { needsPerson(owner, boxId); return false; }
-    return true;
+    if (witness && !health.otherAnsweredWithin(boxId, DEAD_COMPUTER.witnessMs)) { needsPerson(owner, boxId); return { down: false }; }
+    return { down: true };
   }
 
   /** After the restart: replaced once the provider says the machine is gone, or after DEAD_COMPUTER.replaceAfterMs of no
@@ -307,7 +318,19 @@ export function createBoatRecovery(deps: BoatRecoveryDeps) {
       timers.set(owner, timer);
       return;
     }
-    if (!(await stillDown(owner, boxId, cfg))) return;
+    const probe = await stillDown(owner, boxId, cfg);
+    if (probe?.down === false) return;
+    if (probe === null) {
+      deps.log(`cloud computer ${owner}: ${boxId} recovery probe was held up by this process; looking again later`);
+      set(owner, boxId, "not-responding");
+      const timer = setTimeout(() => {
+        timers.delete(owner);
+        if (!closed) void lane(owner, () => decide(owner, boxId)).catch((error) => deps.log(`cloud computer ${owner}: ${String(error)}`));
+      }, recheckMs);
+      timer.unref?.();
+      timers.set(owner, timer);
+      return;
+    }
     await replace(owner, seen.identity);
   }
 
@@ -322,8 +345,6 @@ export function createBoatRecovery(deps: BoatRecoveryDeps) {
       health.forget(boxId);
       return clear(owner, boxId);
     }
-    // Every guard before a stop: it closes the person's programs, and three failed probes can be this home's own outage.
-    if (!(await stillDown(owner, boxId, cfg, false))) return;
     const since = Math.min(health.notRespondingSince(boxId) ?? now(), restoringSince.get(boxId) ?? now());
     restoringSince.set(boxId, since);
     /** Looks again shortly instead of restarting now. */
@@ -336,6 +357,13 @@ export function createBoatRecovery(deps: BoatRecoveryDeps) {
       timer.unref?.();
       timers.set(owner, timer);
     };
+    // Every guard before a stop: it closes the person's programs, and three failed probes can be this home's own outage.
+    const probe = await stillDown(owner, boxId, cfg, false);
+    if (probe?.down === false) return;
+    if (probe === null) {
+      deps.log(`cloud computer ${owner}: ${boxId} is not being restarted while this process may have held up its probes`);
+      return later("not-responding");
+    }
     // The provider's command gateway can fail for every computer while its API still calls each one ready. Then a
     // restart helps nobody and stops work that is still running, so one is made only when this computer alone is silent.
     const witnessed = health.otherAnsweredWithin(boxId, DEAD_COMPUTER.witnessMs);

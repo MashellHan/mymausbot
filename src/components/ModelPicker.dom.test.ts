@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 // The Simple model menu in a real DOM, where effects run, focus moves and the menu floats in a portal.
 import { createElement } from "react";
+import { readFileSync } from "node:fs";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -548,6 +549,53 @@ describe("while the bot is working", () => {
   });
 });
 
+describe("the header pill beside an open side panel", () => {
+  const renderFolded = (folded: boolean) => flushSync(() => root.render(createElement(ModelPicker, { bot: scout(), threadId: "thread-scout", folded })));
+  const pill = () => host.querySelector<HTMLButtonElement>("[data-model-pill]")!;
+
+  it("folds to a 32px mark button, names the model and reasoning, stays focusable, and opens the same menu", async () => {
+    renderFolded(true);
+    expect(pill().hasAttribute("data-folded")).toBe(true);
+    expect(pill().className).toContain("h-8");
+    expect(pill().className).toContain("min-w-8");
+    expect(pill().getAttribute("aria-label")).toContain("Claude Opus 5.5");
+    expect(pill().getAttribute("aria-label")).toBe(pill().title.split("\n")[0]);
+    pill().focus();
+    expect(document.activeElement).toBe(pill());
+    await openWith("click");
+    expect(menu()).not.toBeNull();
+    expect(chip().getAttribute("aria-expanded")).toBe("true");
+    flushSync(() => { menu()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    await settle();
+    expect(menu()).toBeNull();
+    expect(document.activeElement).toBe(pill());
+  });
+
+  it("opens back out to the full pill, named by its words again, when the panel closes", () => {
+    renderFolded(true);
+    renderFolded(false);
+    expect(pill().hasAttribute("data-folded")).toBe(false);
+    expect(pill().hasAttribute("aria-label")).toBe(false);
+    expect(pill().textContent).toContain("Claude Opus 5.5");
+  });
+
+  it("never folds a contained or small picker", () => {
+    flushSync(() => root.render(createElement(ModelPicker, { bot: scout(), threadId: "thread-scout", contained: true, folded: true })));
+    expect(host.querySelector("[data-model-pill]")).toBeNull();
+    expect(chip().hasAttribute("aria-label")).toBe(false);
+
+    flushSync(() => root.render(createElement(ModelPicker, { bot: scout(), threadId: "thread-scout", size: "sm", folded: true })));
+    expect(host.querySelector("[data-model-pill]")).toBeNull();
+    expect(chip().hasAttribute("aria-label")).toBe(false);
+  });
+
+  it("disables pill transitions under prefers-reduced-motion and data-reduced-motion", () => {
+    const css = readFileSync("src/styles.css", "utf8").replace(/\r\n/g, "\n");
+    expect(css).toContain("@media (prefers-reduced-motion: reduce) {\n  [data-model-pill], [data-model-pill] * { transition: none !important; }\n}");
+    expect(css).toContain(':root[data-reduced-motion="true"] [data-model-pill],\n:root[data-reduced-motion="true"] [data-model-pill] * { transition: none !important; }');
+  });
+});
+
 describe("requested context window", () => {
   const setup = () => {
     fixture.instances = [{ ...claude([{ id: "fixture-model", label: "Fixture model" }]), instanceId: "codex", driverKind: "codex",
@@ -913,5 +961,210 @@ describe("inline overview model settings", () => {
     expect([...models.options].find((option) => option.textContent === "Official")!.disabled).toBe(true);
     expect([...models.options].find((option) => option.textContent === "Local")!.disabled).toBe(false);
     expect(fixture.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("groups Codex, pi, OpenCode and Antigravity under one loopback provider with stable label, variants and context windows", async () => {
+    const group = "loopback:fedcba9876543210";
+    const piModel: Option = {
+      id: "raven/gpt-6.1-sol", label: "GPT 6.1 Sol", custom: true, contextWindow: 1_050_000,
+      effortLevels: ["high"],
+      providerRoute: { id: "local:raven", connectionGroup: group, label: "raven", provenance: "local" },
+    };
+    const agyModel: Option = {
+      id: "gemini-4-neon", label: "Gemini 4 Neon", custom: true, contextWindow: 1_048_576,
+      variants: [
+        { id: "low", label: "Low" },
+        { id: "medium", label: "Medium" },
+        { id: "high", label: "High" },
+        { id: "extra", label: "Extra" },
+      ],
+      providerRoute: { id: "local:antigravity", connectionGroup: group, label: "Antigravity (Local)", provenance: "local" },
+    };
+    const openCodeModel: Option = {
+      id: "raven/gemini-4-neon", label: "Gemini 4 Neon", custom: true, contextWindow: 1_048_576,
+      variants: [{ id: "low", label: "Low" }, { id: "high", label: "High" }],
+      providerRoute: { id: "configured:raven", connectionGroup: group, label: "Raven", provenance: "configured" },
+    };
+    const codexModel: Option = {
+      id: "raven::gpt-6.1-sol", label: "GPT 6.1 Sol", custom: true, contextWindow: 1_050_000,
+      effortLevels: ["high", "xhigh"],
+      providerRoute: { id: "local:raven", connectionGroup: group, label: "Raven (Local)", provenance: "local" },
+    };
+    fixture.instances = [
+      { ...claude([piModel]), instanceId: "pi", driverKind: "piAgent", displayName: "pi", capabilities: { effortLevels: ["low", "high"] } },
+      { ...claude([agyModel]), instanceId: "antigravity", driverKind: "antigravityAgent", displayName: "Antigravity", capabilities: { modelVariants: true } },
+      { ...claude([openCodeModel]), instanceId: "opencode", driverKind: "opencodeGo", displayName: "OpenCode", capabilities: { modelVariants: true, configurableContextWindow: true } },
+      { ...claude([codexModel]), instanceId: "codex", driverKind: "codex", displayName: "Codex", capabilities: { effortLevels: ["low", "high", "xhigh"], configurableContextWindow: true } },
+    ];
+    let bot: Bot = { ...scout(), modelSelection: { instanceId: "codex", model: codexModel.id, effort: "xhigh", contextWindowTokens: 256_000 } };
+    render(bot, options);
+    await settle();
+
+    expect([...select("Provider").options].map((option) => option.textContent)).toEqual(["Raven (Local)"]);
+    expect(select("Model type").disabled).toBe(false);
+    expect([...select("Model type").options].map((option) => [option.value, option.textContent])).toEqual([
+      ["piAgent", "pi"],
+      ["antigravityAgent", "Antigravity"],
+      ["opencodeGo", "OpenCode"],
+      ["codex", "Codex"],
+    ]);
+    expect(select("Model type").value).toBe("codex");
+    expect([...select("Context window").options][0]!.textContent).toBe("Auto (1,050,000)");
+    expect(select("Context window").value).toBe("256000");
+
+    choose(select("Model type"), "opencodeGo");
+    expect(fixture.dispatch).not.toHaveBeenCalled();
+    expect([...select("Choose model").options].map((option) => option.textContent)).toEqual(["Choose model", "Gemini 4 Neon"]);
+    choose(select("Choose model"), JSON.stringify(["opencode", openCodeModel.id]));
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({
+      type: "setModel",
+      selection: { instanceId: "opencode", model: openCodeModel.id },
+    }));
+
+    bot = { ...bot, modelSelection: { instanceId: "opencode", model: openCodeModel.id } };
+    render(bot, options);
+    await settle();
+    expect(select("Model type").value).toBe("opencodeGo");
+    expect([...select("Reasoning variant").options].map((option) => option.textContent)).toEqual(["Use session setting", "Low", "High"]);
+    expect(host.querySelector("[data-model-context-window]")).not.toBeNull();
+    expect(host.querySelector("[data-context-window-readonly]")).toBeNull();
+    expect([...select("Context window").options].map((option) => option.textContent)).toEqual([
+      "Auto (1,048,576)", "32,000", "64,000", "128,000", "256,000", "512,000", "1,000,000",
+    ]);
+    choose(select("Reasoning variant"), "1");
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({
+      type: "setModel",
+      selection: { instanceId: "opencode", model: openCodeModel.id, variant: "high" },
+    }));
+    bot = { ...bot, modelSelection: { instanceId: "opencode", model: openCodeModel.id, variant: "high" } };
+    render(bot, options);
+    choose(select("Context window"), "256000");
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({
+      type: "setModel",
+      selection: { instanceId: "opencode", model: openCodeModel.id, variant: "high", contextWindowTokens: 256_000 },
+    }));
+    bot = { ...bot, modelSelection: { instanceId: "opencode", model: openCodeModel.id, variant: "high", contextWindowTokens: 256_000 } };
+    render(bot, options);
+    fixture.dispatch.mockClear();
+
+    choose(select("Model type"), "antigravityAgent");
+    expect(fixture.dispatch).not.toHaveBeenCalled();
+    expect([...select("Choose model").options].map((option) => option.textContent)).toEqual(["Choose model", "Gemini 4 Neon"]);
+    choose(select("Choose model"), JSON.stringify(["antigravity", agyModel.id]));
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({
+      type: "setModel",
+      selection: { instanceId: "antigravity", model: agyModel.id },
+    }));
+
+    bot = { ...bot, modelSelection: { instanceId: "antigravity", model: agyModel.id } };
+    render(bot, options);
+    await settle();
+    expect(select("Model type").value).toBe("antigravityAgent");
+    expect([...select("Reasoning variant").options].map((option) => option.textContent)).toEqual([
+      "Use session setting", "Low", "Medium", "High", "Extra",
+    ]);
+    expect(host.querySelector("[data-model-context-window]")).toBeNull();
+    expect(select("Context window")).toBeNull();
+    const readOnlyContext = host.querySelector("[data-context-window-readonly]")!;
+    const contextOutput = readOnlyContext.querySelector("output")!;
+    const contextLabelId = contextOutput.getAttribute("aria-labelledby");
+    expect(contextLabelId).toBeTruthy();
+    expect(document.getElementById(contextLabelId!)?.textContent).toBe("Context window");
+    expect(contextOutput.textContent).toBe("1,048,576");
+
+    choose(select("Model type"), "piAgent");
+    choose(select("Choose model"), JSON.stringify(["pi", piModel.id]));
+    bot = { ...bot, modelSelection: { instanceId: "pi", model: piModel.id } };
+    render(bot, options);
+    await settle();
+    expect([...select("Reasoning effort").options].map((option) => option.value)).toEqual(["", "high"]);
+    expect(host.querySelector("[data-model-context-window]")).toBeNull();
+    expect(host.querySelector("[data-context-window-readonly] output")?.textContent).toBe("1,050,000");
+  });
+
+  it("prefers a non-Antigravity configured label over a generic Antigravity label in a shared group", async () => {
+    const group = "loopback:1111222233334444";
+    fixture.instances = [
+      { ...claude([{ id: "gemini-4-neon", label: "Gemini 4 Neon", custom: true,
+        providerRoute: { id: "local:antigravity", connectionGroup: group, label: "Antigravity (Local)", provenance: "local" } }]),
+        instanceId: "antigravity", driverKind: "antigravityAgent", displayName: "Antigravity", capabilities: { modelVariants: true } },
+      { ...claude([{ id: "raven/gemini-4-neon", label: "Gemini 4 Neon", custom: true,
+        providerRoute: { id: "configured:raven", connectionGroup: group, label: "Raven", provenance: "configured" } }]),
+        instanceId: "opencode", driverKind: "opencodeGo", displayName: "OpenCode", capabilities: { modelVariants: true } },
+    ];
+    render({ ...scout(), modelSelection: { instanceId: "antigravity", model: "gemini-4-neon" } }, options);
+    await settle();
+    expect([...select("Provider").options].map((option) => option.textContent)).toEqual(["Raven"]);
+  });
+
+  it("caps context window choices to the model's declared window and marks oversized saved overrides unavailable", async () => {
+    const model: Option = { id: "compact-128k", label: "Compact 128k", contextWindow: 128_000 };
+    const unsupported: Option = { id: "unsupported-model", label: "Unsupported", contextWindow: 128_000, protocolUnsupported: true };
+    fixture.instances = [{
+      ...claude([model, unsupported]),
+      instanceId: "codex",
+      driverKind: "codex",
+      capabilities: { effortLevels: ["low", "high"], configurableContextWindow: true },
+    }];
+    const bot: Bot = { ...scout(), modelSelection: { instanceId: "codex", model: model.id } };
+    render(bot, options);
+    await settle();
+
+    expect([...select("Context window").options].map((option) => option.textContent)).toEqual([
+      "Auto (128,000)", "32,000", "64,000", "128,000",
+    ]);
+
+    render({ ...bot, modelSelection: { ...bot.modelSelection, contextWindowTokens: 256_000 } }, options);
+    await settle();
+    const control = select("Context window");
+    expect([...control.options].map((option) => ({ text: option.textContent, disabled: option.disabled }))).toEqual([
+      { text: "Auto (128,000)", disabled: false },
+      { text: "32,000", disabled: false },
+      { text: "64,000", disabled: false },
+      { text: "128,000", disabled: false },
+      { text: "256,000 (unavailable)", disabled: true },
+    ]);
+    expect(control.value).toBe("256000");
+    choose(control, "128000");
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({
+      type: "setModel",
+      selection: { instanceId: "codex", model: model.id, contextWindowTokens: 128_000 },
+    }));
+    choose(control, "auto");
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({
+      type: "setModel",
+      selection: { instanceId: "codex", model: model.id },
+    }));
+
+    render({ ...bot, modelSelection: { instanceId: "codex", model: unsupported.id } }, options);
+    await settle();
+    expect(host.querySelector("[data-model-context-window]")).toBeNull();
+    expect(host.querySelector("[data-context-window-readonly]")).toBeNull();
+
+    fixture.instances = [{
+      ...claude([model, unsupported]),
+      instanceId: "pi",
+      driverKind: "piAgent",
+      capabilities: { effortLevels: ["low", "high"] },
+    }];
+    render({ ...bot, modelSelection: { instanceId: "pi", model: model.id } }, options);
+    await settle();
+    expect(host.querySelector("[data-context-window-readonly] output")?.textContent).toBe("128,000");
+
+    render({ ...bot, modelSelection: { instanceId: "pi", model: unsupported.id } }, options);
+    await settle();
+    expect(host.querySelector("[data-model-context-window]")).toBeNull();
+    expect(host.querySelector("[data-context-window-readonly]")).toBeNull();
+  });
+
+  it("renders Manage AI accounts as a right-aligned link", async () => {
+    render(scout(), options);
+    await settle();
+    const manage = [...host.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.includes("Manage AI accounts"))!;
+    expect(manage).toBeDefined();
+    expect(manage.parentElement?.className).toContain("justify-end");
+    expect(manage.className).toContain("text-accent");
+    expect(manage.className).toContain("underline");
   });
 });

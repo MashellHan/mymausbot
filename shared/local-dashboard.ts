@@ -34,6 +34,8 @@ export interface LocalAgentTokenUsageWindow {
 /** Member usage over the rolling window; cost coverage is tracked independently from token coverage. */
 export interface LocalAgentMemberTokenUsageWindow extends LocalAgentTokenUsageWindow {
   estimatedCost: LocalUsageEstimatedCost;
+  /** Observed active execution duration in seconds within this window (bounded per-step/turn intervals); absent on legacy hosts. */
+  activeSeconds?: number | null;
 }
 
 export interface LocalAgentTeam {
@@ -54,6 +56,8 @@ export interface LocalAgentTeamsResponse {
   status: LocalDashboardStatus;
   updatedAt: number | null;
   teamCount: number | null;
+  /** True while the server returns a fast roster first and finishes loading model/message/usage details asynchronously. */
+  enriching?: boolean;
   teams: LocalAgentTeam[];
 }
 

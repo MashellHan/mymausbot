@@ -1,18 +1,20 @@
 // Codex model catalog: official ChatGPT rows stay in the main picker; everything wired in ~/.codex is
 // tagged `custom`. `codex app-server` thread/start takes `model` and `modelProvider` separately.
+import { execFile } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 
 import { isEffortLevel, type EffortLevel } from "../../shared/model-selection.ts";
 import type { ModelCatalog } from "../contracts.ts";
 import { qualifiedModelLabel } from "../contracts.ts";
 import { killCliTree, spawnCli } from "../procs.ts";
+import { isLoopback } from "../provider-key-check.ts";
 import { codexHome } from "./codex-identity.ts";
 import { MODEL_ID, SEP, TIERED_ID, codexTierOf } from "./codex-tier.ts";
 import { unconfirmedModelCatalog } from "../startup-model-catalog.ts";
 import { codexInjectHost, codexLocalProviderArgs, localProviderRoute, mergeLocalInject } from "./local-inject.ts";
-import { configuredProviderRoute, providerLabel } from "../model-provider-routes.ts";
+import { configuredProviderRoute, loopbackOriginTag, providerLabel } from "../model-provider-routes.ts";
 
 export const STATIC_CODEX_MODELS: ModelCatalog = {
   default: "gpt-5.6-sol",
@@ -207,19 +209,142 @@ export function readCodexAppServerModelCatalog(
   });
 }
 
-function unquote(raw: string): string {
-  let value = raw.trim();
-  const hash = value.indexOf(" #");
-  if (hash !== -1 && !(value.startsWith('"') || value.startsWith("'"))) {
-    value = value.slice(0, hash).trim();
+function parseTomlString(input: string, start: number): { value: string; next: number } | null {
+  const quote = input[start];
+  if (quote === "'") {
+    const end = input.indexOf("'", start + 1);
+    return end === -1 ? null : { value: input.slice(start + 1, end), next: end + 1 };
   }
-  if (value.length >= 2) {
-    const quote = value[0];
-    if ((quote === '"' || quote === "'") && value.endsWith(quote)) {
-      return value.slice(1, -1).replace(/\\"/g, '"');
+  if (quote !== '"') return null;
+  let value = "";
+  for (let i = start + 1; i < input.length; i += 1) {
+    const ch = input[i];
+    if (ch === '"') return { value, next: i + 1 };
+    if (ch !== "\\") {
+      value += ch;
+      continue;
+    }
+    i += 1;
+    if (i >= input.length) return null;
+    const esc = input[i];
+    if (esc === '"') value += '"';
+    else if (esc === "\\") value += "\\";
+    else if (esc === "n") value += "\n";
+    else if (esc === "r") value += "\r";
+    else if (esc === "t") value += "\t";
+    else if (esc === "b") value += "\b";
+    else if (esc === "f") value += "\f";
+    else if (esc === "u" || esc === "U") {
+      const len = esc === "u" ? 4 : 8;
+      const hex = input.slice(i + 1, i + 1 + len);
+      if (hex.length !== len || !/^[0-9a-fA-F]+$/.test(hex)) return null;
+      const codePoint = Number.parseInt(hex, 16);
+      if (codePoint > 0x10ffff) return null;
+      value += String.fromCodePoint(codePoint);
+      i += len;
+    } else {
+      value += `\\${esc}`;
     }
   }
-  return value;
+  return null;
+}
+
+function skipTomlWsAndComments(input: string, start: number): number {
+  let i = start;
+  while (i < input.length) {
+    const ch = input[i];
+    if (ch === " " || ch === "\t" || ch === "\r" || ch === "\n") {
+      i += 1;
+      continue;
+    }
+    if (ch === "#") {
+      const nl = input.indexOf("\n", i + 1);
+      i = nl === -1 ? input.length : nl + 1;
+      continue;
+    }
+    break;
+  }
+  return i;
+}
+
+function parseTomlStringArray(raw: string): string[] | null {
+  let i = skipTomlWsAndComments(raw, 0);
+  if (raw[i] !== "[") return null;
+  i += 1;
+  const items: string[] = [];
+  while (i < raw.length) {
+    i = skipTomlWsAndComments(raw, i);
+    if (raw[i] === "]") {
+      i = skipTomlWsAndComments(raw, i + 1);
+      return i === raw.length ? items : null;
+    }
+    const parsed = parseTomlString(raw, i);
+    if (!parsed) return null;
+    items.push(parsed.value);
+    i = skipTomlWsAndComments(raw, parsed.next);
+    if (raw[i] === ",") {
+      i += 1;
+      continue;
+    }
+    if (raw[i] === "]") continue;
+    return null;
+  }
+  return null;
+}
+
+function hasUnquotedClosingBracket(raw: string): boolean {
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (ch === "#") {
+      const nl = raw.indexOf("\n", i + 1);
+      if (nl === -1) return false;
+      i = nl;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      const parsed = parseTomlString(raw, i);
+      if (!parsed) return false;
+      i = parsed.next - 1;
+      continue;
+    }
+    if (ch === "]") return true;
+  }
+  return false;
+}
+
+function unquote(raw: string): string {
+  const value = raw.trim();
+  if (value.startsWith('"') || value.startsWith("'")) {
+    const parsed = parseTomlString(value, 0);
+    if (parsed) {
+      const tail = value.slice(parsed.next).trim();
+      if (!tail || tail.startsWith("#")) return parsed.value;
+    }
+  }
+  const hash = value.indexOf(" #");
+  return (hash !== -1 ? value.slice(0, hash) : value).trim();
+}
+
+function parsePositiveInt(raw: string): number | undefined {
+  const cleaned = unquote(raw);
+  if (!/^\d[\d_]*$/.test(cleaned)) return undefined;
+  const parsed = Number(cleaned.replace(/_/g, ""));
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function unquoteSectionId(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.length >= 2) {
+    const quote = trimmed[0];
+    if ((quote === '"' || quote === "'") && trimmed.endsWith(quote)) return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+interface CodexProviderAuth {
+  command: string;
+  args: string[];
+  timeoutMs?: number;
 }
 
 interface CodexProvider {
@@ -227,18 +352,27 @@ interface CodexProvider {
   name?: string;
   baseUrl?: string;
   envKey?: string;
+  wireApi?: string;
+  auth?: CodexProviderAuth;
 }
 
 interface CodexToml {
   model?: string;
   modelProvider?: string;
+  modelCatalogJson?: string;
   providers: CodexProvider[];
 }
 
 function parseCodexToml(text: string): CodexToml {
   const result: CodexToml = { providers: [] };
   const byId = new Map<string, CodexProvider>();
-  let section: "root" | "other" | CodexProvider = "root";
+  const authDrafts = new Map<string, { command?: string; args?: string[]; timeoutMs?: number; invalidArgs?: boolean }>();
+  let section:
+    | { kind: "root" }
+    | { kind: "other" }
+    | { kind: "provider"; provider: CodexProvider }
+    | { kind: "provider-auth"; provider: CodexProvider } = { kind: "root" };
+  let pendingArgs: { providerId: string; raw: string } | null = null;
 
   const providerFor = (id: string): CodexProvider => {
     let provider = byId.get(id);
@@ -249,36 +383,106 @@ function parseCodexToml(text: string): CodexToml {
     }
     return provider;
   };
+  const authDraftFor = (id: string) => {
+    let draft = authDrafts.get(id);
+    if (!draft) {
+      draft = {};
+      authDrafts.set(id, draft);
+    }
+    return draft;
+  };
 
   for (const line of text.split(/\r?\n/)) {
     const stripped = line.trim();
+    const header = /^\[([^\]]+)\](?:\s*#.*)?$/.exec(stripped);
+    const isSectionHeader = Boolean(header) || (stripped.startsWith("[") && stripped.endsWith("]"));
+    if (pendingArgs) {
+      if (isSectionHeader) {
+        authDraftFor(pendingArgs.providerId).invalidArgs = true;
+        pendingArgs = null;
+      } else {
+        pendingArgs.raw += `\n${line}`;
+        if (hasUnquotedClosingBracket(pendingArgs.raw)) {
+          const parsed = parseTomlStringArray(pendingArgs.raw);
+          const draft = authDraftFor(pendingArgs.providerId);
+          if (parsed !== null) draft.args = parsed;
+          else draft.invalidArgs = true;
+          pendingArgs = null;
+        }
+        continue;
+      }
+    }
     if (!stripped || stripped.startsWith("#")) continue;
-    if (stripped.startsWith("[") && stripped.endsWith("]")) {
-      const inner = stripped.slice(1, -1);
+    if (isSectionHeader) {
+      const inner = (header ? header[1] : stripped.slice(1, -1)).trim();
+      const authMatch = /^model_providers\.(.+?)\.auth$/.exec(inner);
+      if (authMatch) {
+        const id = unquoteSectionId(authMatch[1]);
+        section = PROVIDER_ID.test(id) ? { kind: "provider-auth", provider: providerFor(id) } : { kind: "other" };
+        continue;
+      }
       const match = /^model_providers\.(.+)$/.exec(inner);
       if (match) {
-        let id = match[1];
-        if (id.startsWith('"') && id.endsWith('"')) id = id.slice(1, -1);
-        section = PROVIDER_ID.test(id) ? providerFor(id) : "other";
+        const id = unquoteSectionId(match[1]);
+        section = PROVIDER_ID.test(id) ? { kind: "provider", provider: providerFor(id) } : { kind: "other" };
       } else {
-        section = "other";
+        section = { kind: "other" };
       }
       continue;
     }
     const eq = stripped.indexOf("=");
     if (eq < 0) continue;
     const key = stripped.slice(0, eq).trim();
-    const value = unquote(stripped.slice(eq + 1));
-    if (!value) continue;
-    if (section === "root") {
-      if (key === "model") result.model = value;
-      if (key === "model_provider") result.modelProvider = value;
+    const rawValue = stripped.slice(eq + 1);
+    if (section.kind === "provider-auth") {
+      const draft = authDraftFor(section.provider.id);
+      if (key === "command") {
+        const value = unquote(rawValue);
+        if (value) draft.command = value;
+      } else if (key === "args") {
+        const parsed = parseTomlStringArray(rawValue);
+        if (parsed !== null) draft.args = parsed;
+        else if (rawValue.trimStart().startsWith("[") && !hasUnquotedClosingBracket(rawValue)) {
+          pendingArgs = { providerId: section.provider.id, raw: rawValue };
+        } else {
+          draft.invalidArgs = true;
+        }
+      } else if (key === "timeout_ms") {
+        const timeoutMs = parsePositiveInt(rawValue);
+        if (timeoutMs !== undefined) draft.timeoutMs = timeoutMs;
+      }
       continue;
     }
-    if (section === "other") continue;
-    if (key === "name") section.name = value;
-    if (key === "base_url") section.baseUrl = value;
-    if (key === "env_key") section.envKey = value;
+    const value = unquote(rawValue);
+    if (!value) continue;
+    if (section.kind === "root") {
+      if (key === "model") result.model = value;
+      if (key === "model_provider") result.modelProvider = value;
+      if (key === "model_catalog_json") result.modelCatalogJson = value;
+      continue;
+    }
+    if (section.kind === "other") continue;
+    if (key === "name") section.provider.name = value;
+    if (key === "base_url") section.provider.baseUrl = value;
+    if (key === "env_key") section.provider.envKey = value;
+    if (key === "wire_api") section.provider.wireApi = value;
+  }
+
+  if (pendingArgs) {
+    authDraftFor(pendingArgs.providerId).invalidArgs = true;
+    pendingArgs = null;
+  }
+
+  for (const [id, draft] of authDrafts) {
+    if (!draft.command || draft.invalidArgs) continue;
+    const provider = byId.get(id);
+    if (provider) {
+      provider.auth = {
+        command: draft.command,
+        args: draft.args ?? [],
+        ...(draft.timeoutMs !== undefined ? { timeoutMs: draft.timeoutMs } : {}),
+      };
+    }
   }
   return result;
 }
@@ -311,7 +515,22 @@ function niceLabel(model: string, provider: string, known: Map<string, CodexProv
   });
 }
 
-type CatalogFacts = { effortLevels?: readonly EffortLevel[] };
+type CatalogFacts = {
+  effortLevels?: readonly EffortLevel[];
+  contextWindow?: number;
+  nonChatCapability?: boolean;
+  responsesUnsupported?: boolean;
+};
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function positiveInt(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const floored = Math.floor(value);
+  return Number.isSafeInteger(floored) && floored > 0 ? floored : undefined;
+}
 
 function modelRecords(payload: unknown): unknown[] {
   if (Array.isArray(payload)) return payload;
@@ -320,13 +539,78 @@ function modelRecords(payload: unknown): unknown[] {
   return Array.isArray(models) ? models : Array.isArray(data) ? data : [];
 }
 
-function modelFacts(row: Record<string, unknown>): CatalogFacts {
-  const levels = effortLevels(row.supported_reasoning_efforts) ?? effortLevels(row.supported_reasoning_levels) ??
-    effortLevels(row.reasoning_levels) ?? (row.reasoning === false ? [] : undefined);
-  return levels ? { effortLevels: levels } : {};
+function modelFacts(row: Record<string, unknown>, provider?: CodexProvider): CatalogFacts {
+  const capabilities = isPlainObject(row.capabilities) ? row.capabilities : undefined;
+  const supports = isPlainObject(capabilities?.supports) ? capabilities.supports : undefined;
+  const limits = isPlainObject(capabilities?.limits) ? capabilities.limits : undefined;
+  const limit = isPlainObject(row.limit) ? row.limit : undefined;
+
+  const parsedLevels =
+    effortLevels(row.supported_reasoning_efforts) ??
+    effortLevels(row.supported_reasoning_levels) ??
+    effortLevels(row.reasoning_levels) ??
+    effortLevels(supports?.reasoning_effort);
+  const noReasoning =
+    row.reasoning === false ||
+    (supports !== undefined &&
+      (supports.reasoning_effort === undefined || supports.reasoning_effort === false) &&
+      row.reasoning !== true);
+  const levels = parsedLevels ?? (noReasoning ? [] : undefined);
+
+  const contextWindow =
+    positiveInt(row.context_window) ??
+    positiveInt(row.context_length) ??
+    positiveInt(limits?.max_context_window_tokens) ??
+    positiveInt(limit?.context);
+
+  const capabilityType = capabilities?.type;
+  const nonChatCapability =
+    capabilityType === "image" || capabilityType === "embeddings"
+      ? true
+      : capabilityType === "chat"
+        ? false
+        : undefined;
+  const endpoints = Array.isArray(row.supported_endpoints) && row.supported_endpoints.length > 0
+    ? row.supported_endpoints
+    : undefined;
+  const responsesUnsupported =
+    provider?.wireApi === "responses" && endpoints
+      ? !endpoints.some((ep) => typeof ep === "string" && /\/responses\b/i.test(ep))
+      : undefined;
+
+  return {
+    ...(levels ? { effortLevels: levels } : {}),
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(nonChatCapability !== undefined ? { nonChatCapability } : {}),
+    ...(responsesUnsupported !== undefined ? { responsesUnsupported } : {}),
+  };
 }
 
-function collectCatalogMetadata(home: string): Map<string, CatalogFacts & { label?: string }> {
+function addCatalogRecords(
+  metadata: Map<string, CatalogFacts & { label?: string }>,
+  parsed: unknown,
+  resolveProvider: (row: Record<string, unknown>) => string | null,
+  known: Map<string, CodexProvider>,
+): void {
+  for (const record of modelRecords(parsed)) {
+    if (!isPlainObject(record)) continue;
+    const provider = resolveProvider(record);
+    if (!provider || !PROVIDER_ID.test(provider)) continue;
+    const slug = typeof record.slug === "string" ? record.slug : typeof record.id === "string" ? record.id : "";
+    if (!MODEL_ID.test(slug)) continue;
+    const label = typeof record.display_name === "string" ? record.display_name
+      : typeof record.name === "string" ? record.name : "";
+    const id = encodeCodexSelection(provider, slug);
+    metadata.set(id, { ...metadata.get(id), ...modelFacts(record, known.get(provider)), ...(label ? { label } : {}) });
+  }
+}
+
+function collectCatalogMetadata(
+  home: string,
+  known: Map<string, CodexProvider>,
+  catalogJsonPath?: string,
+  mainProvider?: string,
+): Map<string, CatalogFacts & { label?: string }> {
   const metadata = new Map<string, CatalogFacts & { label?: string }>();
   for (const file of listDir(join(home, "model-catalogs"))) {
     if (!file.endsWith(".json")) continue;
@@ -340,16 +624,82 @@ function collectCatalogMetadata(home: string): Map<string, CatalogFacts & { labe
     } catch {
       continue;
     }
-    for (const record of modelRecords(parsed)) {
-      if (!record || typeof record !== "object") continue;
-      const row = record as Record<string, unknown>;
-      const slug = typeof row.slug === "string" ? row.slug : typeof row.id === "string" ? row.id : "";
-      if (!MODEL_ID.test(slug)) continue;
-      const label = typeof row.display_name === "string" ? row.display_name : typeof row.name === "string" ? row.name : "";
-      metadata.set(encodeCodexSelection(provider, slug), { ...modelFacts(row), ...(label ? { label } : {}) });
+    addCatalogRecords(metadata, parsed, () => provider, known);
+  }
+  if (catalogJsonPath && isAbsolute(catalogJsonPath)) {
+    const raw = readText(catalogJsonPath);
+    if (raw) {
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        const stem = basename(catalogJsonPath, ".json").replace(/-models$/, "");
+        const defaultProvider = PROVIDER_ID.test(stem) && known.has(stem)
+          ? stem
+          : mainProvider && PROVIDER_ID.test(mainProvider)
+            ? mainProvider
+            : null;
+        addCatalogRecords(metadata, parsed, (row) => {
+          const explicit = typeof row.provider === "string" ? row.provider
+            : typeof row.model_provider === "string" ? row.model_provider : undefined;
+          if (explicit && PROVIDER_ID.test(explicit) && (explicit === mainProvider || known.has(explicit))) {
+            return explicit;
+          }
+          return defaultProvider;
+        }, known);
+      } catch {
+      }
     }
   }
   return metadata;
+}
+
+function isLoopbackBaseUrl(baseUrl: string): boolean {
+  if (!URL.canParse(baseUrl)) return false;
+  const url = new URL(baseUrl);
+  if (url.username || url.password) return false;
+  return (url.protocol === "http:" || url.protocol === "https:") && isLoopback(url.hostname);
+}
+
+function hasControlChar(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return true;
+  }
+  return false;
+}
+
+// Security invariant: only run provider auth commands for verified loopback endpoints, keeping tokens in memory.
+function readAuthBearerToken(
+  auth: CodexProviderAuth,
+  env: Record<string, string | undefined>,
+): Promise<string | null> {
+  if (auth.command.includes("\0") || auth.args.some((arg) => arg.includes("\0"))) {
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve) => {
+    try {
+      execFile(
+        auth.command,
+        auth.args,
+        {
+          env,
+          timeout: Math.min(auth.timeoutMs ?? 5000, 5000),
+          maxBuffer: 16 * 1024,
+          windowsHide: true,
+          encoding: "utf8",
+        },
+        (error, stdout) => {
+          if (error) {
+            resolve(null);
+            return;
+          }
+          const token = stdout.trim();
+          resolve(token && !hasControlChar(token) ? token : null);
+        },
+      );
+    } catch {
+      resolve(null);
+    }
+  });
 }
 
 async function probeProviderModels(
@@ -359,27 +709,31 @@ async function probeProviderModels(
 ): Promise<Array<{ model: string; facts: CatalogFacts }>> {
   if (!provider.baseUrl) return [];
   const url = `${provider.baseUrl.replace(/\/$/, "")}/models`;
-  const headers: Record<string, string> = {};
-  if (provider.envKey && env[provider.envKey]) {
-    headers.Authorization = `Bearer ${env[provider.envKey]}`;
-  }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 1000);
-  timer.unref?.();
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const response = await fetchImpl(url, { signal: controller.signal, headers });
+    const headers: Record<string, string> = {};
+    if (provider.envKey && env[provider.envKey]) {
+      headers.Authorization = `Bearer ${env[provider.envKey]}`;
+    } else if (provider.auth?.command && isLoopbackBaseUrl(provider.baseUrl)) {
+      const token = await readAuthBearerToken(provider.auth, env);
+      if (token) headers.Authorization = `Bearer ${token}`;
+    }
+    const controller = new AbortController();
+    timer = setTimeout(() => controller.abort(), 1000);
+    timer.unref?.();
+    const response = await fetchImpl(url, { signal: controller.signal, headers, redirect: "manual" });
     if (!response.ok) return [];
     const models: Array<{ model: string; facts: CatalogFacts }> = [];
     for (const record of modelRecords(await response.json())) {
       const row = record && typeof record === "object" ? record as Record<string, unknown> : undefined;
       const id = typeof record === "string" ? record : row?.id ?? row?.slug;
-      if (typeof id === "string" && MODEL_ID.test(id)) models.push({ model: id, facts: row ? modelFacts(row) : {} });
+      if (typeof id === "string" && MODEL_ID.test(id)) models.push({ model: id, facts: row ? modelFacts(row, provider) : {} });
     }
     return models;
   } catch {
     return [];
   } finally {
-    clearTimeout(timer);
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
@@ -407,7 +761,16 @@ async function catalogAround(
 
   const main = parseCodexToml(mainText);
   const known = new Map(main.providers.map((provider) => [provider.id, provider]));
-  const metadata = collectCatalogMetadata(home);
+  const profiles: CodexToml[] = [];
+  for (const file of listDir(home)) {
+    if (!file.endsWith(".config.toml")) continue;
+    const profile = parseCodexToml(readText(join(home, file)) ?? "");
+    profiles.push(profile);
+    for (const provider of profile.providers) {
+      if (!known.has(provider.id)) known.set(provider.id, provider);
+    }
+  }
+  const metadata = collectCatalogMetadata(home, known, main.modelCatalogJson, main.modelProvider);
   const extras: Array<{ provider: string; model: string }> = [];
 
   const remember = (provider: string | undefined, model: string | undefined) => {
@@ -422,13 +785,7 @@ async function catalogAround(
   };
 
   remember(main.modelProvider, main.model);
-
-  for (const file of listDir(home)) {
-    if (!file.endsWith(".config.toml")) continue;
-    const profile = parseCodexToml(readText(join(home, file)) ?? "");
-    for (const provider of profile.providers) {
-      if (!known.has(provider.id)) known.set(provider.id, provider);
-    }
+  for (const profile of profiles) {
     remember(profile.modelProvider ?? main.modelProvider, profile.model);
   }
 
@@ -457,13 +814,18 @@ async function catalogAround(
     seen.add(id);
     const facts = metadata.get(id);
     const provider = known.get(extra.provider);
+    const injectHost = codexInjectHost(extra.provider);
+    const loopbackOrigin = injectHost ? undefined : loopbackOriginTag(provider?.baseUrl);
     options.push({
       id,
       label: facts?.label ?? niceLabel(extra.model, extra.provider, known),
       custom: true,
-      providerRoute: (codexInjectHost(extra.provider) ? localProviderRoute(extra.provider) : undefined)
+      providerRoute: (injectHost ? localProviderRoute(extra.provider) : undefined)
         ?? configuredProviderRoute(extra.provider, provider?.name, provider?.baseUrl),
+      ...(loopbackOrigin ? { loopbackOrigin } : {}),
+      ...(facts?.contextWindow !== undefined ? { contextWindow: facts.contextWindow } : {}),
       ...(facts?.effortLevels ? { effortLevels: facts.effortLevels } : {}),
+      ...(facts?.nonChatCapability || facts?.responsesUnsupported ? { protocolUnsupported: true as const } : {}),
     });
   }
 
@@ -490,6 +852,8 @@ async function catalogAround(
     const declared = provider ? known.get(provider) : undefined;
     if (provider && declared?.baseUrl && !codexInjectHost(provider)) {
       option.providerRoute = configuredProviderRoute(provider, declared.name, declared.baseUrl);
+      const loopbackOrigin = loopbackOriginTag(declared.baseUrl);
+      if (loopbackOrigin) option.loopbackOrigin = loopbackOrigin;
     }
   }
   return catalog;

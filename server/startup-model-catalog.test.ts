@@ -1,15 +1,17 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import type { ModelCatalog, ProviderDriver, ProviderInstance, SendTurnInput } from "./contracts.ts";
 import { createAcpDriver, type AcpSupport } from "./drivers/acp/core.ts";
+import { buildStamp } from "./environment.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import * as procs from "./procs.ts";
 import { holdUntilFirstEngineRead } from "./first-engine-read.ts";
 import { CodexDriver } from "./drivers/codex.ts";
-import { openStartupModelCatalog, readStartupModelCache, readStartupModelCacheEntry, STARTUP_MODEL_CACHE_FRESH_MS, unconfirmedModelCatalog, writeStartupModelCache } from "./startup-model-catalog.ts";
+import { loopbackOriginTag, withModelProviderRoutes } from "./model-provider-routes.ts";
+import { openStartupModelCatalog, readStartupModelCache, readStartupModelCacheEntry, STARTUP_MODEL_CACHE_FRESH_MS, startupModelCachePath, unconfirmedModelCatalog, writeStartupModelCache } from "./startup-model-catalog.ts";
 
 const CACHED: ModelCatalog = {
   default: "cached-model",
@@ -134,12 +136,60 @@ describe("startup model catalogs", () => {
     writeFileSync(join(DATA_DIR, "providers", "engine-models", instanceId + ".json"), JSON.stringify({
       default: "a", options: [{
         id: "a", label: "A", effortLevels: ["low", "unknown"], protocolUnsupported: "true",
+        loopbackOrigin: "http://127.0.0.1:7024",
         providerRoute: { id: "configured:62ecdef896b71a45", label: "https://private.example", provenance: "configured", connectionGroup: "unknown", endpoint: "https://private.example" },
       }],
     }));
     expect(readStartupModelCache(instanceId)).toEqual({
       default: "a", options: [{ id: "a", label: "A", providerRoute: { id: "configured:62ecdef896b71a45", provenance: "configured" } }],
     });
+  });
+
+  it("persists hashed loopbackOrigin tags for cold-restart merging and strips them on the wire", () => {
+    const v1Tag = loopbackOriginTag("http://127.0.0.1:7474/v1")!;
+    const originOnlyTag = loopbackOriginTag("http://127.0.0.1:7474", true)!;
+    const v1Group = "loopback:cccccccccccccccc";
+    const originOnlyGroup = "loopback:dddddddddddddddd";
+
+    writeStartupModelCache("cached-opencode", {
+      default: "raven/m",
+      options: [{
+        id: "raven/m",
+        label: "M",
+        providerRoute: { id: "configured:1234567890abcdef", label: "Raven (Local)", provenance: "configured", connectionGroup: v1Group },
+        loopbackOrigin: v1Tag,
+      }],
+    });
+    writeStartupModelCache("cached-agy", {
+      default: "gemini-4-neon",
+      options: [{
+        id: "gemini-4-neon",
+        label: "Gemini 4 Neon",
+        providerRoute: { id: "configured:fedcba0987654321", label: "Antigravity (Local)", provenance: "configured", connectionGroup: originOnlyGroup },
+        loopbackOrigin: originOnlyTag,
+      }],
+    });
+
+    const hydratedOpenCode = readStartupModelCache("cached-opencode")!;
+    const hydratedAgy = readStartupModelCache("cached-agy")!;
+    expect(hydratedOpenCode.options[0]?.loopbackOrigin).toBe(v1Tag);
+    expect(hydratedAgy.options[0]?.loopbackOrigin).toBe(originOnlyTag);
+
+    const described = withModelProviderRoutes([
+      { instanceId: "cached-opencode", driverKind: "opencodeGo", models: hydratedOpenCode },
+      { instanceId: "cached-agy", driverKind: "antigravityAgent", models: hydratedAgy },
+    ], {}) as Array<{ models: ModelCatalog }>;
+
+    expect(described[1].models.options[0]?.providerRoute).toEqual({
+      id: "configured:fedcba0987654321",
+      label: "Raven (Local)",
+      provenance: "configured",
+      connectionGroup: v1Group,
+    });
+    expect(Object.hasOwn(described[0].models.options[0]!, "loopbackOrigin")).toBe(false);
+    expect(Object.hasOwn(described[1].models.options[0]!, "loopbackOrigin")).toBe(false);
+    expect(JSON.stringify(described)).not.toContain("loopbackOrigin");
+    expect(JSON.stringify(described)).not.toContain("127.0.0.1:7474");
   });
 
   it("does not wait for a slow refresh when a later start already has a catalog", async () => {
@@ -207,6 +257,65 @@ describe("startup model catalogs", () => {
     await (open("timed-build", 0, "0.0.1 an older image").opened as { pending: Promise<void> }).pending;
     expect(refreshes).toBe(3);
     expect(readStartupModelCacheEntry("timed-fresh")).toMatchObject({ catalog: CACHED, checkedAt: now - STARTUP_MODEL_CACHE_FRESH_MS + 1, build: expect.any(String) });
+  });
+
+  it("drops the build stamp on schemaVersion 2 cache entries to trigger startup refresh, and retains it on schemaVersion 3", async () => {
+    seedBots();
+    const now = 1_800_000_000_000;
+    const currentBuild = buildStamp();
+
+    writeStartupModelCache("schema-v3", CACHED, { checkedAt: now, build: currentBuild });
+    const rawV3 = JSON.parse(readFileSync(startupModelCachePath("schema-v3")!, "utf8")) as { schemaVersion?: unknown; build?: unknown };
+    expect(rawV3).toMatchObject({ schemaVersion: 3, build: currentBuild });
+    expect(readStartupModelCacheEntry("schema-v3")).toEqual({
+      catalog: CACHED,
+      checkedAt: now,
+      build: currentBuild,
+    });
+
+    let v3Refreshes = 0;
+    expect(await openStartupModelCatalog({
+      instanceId: "schema-v3",
+      use: () => {},
+      current: () => CACHED,
+      refresh: async () => { v3Refreshes += 1; },
+      now,
+    })).toBeNull();
+    expect(v3Refreshes).toBe(0);
+
+    mkdirSync(join(DATA_DIR, "providers", "engine-models"), { recursive: true });
+    writeFileSync(startupModelCachePath("schema-v2")!, JSON.stringify({
+      ...CACHED,
+      schemaVersion: 2,
+      checkedAt: now,
+      build: currentBuild,
+    }));
+    expect(readStartupModelCacheEntry("schema-v2")).toEqual({
+      catalog: CACHED,
+      checkedAt: now,
+      build: null,
+    });
+
+    let v2Refreshes = 0;
+    let current = CACHED;
+    const opened = openStartupModelCatalog({
+      instanceId: "schema-v2",
+      use: (catalog) => { current = catalog; },
+      current: () => current,
+      refresh: async () => {
+        v2Refreshes += 1;
+        current = FRESH;
+      },
+      now,
+    }) as { pending: Promise<void> };
+    await opened.pending;
+    expect(v2Refreshes).toBe(1);
+    expect(readStartupModelCacheEntry("schema-v2")).toMatchObject({
+      catalog: FRESH,
+      build: currentBuild,
+    });
+    const migrated = JSON.parse(readFileSync(startupModelCachePath("schema-v2")!, "utf8")) as { schemaVersion?: unknown };
+    expect(migrated.schemaVersion).toBe(3);
   });
 
   it("reads the list again when an engine opens a second time in one run: its key or settings just changed", async () => {

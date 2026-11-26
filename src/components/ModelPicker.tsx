@@ -38,7 +38,7 @@ import { COMPACT_SQUARE } from "@/lib/compact-chip";
 import { useAiSwitch } from "@/lib/ai-switch";
 import { usePickerPane } from "@/lib/model-picker-pane";
 import { threadsOnOwnModel } from "../../shared/thread-model";
-import { ThreadModelsLine } from "./ThreadModelsLine";
+import { ThreadModelsLine } from "./ThreadModelsLine"; import { SimpleModelTrigger } from "./ModelPickerTrigger";
 import { USAGE_WARN_WIDENS, UsageBars, UsageMenuRows } from "./EngineUsage";
 import { EffortRow, ModelVariantRow, effortLabel } from "./ModelReasoningControls";
 export { EffortRow, ModelVariantRow, effortLabel } from "./ModelReasoningControls";
@@ -49,9 +49,15 @@ const POPOVER_HEIGHT = 600;
 export const SIMPLE_POPOVER_WIDTH = 324;
 const MENU_ITSELF = ":scope";
 
+function optionContextWindow(option: InstanceInfo["models"]["options"][number] | undefined): number | undefined {
+  return typeof option?.contextWindow === "number" && Number.isSafeInteger(option.contextWindow) && option.contextWindow > 0
+    ? option.contextWindow
+    : undefined;
+}
+
 export function ModelPicker({
   bot: shown, threadId, className, label, size = "md",
-  contained = false, showReasoning = false, inlineSettings = false,
+  contained = false, showReasoning = false, inlineSettings = false, folded = false,
 }: {
   bot: Bot;
   threadId?: string;
@@ -60,6 +66,8 @@ export function ModelPicker({
   inlineSettings?: boolean;
   label?: ReactNode;
   size?: "sm" | "md";
+  /** The header's pill folds to its mark while Settings or Computer narrows the chat. */
+  folded?: boolean;
 }) {
   const { dispatch: storeDispatch, refreshInstances, refreshModels: refreshInstanceModels } = useStoreActions(), state = useStoreSelector((s) => ({ instances: s.instances, modelVariantSessions: s.modelVariantSessions, profile: s.bots.find((candidate) => candidate.id === shown.id) }), sameFields);
   const [open, setOpen] = useState(false);
@@ -138,9 +146,10 @@ export function ModelPicker({
   const refocusAfterPick = useRefocusAfterPick(menuRef, open, selection, query);
   const instances = withTypedModels(state.instances, selection, query);
   const active = instances.find((instance) => instance.instanceId === selection.instanceId);
+  const currentOption = active?.models.options.find((option) => option.id === selection.model);
   const pickerInstances = configuredModelInstances(instances, selection.instanceId);
   const selectedVariantLabel = selection.variant === undefined ? undefined : variantLabel(
-    active?.models.options.find((option) => option.id === selection.model)?.variants?.find((option) => option.id === selection.variant)
+    currentOption?.variants?.find((option) => option.id === selection.variant)
       ?? { id: selection.variant, label: selection.variant },
     active?.driverKind,
   );
@@ -381,10 +390,23 @@ export function ModelPicker({
     }
     : levels.length > 0 && !shown.busy ? { levels, current: selection.effort && levels.includes(selection.effort) ? selection.effort : undefined, onPick: writeEffort, onReset: () => writeEffort(undefined) }
     : null;
-  const contextWindow = (!contained || showReasoning) && active?.capabilities?.configurableContextWindow
-    ? <ModelContextWindow key={JSON.stringify([bot.id, threadId ?? bot.threadId])} selection={selection} disabled={shown.busy || Boolean(active.policy)} inline={inlineSettings}
-      onChange={(next) => applySelection(active, next)} />
-    : null;
+  const declaredContextWindow = optionContextWindow(currentOption);
+  const contextWindow = currentOption?.protocolUnsupported
+    ? null
+    : (!contained || showReasoning) && active?.capabilities?.configurableContextWindow
+      ? <ModelContextWindow key={JSON.stringify([bot.id, threadId ?? bot.threadId])} selection={selection} defaultTokens={declaredContextWindow}
+        disabled={shown.busy || Boolean(active.policy)} inline={inlineSettings}
+        onChange={(next) => applySelection(active, next)} />
+      : inlineSettings && !active?.capabilities?.configurableContextWindow && declaredContextWindow !== undefined
+        ? (
+          <div data-context-window-readonly="" className="flex items-center justify-between gap-3">
+            <span id={`${menuId}-context-window-label`} className="text-[13px] text-ink-secondary">{t("model.context.label")}</span>
+            <output aria-labelledby={`${menuId}-context-window-label`} className="w-[65%] truncate rounded-md bg-control/60 px-2.5 py-1 text-[13px] text-ink-secondary tabular-nums">
+              {declaredContextWindow.toLocaleString()}
+            </output>
+          </div>
+        )
+        : null;
 
   const botModelSelection = follows !== undefined && profile.modelSelection.instanceId === railInstance?.instanceId
     ? profile.modelSelection : undefined;
@@ -412,7 +434,6 @@ export function ModelPicker({
     else close(true);
   };
 
-  const currentOption = active?.models.options.find((option) => option.id === selection.model);
   const attention = !active ? undefined
     : active.policy ? t("policy.managedBy", { organization: active.policy.organizationName })
       : needsCli(active) ? t("model.setupRequired")
@@ -495,29 +516,7 @@ export function ModelPicker({
         )}
       />
     </button>
-  ) : (
-    <button
-      {...triggerProps}
-      className={cn(
-        "group flex items-center rounded-full text-[13px] leading-[18px] text-ink-secondary disabled:cursor-not-allowed disabled:text-ink-tertiary",
-        contained
-          ? "min-w-0 max-w-[72%] transition-colors duration-150 hover:bg-ink/[0.06] hover:text-ink aria-expanded:bg-ink/[0.08] aria-expanded:text-ink disabled:hover:bg-transparent"
-          : cn("shrink-0", ELEVATED_FLOAT, ELEVATED_HOVER, "hover:text-ink aria-expanded:text-ink disabled:hover:bg-composer"),
-        size === "sm" ? "h-7 pl-2 pr-1.5" : "h-8 pl-2.5 pr-2",
-      )}
-    >
-      <span className="relative mr-1.5 flex shrink-0 group-disabled:opacity-50">
-        {active
-          ? <InstanceProviderMark instance={active} size={14} subtle />
-          : <span className="size-3.5 rounded-full bg-ink/[0.08]" aria-hidden="true" />}
-        {attention && <span data-model-attention className="absolute -bottom-0.5 -right-0.5 size-1.5 rounded-full bg-warning ring-[1.5px] ring-app" />}
-      </span>
-      <span className={cn("min-w-0 truncate", !contained && "max-w-[160px]")}>{modelName(active, selection.model)}</span>
-      {selection.variant !== undefined && <span className="shrink-0 whitespace-pre">{variantSuffix(active, selection.model, selection.variant)}</span>}
-      <UsageBars engine={selection.instanceId} className="ml-1.5" />
-      <ChevronDown size={12} strokeWidth={2} aria-hidden="true" className="ml-1 shrink-0 text-ink-tertiary group-hover:text-ink-secondary" />
-    </button>
-  );
+  ) : <SimpleModelTrigger {...triggerProps} active={active} selection={selection} attention={attention} contained={contained} size={size} folded={folded} summary={summary} />;
 
   const simpleMenu = simpleView ? simpleModelMenu({
     instances,

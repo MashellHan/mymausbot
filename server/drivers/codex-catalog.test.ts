@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -274,6 +274,297 @@ env_key = "UNSLOTH_STUDIO_AUTH_TOKEN"
     expect(model("raven::offline")).toMatchObject({ effortLevels: [] });
     expect(model("raven::legacy")).not.toHaveProperty("effortLevels");
     expect(model("raven::legacy")).not.toHaveProperty("protocolUnsupported");
+  });
+
+  it("marks responses-incompatible and non-chat models unsupported and extracts context windows and effort levels", async () => {
+    const externalDir = mkdtempSync(join(tmpdir(), "omb-codex-catalog-json-"));
+    scratchDirs.push(externalDir);
+    const catalogJson = join(externalDir, "raven-models.json");
+    writeFileSync(catalogJson, JSON.stringify({
+      models: [
+        { slug: "gpt-5.4", context_window: 128_000, supported_reasoning_levels: ["low"] },
+        { slug: "cached-only", context_window: 64_000.9, capabilities: { supports: { tool_calls: true } } },
+      ],
+    }));
+    const home = scratchHome({
+      "config.toml": `
+model_provider = "raven"
+model = "gpt-5.4"
+model_catalog_json = ${JSON.stringify(catalogJson)}
+
+[model_providers.raven]
+name = "Raven"
+base_url = "http://127.0.0.1:7024/v1"
+wire_api = "responses"
+`,
+    });
+    const catalog = await readCodexModelCatalog({ HOME: home }, async () => new Response(JSON.stringify({
+      data: [
+        {
+          id: "gpt-5.4",
+          supported_endpoints: ["/chat/completions", "/responses"],
+          capabilities: {
+            type: "chat",
+            limits: { max_context_window_tokens: 272_000 },
+            supports: { reasoning_effort: ["low", "medium", "high"] },
+          },
+        },
+        {
+          id: "gemini-4-neon",
+          supported_endpoints: ["/chat/completions"],
+          context_window: 1_000_000,
+          reasoning_levels: ["low", "high"],
+        },
+        {
+          id: "gpt-4.1",
+          supported_endpoints: ["/responses"],
+          capabilities: {
+            type: "chat",
+            limits: { max_context_window_tokens: 128_000 },
+            supports: { tool_calls: true },
+          },
+        },
+        {
+          id: "gpt-image-1",
+          supported_endpoints: ["/responses"],
+          capabilities: { type: "image" },
+        },
+        {
+          id: "text-embedding-3",
+          capabilities: { type: "embeddings" },
+        },
+      ],
+    }), { status: 200 }));
+
+    const model = (id: string) => catalog.options.find((row) => row.id === id);
+    expect(model("raven::gpt-5.4")).toMatchObject({
+      contextWindow: 272_000,
+      effortLevels: ["low", "medium", "high"],
+    });
+    expect(model("raven::gpt-5.4")).not.toHaveProperty("protocolUnsupported");
+    expect(model("raven::gemini-4-neon")).toMatchObject({
+      contextWindow: 1_000_000,
+      effortLevels: ["low", "high"],
+      protocolUnsupported: true,
+    });
+    expect(model("raven::gpt-4.1")).toMatchObject({
+      contextWindow: 128_000,
+      effortLevels: [],
+    });
+    expect(model("raven::gpt-4.1")).not.toHaveProperty("protocolUnsupported");
+    expect(model("raven::gpt-image-1")).toMatchObject({ protocolUnsupported: true });
+    expect(model("raven::text-embedding-3")).toMatchObject({ protocolUnsupported: true });
+    expect(model("raven::cached-only")).toMatchObject({
+      contextWindow: 64_000,
+      effortLevels: [],
+    });
+  });
+
+  it("runs provider auth command for loopback base_url and refuses it for non-loopback base_url", async () => {
+    const markerDir = mkdtempSync(join(tmpdir(), "omb-codex-auth-marker-"));
+    scratchDirs.push(markerDir);
+    const remoteMarker = join(markerDir, "remote-ran");
+    const home = scratchHome({
+      "config.toml": `
+model_provider = "local_gw"
+model = "m-local"
+
+[model_providers.local_gw]
+name = "Local Gateway"
+base_url = "http://127.0.0.1:7474/v1"
+
+[model_providers.local_gw.auth]
+command = ${JSON.stringify(process.execPath)}
+args = ["--eval", "process.stdout.write(\\"loopback-secret-tok\\\\n\\")"]
+timeout_ms = 3000
+
+[model_providers.remote_gw]
+name = "Remote Gateway"
+base_url = "https://remote.example.test/v1"
+
+[model_providers.remote_gw.auth]
+command = ${JSON.stringify(process.execPath)}
+args = ["--eval", ${JSON.stringify(`require("node:fs").writeFileSync(${JSON.stringify(remoteMarker)}, "ran"); process.stdout.write("remote-secret-tok")`) }]
+timeout_ms = 3000
+`,
+    });
+
+    const seenHeaders = new Map<string, Record<string, string>>();
+    const catalog = await readCodexModelCatalog({ HOME: home }, async (url, init) => {
+      const target = String(url);
+      seenHeaders.set(target, ((init as RequestInit | undefined)?.headers ?? {}) as Record<string, string>);
+      if (target.includes("127.0.0.1:7474")) {
+        return new Response(JSON.stringify({ data: [{ id: "m-local" }, { id: "m-probed" }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ data: [{ id: "m-remote" }] }), { status: 200 });
+    });
+
+    expect(seenHeaders.get("http://127.0.0.1:7474/v1/models")).toMatchObject({
+      Authorization: "Bearer loopback-secret-tok",
+    });
+    expect(seenHeaders.get("https://remote.example.test/v1/models")).not.toHaveProperty("Authorization");
+    expect(existsSync(remoteMarker)).toBe(false);
+    expect(catalog.options.map((option) => option.id)).toContain(encodeCodexSelection("local_gw", "m-probed"));
+    expect(JSON.stringify(catalog)).not.toContain("loopback-secret-tok");
+  });
+
+  it("skips auth.command on malformed args, rejects userinfo loopback URLs, and sends redirect: manual", async () => {
+    const markerDir = mkdtempSync(join(tmpdir(), "omb-codex-bad-args-"));
+    scratchDirs.push(markerDir);
+    const badMarker = join(markerDir, "bad-ran");
+    const markerScript = join(markerDir, "touch.js");
+    writeFileSync(markerScript, `require("node:fs").writeFileSync(${JSON.stringify(badMarker)}, "ran");`);
+    const home = scratchHome({
+      "config.toml": `
+model_provider = "bad_trailing"
+model = "m-seed"
+
+[model_providers.bad_trailing]
+base_url = "http://127.0.0.1:7481/v1"
+
+[model_providers.bad_trailing.auth]
+command = ${JSON.stringify(process.execPath)}
+args = [${JSON.stringify(markerScript)}] trailing_garbage
+
+[model_providers.bad_multiline]
+base_url = "http://127.0.0.1:7482/v1"
+
+[model_providers.bad_multiline.auth]
+command = ${JSON.stringify(process.execPath)}
+args = [
+  ${JSON.stringify(markerScript)}
+  "--missing-comma"
+]
+
+[model_providers.bad_unclosed_section]
+base_url = "http://127.0.0.1:7483/v1"
+
+[model_providers.bad_unclosed_section.auth]
+command = ${JSON.stringify(process.execPath)}
+args = [
+  ${JSON.stringify(markerScript)},
+
+[model_providers.userinfo_loopback]
+base_url = "http://user:pass@127.0.0.1:7484/v1"
+
+[model_providers.userinfo_loopback.auth]
+command = ${JSON.stringify(process.execPath)}
+args = [${JSON.stringify(markerScript)}]
+
+[model_providers.bad_unclosed_eof]
+base_url = "http://127.0.0.1:7485/v1"
+
+[model_providers.bad_unclosed_eof.auth]
+command = ${JSON.stringify(process.execPath)}
+args = [
+  ${JSON.stringify(markerScript)},
+`,
+    });
+
+    const seenInits = new Map<string, RequestInit | undefined>();
+    const catalog = await readCodexModelCatalog({ HOME: home }, async (url, init) => {
+      seenInits.set(String(url), init);
+      return new Response(JSON.stringify({ data: [{ id: "m-ok" }] }), { status: 200 });
+    });
+
+    expect(existsSync(badMarker)).toBe(false);
+    expect(seenInits.size).toBe(5);
+    for (const init of seenInits.values()) {
+      expect(init?.redirect).toBe("manual");
+      expect(init?.headers).not.toHaveProperty("Authorization");
+    }
+    expect(catalog.options.map((option) => option.id)).toContain(encodeCodexSelection("bad_unclosed_eof", "m-ok"));
+  });
+
+  it("handles NUL bytes in auth command or args and control chars in tokens without crashing", async () => {
+    const home = scratchHome({
+      "config.toml": `
+model_provider = "nul_cmd"
+model = "m-seed"
+
+[model_providers.nul_cmd]
+base_url = "http://127.0.0.1:7491/v1"
+
+[model_providers.nul_cmd.auth]
+command = "/bin/echo\\u0000bad"
+args = ["ok"]
+
+[model_providers.nul_arg]
+base_url = "http://127.0.0.1:7492/v1"
+
+[model_providers.nul_arg.auth]
+command = ${JSON.stringify(process.execPath)}
+args = ["--eval", "bad\\u0000arg"]
+
+[model_providers.ctrl_tok]
+base_url = "http://127.0.0.1:7493/v1"
+
+[model_providers.ctrl_tok.auth]
+command = ${JSON.stringify(process.execPath)}
+args = ["--eval", "process.stdout.write(\\"tok\\x07bad\\")"]
+`,
+    });
+
+    const seenHeaders = new Map<string, Record<string, string>>();
+    const catalog = await readCodexModelCatalog({ HOME: home }, async (url, init) => {
+      seenHeaders.set(String(url), ((init as RequestInit | undefined)?.headers ?? {}) as Record<string, string>);
+      return new Response(JSON.stringify({ data: [{ id: "m-live" }] }), { status: 200 });
+    });
+
+    expect(seenHeaders.get("http://127.0.0.1:7491/v1/models")).not.toHaveProperty("Authorization");
+    expect(seenHeaders.get("http://127.0.0.1:7492/v1/models")).not.toHaveProperty("Authorization");
+    expect(seenHeaders.get("http://127.0.0.1:7493/v1/models")).not.toHaveProperty("Authorization");
+    expect(catalog.options.map((option) => option.id)).toContain(encodeCodexSelection("nul_cmd", "m-live"));
+    expect(catalog.options.map((option) => option.id)).toContain(encodeCodexSelection("nul_arg", "m-live"));
+    expect(catalog.options.map((option) => option.id)).toContain(encodeCodexSelection("ctrl_tok", "m-live"));
+  });
+
+  it("clears stale static protocolUnsupported when a live probe confirms chat and /responses", async () => {
+    const home = scratchHome({
+      "config.toml": `
+model_provider = "raven"
+model = "upgraded-chat"
+
+[model_providers.raven]
+name = "Raven"
+base_url = "http://127.0.0.1:7024/v1"
+wire_api = "responses"
+`,
+      "model-catalogs/raven-models.json": JSON.stringify({
+        models: [
+          {
+            slug: "upgraded-chat",
+            supported_endpoints: ["/chat/completions"],
+            capabilities: { type: "image" },
+            context_window: 1e20,
+          },
+          {
+            slug: "still-image",
+            capabilities: { type: "image" },
+          },
+        ],
+      }),
+    });
+
+    const catalog = await readCodexModelCatalog({ HOME: home }, async () => new Response(JSON.stringify({
+      data: [
+        {
+          id: "upgraded-chat",
+          supported_endpoints: ["/chat/completions", "/responses"],
+          capabilities: { type: "chat", limits: { max_context_window_tokens: 200_000 } },
+        },
+        {
+          id: "still-image",
+        },
+      ],
+    }), { status: 200 }));
+
+    const upgraded = catalog.options.find((row) => row.id === "raven::upgraded-chat");
+    const stillImage = catalog.options.find((row) => row.id === "raven::still-image");
+    expect(upgraded).toMatchObject({ contextWindow: 200_000 });
+    expect(upgraded).not.toHaveProperty("protocolUnsupported");
+    expect(stillImage).toMatchObject({ protocolUnsupported: true });
+    expect(stillImage).not.toHaveProperty("contextWindow");
   });
 
   it("refuses a relative CODEX_HOME instead of falling back to ~/.codex", async () => {

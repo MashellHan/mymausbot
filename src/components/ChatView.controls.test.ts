@@ -13,13 +13,13 @@ import { RawPresentation } from "@/lib/raw-presentation";
 const fixture = vi.hoisted(() => {
   vi.stubGlobal("window", {});
   vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {} });
-  return { showThreads: true, advanced: true, raw: false, needsInputStop: false, menus: [] as { ariaLabel: string; items: { key: string; disabled?: boolean; heading?: string; active?: boolean }[] }[], dispatch: vi.fn(), canWrite: null as boolean | null, showToolCalls: false, platform: "other", localReasonCode: "cua-driver-unavailable", localMessage: "", model: null as ComponentProps<typeof ModelPicker> | null,
+  return { showThreads: true, advanced: true, raw: false, needsInputStop: false, settingsOpen: false, computerOpen: false, menus: [] as { ariaLabel: string; items: { key: string; disabled?: boolean; heading?: string; active?: boolean }[] }[], dispatch: vi.fn(), canWrite: null as boolean | null, showToolCalls: false, platform: "other", localReasonCode: "cua-driver-unavailable", localMessage: "", model: null as ComponentProps<typeof ModelPicker> | null,
     approval: null as ComponentProps<typeof ApprovalModeSelector> | null };
 });
 vi.mock("@/state/store", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/state/store")>();
   return { ...original, useStore: () => ({
-    state: { ...original.initialState, config: fixture.showToolCalls ? { features: { showToolCalls: true } } : null,
+    state: { ...original.initialState, settingsOpen: fixture.settingsOpen, computerOpen: fixture.computerOpen, config: fixture.showToolCalls ? { features: { showToolCalls: true } } : null,
       instances: [{ instanceId: "test", driverKind: "codex", displayName: "Test" } as InstanceInfo] },
     dispatch: fixture.dispatch,
   }) };
@@ -85,7 +85,20 @@ describe("the header's right side", () => {
     try {
       const { markup, controls } = header();
       expect(controls).toContain("data-test-model-control");
-      expect(fixture.model).toMatchObject({ threadId: "selected" });
+      expect(controls).toContain('data-new-thread="true"');
+      expect(fixture.model).toMatchObject({ threadId: "selected", folded: false });
+      try {
+        fixture.settingsOpen = true;
+        header();
+        expect(fixture.model).toMatchObject({ threadId: "selected", folded: true });
+        fixture.settingsOpen = false;
+        fixture.computerOpen = true;
+        header();
+        expect(fixture.model).toMatchObject({ threadId: "selected", folded: true });
+      } finally {
+        fixture.settingsOpen = false;
+        fixture.computerOpen = false;
+      }
       const computer = controls.match(/<button[^>]*data-tour="computer"[^>]*>/)?.[0] ?? "";
       expect(computer.split(" ")).toEqual(expect.arrayContaining(["rounded-full", "size-8"]));
       expect(markup).not.toContain('data-testid="chat-more"');
@@ -108,6 +121,7 @@ describe("the header's right side", () => {
       expect(controls).not.toContain(">Share");
       expect(controls).not.toContain('data-testid="chat-more"');
       expect(controls).not.toContain("data-test-model-control");
+      expect(controls).not.toContain("data-new-thread");
     } finally {
       fixture.raw = false;
       fixture.advanced = true;
@@ -176,6 +190,7 @@ describe("the header's right side", () => {
     fixture.advanced = true;
     const { markup } = header();
     expect(markup).toContain("data-test-model-control");
+    expect(markup).toContain('data-new-thread="true"');
     expect(markup).toContain('data-tour="computer"');
     expect(markup).toContain('data-testid="chat-more"');
     const more = fixture.menus.find((menu) => menu.ariaLabel === "More")!;
@@ -183,6 +198,13 @@ describe("the header's right side", () => {
     const inspector = more.items.find((item) => item.key === "inspector")!;
     expect(inspector.disabled).toBeFalsy();
     expect(inspector.heading).toBeUndefined();
+  });
+
+  it("hides the header New thread button in a fork panel or for view-only bots", () => {
+    const viewOnly = renderToStaticMarkup(createElement(ChatView, { bot: { ...bot, yourAccess: "view" } }));
+    expect(viewOnly).not.toContain("data-new-thread");
+    const forked = renderToStaticMarkup(createElement(ChatView, { bot, inForkPanel: true }));
+    expect(forked).not.toContain("data-new-thread");
   });
 });
 

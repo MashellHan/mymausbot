@@ -41,8 +41,11 @@ members:
 
 ## Implementation and evidence
 
-- Read the current checkout's AGENTS.md, [the playbook](../playbook.md), your specialist role and [validation policy](../../../docs/MAUSBOT-VALIDATION.md). Work within the assigned source scope from a freshly fetched, isolated worktree. Preserve the coordination checkout.
-- Record acceptance, dependencies and the first candidate before editing. Ship focused commits and PRs. Run the required hooks and scoped checks, and record pending verification explicitly. Keep independent work moving while review and CI run.
+- Work within the assigned source scope from a freshly fetched, isolated worktree. Preserve the coordination checkout.
+- **Lean & direct workflow**: read only needed files in parallel, edit directly, and put Acceptance + Scope + Checks as 3–5 bullets in the PR description instead of standalone ceremony briefs.
+- **No local builds or `tsc` on feature dev seats**: never run `pnpm build`, `pnpm typecheck`, `tsc`, `vite build`, or desktop packaging locally. GitHub CI runs `typecheck + lint`, and the single dedicated build owner (`mausbot-front`, coordinated by Lead) runs batched desktop builds.
+- **Fast local loop**: iterate on the 1–3 affected test files (`./node_modules/.bin/vitest run <file>`), run `pnpm check:ready` once before pushing when required, never poll `manage_task()` in a loop, and never run duplicate `vitest` jobs.
+- Open a **ready (non-draft) PR** as soon as the first coherent slice passes focused checks, then ping an idle reviewer directly with 3 lines (PR #, exact head SHA, scope + test count). Keep independent work moving while review and CI run.
 
 ## Review requests and corrections
 

@@ -104,3 +104,80 @@ it("marks a steered message as sent mid-turn without claiming the bot read it", 
   expect(html).toContain(">sent mid-turn</div>");
   expect(html).not.toContain("It saw this before its next step");
 });
+
+describe("progressive intake labels on user messages", () => {
+  it("renders optimistic received state immediately while busy and updates calmly through folding, processing, worker answer, and superseded", () => {
+    const busyBot: Bot = {
+      ...bot,
+      busy: true,
+      tasks: [{ ...bot.tasks![0]!, busy: true }],
+      messages: [
+        { id: "optimistic-send-1", role: "user", kind: "text", at: 10, text: "Queued without stopping" },
+      ],
+    };
+    expect(renderToStaticMarkup(createElement(ChatView, { bot: busyBot }))).toContain(">Received</span>");
+
+    const foldingBot: Bot = {
+      ...busyBot,
+      messages: [
+        {
+          id: "u-fold",
+          role: "user",
+          kind: "text",
+          at: 11,
+          text: "Fold this in",
+          intake: { mode: "progressive-continue", state: "folding", targetTurnId: "t1", updatedAt: 12 },
+        },
+      ],
+    };
+    const foldingHtml = renderToStaticMarkup(createElement(ChatView, { bot: foldingBot }));
+    expect(foldingHtml).toContain('data-intake-state="folding"');
+    expect(foldingHtml).toContain(">Folding in…</span>");
+
+    const workerBot: Bot = {
+      ...busyBot,
+      messages: [
+        {
+          id: "u-work",
+          role: "user",
+          kind: "text",
+          at: 15,
+          text: "Quick side question",
+          intake: { mode: "readonly-concurrent", state: "processing", workerTurnId: "w1", updatedAt: 16 },
+        },
+        {
+          id: "b-work",
+          role: "bot",
+          kind: "text",
+          at: 20,
+          text: "Direct read-only answer",
+          replyToId: "u-work",
+          turnId: "w1",
+          concurrentWorker: { workerId: "cw-1", readOnly: true, parentTurnId: "t1" },
+        },
+      ],
+    };
+    const workerHtml = renderToStaticMarkup(createElement(ChatView, { bot: workerBot }));
+    expect(workerHtml).toContain('data-intake-state="answered"');
+    expect(workerHtml).toContain(">Replied directly</span>");
+    expect(workerHtml).toContain('data-concurrent-worker="cw-1"');
+    expect(workerHtml).toContain(">Parallel answer</div>");
+
+    const supersededBot: Bot = {
+      ...busyBot,
+      messages: [
+        {
+          id: "u-old",
+          role: "user",
+          kind: "text",
+          at: 25,
+          text: "Older request",
+          intake: { mode: "soft-redirect", state: "superseded", updatedAt: 26 },
+        },
+      ],
+    };
+    const supersededHtml = renderToStaticMarkup(createElement(ChatView, { bot: supersededBot }));
+    expect(supersededHtml).toContain('data-intake-state="superseded"');
+    expect(supersededHtml).toContain(">Replaced by newer message</span>");
+  });
+});

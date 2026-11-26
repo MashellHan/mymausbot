@@ -153,6 +153,43 @@ export function takeThreadLinkFromLocation(): string | null {
   return THREAD_URL_PREFIX + encodeURIComponent(thread) + (bot === null ? "" : "?bot=" + encodeURIComponent(bot));
 }
 
+export interface PwaNotificationTarget {
+  botId?: string;
+  threadId?: string;
+  groupId?: string;
+  notificationId?: string;
+}
+
+/** Reads PWA Web Push deep-link params (`?bot=...&thread=...&group=...`) and strips them from the URL. */
+export function takePwaNotificationTargetFromLocation(): PwaNotificationTarget | null {
+  if (typeof window === "undefined") return null;
+  const location = window.location;
+  if (!location) return null;
+  const params = new URLSearchParams(location.search);
+  const rawBot = params.get("bot");
+  const rawThread = params.get("thread");
+  const rawGroup = params.get("group");
+  const rawNotif = params.get("notificationId");
+  if (rawBot === null && rawThread === null && rawGroup === null && rawNotif === null) return null;
+  params.delete("bot");
+  params.delete("thread");
+  params.delete("group");
+  params.delete("notificationId");
+  const search = params.toString();
+  window.history?.replaceState?.(null, "", location.pathname + (search ? `?${search}` : "") + location.hash);
+  const botId = rawBot ? (plainId(rawBot) ?? undefined) : undefined;
+  const threadId = rawThread ? (plainId(rawThread) ?? undefined) : undefined;
+  const groupId = rawGroup ? (plainId(rawGroup) ?? undefined) : undefined;
+  const notificationId = rawNotif ? (plainId(rawNotif) ?? undefined) : undefined;
+  if (!botId && !threadId && !groupId) return null;
+  return {
+    ...(botId ? { botId } : {}),
+    ...(threadId ? { threadId } : {}),
+    ...(groupId ? { groupId } : {}),
+    ...(notificationId ? { notificationId } : {}),
+  };
+}
+
 export function parseThreadRefUrl(value: string): ThreadRefAddress | null {
   const raw = value.trim();
   if (!raw.toLowerCase().startsWith(THREAD_URL_PREFIX)) return null;

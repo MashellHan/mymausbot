@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { appendFile, chmod, mkdtemp, mkdir, rename, stat, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdtemp, mkdir, realpath, rename, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { removeTempDir } from "./testing/cleanup.ts";
 import { resetPathCache } from "./env-path.ts";
 import { createLocalAgentTeamsProvider } from "./local-agent-teams.ts";
+import { PI_CONTEXT_KEY, piContextToken } from "./local-agent-pi-context.ts";
 
 const SESSION = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const OTHER = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -579,7 +580,7 @@ describe("local Agent Team provider", () => {
     const [missingSplit, unknownPrice] = (await provider.get()).teams[0]!.agents;
     expect(missingSplit!.tokenUsage24h).toMatchObject({ coverage: "ready", knownTokens: 230, estimatedCost: { coverage: "partial" } });
     expect(missingSplit!.tokenUsage24h!.estimatedCost.usd).toBeCloseTo(0.0006, 12);
-    expect(unknownPrice!.tokenUsage24h).toEqual({ coverage: "ready", knownTokens: 50, estimatedCost: { coverage: "unavailable", usd: null } });
+    expect(unknownPrice!.tokenUsage24h).toEqual({ coverage: "ready", knownTokens: 50, activeSeconds: 1, estimatedCost: { coverage: "unavailable", usd: null } });
   });
 
   it("distinguishes known zero from short-session unavailability and partial lower bounds", async () => {
@@ -631,7 +632,7 @@ describe("local Agent Team provider", () => {
     } }) + "\n");
     time = Date.UTC(2026, 10, 9, 12);
     const [knownZero, shortEmpty, shortPartial] = (await provider.get()).teams[0]!.agents;
-    expect(knownZero!.tokenUsage24h).toEqual({ coverage: "ready", knownTokens: 0, estimatedCost: { coverage: "ready", usd: 0 } });
+    expect(knownZero!.tokenUsage24h).toEqual({ coverage: "ready", knownTokens: 0, activeSeconds: 0, estimatedCost: { coverage: "ready", usd: 0 } });
     expect(knownZero!.tokenUsage7d).toEqual({ coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null } });
     expect(shortEmpty!.tokenUsage24h).toEqual({ coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null } });
     expect(shortPartial!.tokenUsage24h).toMatchObject({ coverage: "partial", knownTokens: 130, estimatedCost: { coverage: "partial" } });
@@ -1022,5 +1023,403 @@ describe("local Agent Team provider", () => {
     expect(afterMove.tokenUsage7d).toEqual({
       coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null },
     });
+
+    // A second poll on the destination pane must remain gated and never rewind back to sessionStartedAt.
+    time += 2_000;
+    const afterMoveSecondPoll = (await provider.get()).teams[0]!.agents[0]!;
+    expect(afterMoveSecondPoll.tokenUsage7d).toEqual({
+      coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null },
+    });
+
+    // A pre-`seats` bindings.json (`bindings` + `sessions` only) must also fail closed on a cross-pane move.
+    const preSeatsFile = join(home, "pre-seats-bindings.json");
+    const priorKey = createHash("sha256").update(JSON.stringify(["w6:p1", "codex", "o_prior", SESSION, "term_a"])).digest("hex");
+    const sessionHash = createHash("sha256").update(`session:${SESSION}`).digest("hex");
+    await writeFile(preSeatsFile, JSON.stringify({
+      bindings: [[priorKey, Date.UTC(2026, 10, 1, 10)]],
+      sessions: [[sessionHash, priorKey]],
+    }), { mode: 0o600 });
+    const preSeatsProvider = createLocalAgentTeamsProvider({
+      codexHome: home,
+      bindingCachePath: preSeatsFile,
+      now: () => time,
+      run: async (args) => args.at(-2) === "workspace" ? workspaces : JSON.stringify({
+        result: {
+          agents: [{
+            pane_id: "w6:p2", workspace_id: "w6", name: "origin-seat", agent: "codex", agent_status: "done",
+            cwd: repo, terminal_id: "term_b",
+            agent_session: { kind: "id", agent: "codex", source: "herdr:codex", value: SESSION },
+          }],
+        },
+      }),
+    });
+    const afterPreSeatsMove = (await preSeatsProvider.get()).teams[0]!.agents[0]!;
+    expect(afterPreSeatsMove.tokenUsage7d).toEqual({
+      coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null },
+    });
+  });
+
+  it("returns the fast Herdr roster immediately on slow cold enrichment and serves full enriched data once ready", async () => {
+    const codexHome = await codexLog(SESSION);
+    let releaseSecondList: (() => void) | null = null;
+    let agentListCalls = 0;
+    let time = 10_000;
+    const verifiedAgents = JSON.stringify({
+      result: {
+        agents: [{
+          pane_id: "w6:p1", workspace_id: "w6", name: "mausbot-front", agent: "codex", agent_status: "done",
+          cwd: "/private/workspace", terminal_id: "term_fast",
+          agent_session: { kind: "id", agent: "codex", source: "herdr:codex", value: SESSION },
+        }],
+      },
+    });
+    const provider = createLocalAgentTeamsProvider({
+      codexHome,
+      fastRosterTimeoutMs: 20,
+      now: () => time,
+      run: async (args) => {
+        if (args.at(-2) === "workspace") return workspaces;
+        agentListCalls++;
+        // Hold only the first enrichment verification pass (2nd agent list call) so cold enrichment exceeds fastRosterTimeoutMs.
+        if (agentListCalls === 2) {
+          await new Promise<void>((resolve) => { releaseSecondList = resolve; });
+        }
+        return verifiedAgents;
+      },
+    });
+
+    const first = await provider.get();
+    expect(first.status).toBe("ready");
+    expect(first.enriching).toBe(true);
+    expect(first.teamCount).toBe(1);
+    expect(first.teams[0]?.agents[0]).toMatchObject({ id: "w6:p1", name: "mausbot-front", kind: "codex", state: "done", model: null });
+
+    // A second non-fresh read while enrichment is still running returns the fast roster immediately.
+    const during = await provider.get();
+    expect(during.enriching).toBe(true);
+
+    // Advance clock past 1_000ms while enrichment is still in flight; once it finishes,
+    // a non-fresh get() must see the settled snapshot (enriching === undefined), never loop forever.
+    time += 2_000;
+    expect(releaseSecondList).not.toBeNull();
+    releaseSecondList!();
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    const settled = await provider.get();
+    expect(settled.enriching).toBeUndefined();
+    expect(settled.teams[0]?.agents[0]).toMatchObject({ model: "gpt-6-sol", reasoningEffort: "xhigh", contextUsed: 150 });
+
+    // Warm SWR returns lastResult immediately with enriching: true after >1s, then clears once background refresh finishes.
+    time += 2_000;
+    const warm = await provider.get();
+    expect(warm.status).toBe("ready");
+    expect(warm.enriching).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    const afterWarm = await provider.get();
+    expect(afterWarm.enriching).toBeUndefined();
+  });
+
+  it("awaits full enrichment on concurrent cold calls when fastRosterTimeoutMs is disabled (0) and transitions warm SWR to stale on Herdr failure", async () => {
+    const codexHome = await codexLog(SESSION);
+    let releaseSecondList: (() => void) | null = null;
+    let agentListCalls = 0;
+    let failHerdr = false;
+    let time = 10_000;
+    const verifiedAgents = JSON.stringify({
+      result: {
+        agents: [{
+          pane_id: "w6:p1", workspace_id: "w6", name: "mausbot-front", agent: "codex", agent_status: "done",
+          cwd: "/private/workspace", terminal_id: "term_sync",
+          agent_session: { kind: "id", agent: "codex", source: "herdr:codex", value: SESSION },
+        }],
+      },
+    });
+    const run = async (args: readonly string[]) => {
+      if (failHerdr) throw new Error("herdr offline");
+      if (args.at(-2) === "workspace") return workspaces;
+      agentListCalls++;
+      if (agentListCalls === 2) {
+        await new Promise<void>((resolve) => { releaseSecondList = resolve; });
+      }
+      return verifiedAgents;
+    };
+
+    // With fastRosterTimeoutMs = 0, concurrent cold get() calls both await full enrichment (no fast roster returned).
+    const syncProvider = createLocalAgentTeamsProvider({ codexHome, fastRosterTimeoutMs: 0, now: () => time, run });
+    const p1 = syncProvider.get();
+    const p2 = syncProvider.get();
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    expect(releaseSecondList).not.toBeNull();
+    releaseSecondList!();
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(r1.enriching).toBeUndefined();
+    expect(r2.enriching).toBeUndefined();
+    expect(r1.teams[0]?.agents[0]?.model).toBe("gpt-6-sol");
+
+    // With fastRosterTimeoutMs > 0, a warm SWR refresh whose Herdr read fails transitions the cached snapshot to stale.
+    agentListCalls = 10;
+    const swrProvider = createLocalAgentTeamsProvider({ codexHome, fastRosterTimeoutMs: 5_000, now: () => time, run });
+    const ready = await swrProvider.get();
+    expect(ready.status).toBe("ready");
+    expect(ready.enriching).toBeUndefined();
+
+    failHerdr = true;
+    time += 2_000;
+    const duringFailure = await swrProvider.get();
+    expect(duringFailure.status).toBe("ready");
+    expect(duringFailure.enriching).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    const settledStale = await swrProvider.get();
+    expect(settledStale.status).toBe("stale");
+    expect(settledStale.enriching).toBeUndefined();
+  });
+
+  it("bypasses SWR cache when a Pi agent has a live contextWindow", async () => {
+    const rawHome = await mkdtemp(join(tmpdir(), "mausbot-pi-swr-bypass-"));
+    folders.push(rawHome);
+    const home = await realpath(rawHome);
+    const repo = join(home, "repo");
+    await mkdir(repo, { recursive: true });
+    const cwdSlug = `--${repo.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+    const piSession = join(
+      home, ".local", "share", "mausbot-team", "pi-agent", "sessions", cwdSlug,
+      `2026-11-09T10-00-00-000Z_${SESSION}.jsonl`,
+    );
+    await mkdir(dirname(piSession), { recursive: true });
+    await writeFile(piSession, JSON.stringify({
+      type: "session", version: 3, id: SESSION, timestamp: "2026-11-09T10:00:00Z", cwd: repo,
+    }) + "\n" + JSON.stringify({
+      type: "model_change", id: "00000001", parentId: null, timestamp: "2026-11-09T10:00:01Z", provider: "raven", modelId: "gpt-6.2-sol",
+    }) + "\n");
+    let time = Date.UTC(2026, 10, 9, 10, 0, 5);
+    let listCalls = 0;
+    const binding = {
+      pane: "w6:p1", sessionId: SESSION, file: piSession, cwd: repo,
+      leaf: "00000001", provider: "raven", model: "gpt-6.2-sol",
+    };
+    const makeAgents = (windowSize: number) => JSON.stringify({
+      result: {
+        agents: [{
+          pane_id: "w6:p1", workspace_id: "w6", name: "mausbot-dev1", agent: "pi", agent_status: "idle",
+          cwd: repo, terminal_id: "term_pi",
+          agent_session: { kind: "path", agent: "pi", source: "herdr:pi", value: piSession },
+          tokens: {
+            [PI_CONTEXT_KEY]: piContextToken(binding, 4242, "1700000000:123456", windowSize, time),
+          },
+        }],
+      },
+    });
+    let currentWindow = 1_000_000;
+    const provider = createLocalAgentTeamsProvider({
+      home,
+      fastRosterTimeoutMs: 5_000,
+      now: () => time,
+      readProcessStart: async (pid) => pid === 4242 ? "1700000000:123456" : null,
+      run: async (args) => {
+        if (args.at(-2) === "workspace") return workspaces;
+        if (args.includes("process-info")) {
+          return JSON.stringify({
+            result: { process_info: { pane_id: "w6:p1", foreground_processes: [{ pid: 4242, name: "node" }] } },
+          });
+        }
+        listCalls++;
+        return makeAgents(currentWindow);
+      },
+    });
+
+    // Seed an enriched snapshot before verifying that non-fresh reads bypass SWR when a Pi member has contextWindow.
+    const first = await provider.get(true);
+    expect(first.teams[0]?.agents[0]?.contextWindow).toBe(1_000_000);
+    const callsAfterFirst = listCalls;
+
+    // Even >1s later with fastRosterTimeoutMs > 0, a Pi member with contextWindow must bypass SWR and re-verify live.
+    currentWindow = 500_000;
+    time += 2_000;
+    const second = await provider.get();
+    expect(listCalls).toBeGreaterThan(callsAfterFirst);
+    expect(second.enriching).toBeUndefined();
+    expect(second.teams[0]?.agents[0]?.contextWindow).toBe(500_000);
+  });
+
+  it("recovers Agy model/effort/context/usage from process-info --conversation when Herdr has not emitted agent_session yet, and preserves same-origin history across terminal_id rotation", async () => {
+    const home = await mkdtemp(join(tmpdir(), "mausbot-agy-argv-continuity-"));
+    folders.push(home);
+    const repo = join(home, "repo");
+    const brainLogs = join(home, ".gemini", "antigravity-cli", "brain", SESSION, ".system_generated", "logs");
+    await mkdir(repo, { recursive: true });
+    await mkdir(brainLogs, { recursive: true });
+    const summaryDb = new DatabaseSync(join(home, ".gemini", "antigravity-cli", "conversation_summaries.db"));
+    summaryDb.exec("CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, workspace_uris TEXT)");
+    summaryDb.prepare("INSERT INTO conversation_summaries (conversation_id, workspace_uris) VALUES (?, ?)").run(
+      SESSION, JSON.stringify([`file://${repo}`]),
+    );
+    summaryDb.close();
+    await writeFile(join(brainLogs, "transcript.jsonl"), [
+      JSON.stringify({ type: "USER_INPUT", created_at: "2026-11-24T08:00:00Z", content: "Review PR #1271" }),
+      JSON.stringify({
+        type: "PLANNER_RESPONSE", created_at: "2026-11-25T09:00:00Z", model: "gemini-4-neon-high",
+        input_tokens: 1000, output_tokens: 200, cache_read_tokens: 300, content: "Looks good",
+      }),
+    ].join("\n") + "\n");
+
+    const bindingFile = join(home, "bindings.json");
+    let term = "term_before_restart";
+    let withSession = true;
+    let time = Date.UTC(2026, 10, 26, 3, 0);
+    const run = async (args: readonly string[]) => {
+      if (args.at(-2) === "workspace") return workspaces;
+      if (args.includes("process-info")) {
+        return JSON.stringify({
+          result: {
+            process_info: {
+              pane_id: "w6:pQ",
+              foreground_processes: [{
+                argv: ["/opt/homebrew/bin/antigravity", "--dangerously-skip-permissions", "--conversation", SESSION],
+              }],
+            },
+          },
+        });
+      }
+      return JSON.stringify({
+        result: {
+          agents: [{
+            pane_id: "w6:pQ", workspace_id: "w6", name: "mausbot-review3", agent: "agy", agent_status: "idle",
+            cwd: repo, terminal_id: term,
+            ...(withSession ? { agent_session: { kind: "id", agent: "agy", source: "herdr:antigravity_cli", value: SESSION } } : {}),
+          }],
+        },
+      });
+    };
+
+    const firstProvider = createLocalAgentTeamsProvider({ home, bindingCachePath: bindingFile, now: () => time, run });
+    const first = (await firstProvider.get()).teams[0]!.agents[0]!;
+    expect(first).toMatchObject({ model: "gemini-4-neon", reasoningEffort: "high", contextUsed: 1300, contextWindow: 1_048_576 });
+    expect(first.tokenUsage7d).toMatchObject({ coverage: "partial", knownTokens: 1500 });
+
+    // Simulate Herdr daemon restart rotating terminal_id and idle Agy omitting agent_session before next turn.
+    term = "term_after_restart";
+    withSession = false;
+    time += 60_000;
+    const secondProvider = createLocalAgentTeamsProvider({ home, bindingCachePath: bindingFile, now: () => time, run });
+    const afterRestart = (await secondProvider.get()).teams[0]!.agents[0]!;
+    expect(afterRestart).toMatchObject({ model: "gemini-4-neon", reasoningEffort: "high", contextUsed: 1300, contextWindow: 1_048_576 });
+    expect(afterRestart.tokenUsage7d).toMatchObject({ coverage: "partial", knownTokens: 1500 });
+  });
+
+  it("fails closed on duplicate idle Agy --conversation claims, mismatched process-info pane_id, and mid-read pane occupant changes", async () => {
+    const home = await mkdtemp(join(tmpdir(), "mausbot-agy-fallback-guards-"));
+    folders.push(home);
+    const repo = join(home, "repo");
+    const brainLogs = join(home, ".gemini", "antigravity-cli", "brain", SESSION, ".system_generated", "logs");
+    await mkdir(repo, { recursive: true });
+    await mkdir(brainLogs, { recursive: true });
+    const summaryDb = new DatabaseSync(join(home, ".gemini", "antigravity-cli", "conversation_summaries.db"));
+    summaryDb.exec("CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, workspace_uris TEXT)");
+    summaryDb.prepare("INSERT INTO conversation_summaries (conversation_id, workspace_uris) VALUES (?, ?)").run(
+      SESSION, JSON.stringify([`file://${repo}`]),
+    );
+    summaryDb.close();
+    await writeFile(join(brainLogs, "transcript.jsonl"), [
+      JSON.stringify({ type: "USER_INPUT", created_at: "2026-11-24T08:00:00Z", content: "Secret prompt" }),
+      JSON.stringify({
+        type: "PLANNER_RESPONSE", created_at: "2026-11-25T09:00:00Z", model: "gemini-4-neon-high",
+        input_tokens: 1000, output_tokens: 200, cache_read_tokens: 300, content: "Reply",
+      }),
+    ].join("\n") + "\n");
+
+    const now = () => Date.UTC(2026, 10, 26, 3, 0);
+
+    // 1. Two idle Agy panes claiming the same --conversation must both fail closed.
+    const dupProvider = createLocalAgentTeamsProvider({
+      home, now,
+      run: async (args) => {
+        if (args.at(-2) === "workspace") return workspaces;
+        if (args.includes("process-info")) {
+          const pane = args.at(-1)!;
+          return JSON.stringify({
+            result: {
+              process_info: {
+                pane_id: pane,
+                foreground_processes: [{ argv: ["/opt/homebrew/bin/antigravity", "--conversation", SESSION] }],
+              },
+            },
+          });
+        }
+        return JSON.stringify({
+          result: {
+            agents: [
+              { pane_id: "w6:p1", workspace_id: "w6", name: "dup-a", agent: "agy", agent_status: "idle", cwd: repo, terminal_id: "t1" },
+              { pane_id: "w6:p2", workspace_id: "w6", name: "dup-b", agent: "agy", agent_status: "idle", cwd: repo, terminal_id: "t2" },
+            ],
+          },
+        });
+      },
+    });
+    const dupAgents = (await dupProvider.get()).teams[0]!.agents;
+    for (const member of dupAgents) {
+      expect(member.contextUsed).toBeNull();
+      expect(member.taskHint).toBeNull();
+      expect(member.tokenUsage7d).toEqual({ coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null } });
+    }
+
+    // 2. Mismatched process_info.pane_id must be rejected.
+    const mismatchProvider = createLocalAgentTeamsProvider({
+      home, now,
+      run: async (args) => {
+        if (args.at(-2) === "workspace") return workspaces;
+        if (args.includes("process-info")) {
+          return JSON.stringify({
+            result: {
+              process_info: {
+                pane_id: "w6:pOTHER",
+                foreground_processes: [{ argv: ["/opt/homebrew/bin/antigravity", "--conversation", SESSION] }],
+              },
+            },
+          });
+        }
+        return JSON.stringify({
+          result: {
+            agents: [
+              { pane_id: "w6:pQ", workspace_id: "w6", name: "mausbot-review3", agent: "agy", agent_status: "idle", cwd: repo, terminal_id: "t1" },
+            ],
+          },
+        });
+      },
+    });
+    const mismatchMember = (await mismatchProvider.get()).teams[0]!.agents[0]!;
+    expect(mismatchMember.contextUsed).toBeNull();
+    expect(mismatchMember.tokenUsage7d).toEqual({ coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null } });
+
+    // 3. Mid-read occupant change on the 2nd agent list must fail closed and never leak metadata via fallbackAgyMeta.
+    let listCall = 0;
+    const swappedProvider = createLocalAgentTeamsProvider({
+      home, now,
+      run: async (args) => {
+        if (args.at(-2) === "workspace") return workspaces;
+        if (args.includes("process-info")) {
+          return JSON.stringify({
+            result: {
+              process_info: {
+                pane_id: "w6:pQ",
+                foreground_processes: [{ argv: ["/opt/homebrew/bin/antigravity", "--conversation", SESSION] }],
+              },
+            },
+          });
+        }
+        listCall++;
+        return JSON.stringify({
+          result: {
+            agents: [{
+              pane_id: "w6:pQ", workspace_id: "w6", name: "mausbot-review3", agent: "agy", agent_status: "idle",
+              cwd: repo, terminal_id: listCall === 1 ? "t1" : "t2_replaced",
+            }],
+          },
+        });
+      },
+    });
+    const swappedMember = (await swappedProvider.get()).teams[0]!.agents[0]!;
+    expect(swappedMember.model).toBeNull();
+    expect(swappedMember.contextUsed).toBeNull();
+    expect(swappedMember.taskHint).toBeNull();
+    expect(swappedMember.tokenUsage7d).toEqual({ coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null } });
   });
 });

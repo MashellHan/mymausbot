@@ -60,8 +60,8 @@ export function composerPlaceholder({ simple, locked, approval, attaching, liste
   }
   if (busy) {
     return group
-      ? t("composer.placeholder.queueGroup", { name: busyName, key: sendLabel })
-      : t("composer.placeholder.queue", { name: busyName });
+      ? t("composer.placeholder.followUpGroup", { name: busyName, key: sendLabel })
+      : t("composer.placeholder.followUp", { name: busyName });
   }
   if (group) {
     return goal
@@ -79,8 +79,8 @@ export function sendLabels({ simple, busy, canSteer, name, sendLabel }: { simple
   }
   if (busy) {
     return simple
-      ? { label: t("composer.send.queueSimple", { name }), title: t("composer.send.queueSimple", { name }) }
-      : { label: t("composer.send.queue"), title: t("composer.send.queueHint") };
+      ? { label: t("composer.send.followUpSimple", { name }), title: t("composer.send.followUpSimple", { name }) }
+      : { label: t("composer.send.followUp"), title: t("composer.send.followUpHint") };
   }
   return { label: t("composer.send.message"), title: `${t("chat.send")} (${sendLabel})` };
 }

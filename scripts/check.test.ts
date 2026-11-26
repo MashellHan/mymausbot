@@ -16,12 +16,14 @@ afterEach(() => { for (const dir of temporary.splice(0)) rmSync(dir, { recursive
 const plan = (files: string[], options: object = {}) => selectCheckPlan({ files, policy: admitted, mode: "tiered", qa: { healthy: true, blockedAreas: [] }, ...options });
 
 describe("shared local and CI check policy", () => {
-  it("bounds local ready workers by CPU and memory while edit stays serial", () => {
+  it("bounds local ready workers by CPU, memory and load average while edit stays serial", () => {
     const gib = 1024 ** 3;
-    expect(localVitestWorkers("edit", 10, 24 * gib)).toBe(1);
-    expect(localVitestWorkers("ready", 10, 24 * gib)).toBe(4);
-    expect(localVitestWorkers("ready", 4, 8 * gib)).toBe(2);
-    expect(localVitestWorkers("ready", 2, 4 * gib)).toBe(1);
+    expect(localVitestWorkers("edit", 10, 24 * gib, 0)).toBe(1);
+    expect(localVitestWorkers("ready", 10, 24 * gib, 0)).toBe(4);
+    expect(localVitestWorkers("ready", 10, 24 * gib, 12)).toBe(2);
+    expect(localVitestWorkers("ready", 10, 24 * gib, 25)).toBe(1);
+    expect(localVitestWorkers("ready", 4, 8 * gib, 0)).toBe(2);
+    expect(localVitestWorkers("ready", 2, 4 * gib, 0)).toBe(1);
   });
 
   it("keeps pilot areas in shadow until admitted and health permits reduction", () => {

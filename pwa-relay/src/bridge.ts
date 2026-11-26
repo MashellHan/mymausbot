@@ -144,7 +144,7 @@ function applyCorsAndNoStore(res: ServerResponse, pwaOrigin: string): void {
   res.setHeader("Access-Control-Allow-Origin", pwaOrigin);
   res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, x-omb-background");
+  res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, DPoP, x-omb-background");
   res.setHeader("Access-Control-Expose-Headers", "Retry-After");
   res.setHeader("Access-Control-Max-Age", "86400");
   res.setHeader("Cache-Control", "no-store");

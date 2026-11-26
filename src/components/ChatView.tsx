@@ -74,11 +74,11 @@ import { useShowRunCard } from "@/lib/run-card-preferences";
 import { useColorUserBubbles } from "@/lib/user-bubble-preference";
 import { userBubbleStyle } from "@/lib/user-bubble-tone";
 import { ToolActivity } from "./ToolActivity";
-import { DataResultChip } from "./DataResultChip"; import { PublishedPageCard } from "./PublishedPageCard"; import { TemplateChatCard } from "./TemplateCard"; import { PublishedSiteCards } from "./published-apps/PublishedSiteCards"; import { isRemoteClientSession, isRemotePwaMode } from "@/lib/pwa-transport";
+import { DataResultChip } from "./DataResultChip"; import { PublishedPageCard } from "./PublishedPageCard"; import { TemplateChatCard } from "./TemplateCard"; import { PublishedSiteCards } from "./published-apps/PublishedSiteCards"; import { isRemoteClientSession, isRemotePwaMode } from "@/lib/pwa-transport"; import { MobilePwaNotificationBell } from "./NotificationsPanel";
 import { ThreadRefText } from "./ThreadRefs"; import { WatchScreenButton } from "./WatchScreenButton";
 import { optionsCardRow } from "./OptionsCardRow";
 import { MessageBoundary } from "./MessageBoundary";
-import { RichMessageRow, UserLineNote, richRowKind } from "./RichMessageRow"; import { SetupOffer } from "./SetupOffer"; import { SavedStepsChip } from "./SavedStepsChip";
+import { RichMessageRow, UserLineNote, richRowKind } from "./RichMessageRow"; import { ConcurrentWorkerNote } from "./ProgressiveIntakeNote"; import { SetupOffer } from "./SetupOffer"; import { SavedStepsChip } from "./SavedStepsChip";
 import { Composer } from "./Composer";
 import { ChatErrorBanner, ChatNotice } from "./ChatErrorBanner";
 import { ThreadContextWarning } from "./ContextWarning";
@@ -96,7 +96,7 @@ import { CompactionChip, DigestChip } from "./DigestChip";
 import { RenameTitle } from "./RenameTitle"; import { ChatHeadRole, chiefOfStaffBadge } from "./BotRole";
 import { BotActivityPicker } from "./TaskPicker"; import { ChatHeadPill } from "./ChatHeadPill"; import { HeaderShare } from "./bot-access/HeaderShare"; import { ThreadPresenceFaces } from "./TeamPresence"; import { useStoreRef } from "@/state/store-ref"; import { sameFields, useStoreDispatch, useStoreSelector } from "@/state/store-select"; import { sameDrawnBots } from "@/lib/drawn-bots";
 import { ELEVATED_FLOAT, ELEVATED_HOVER } from "./elevated";
-import { ChatComputerButton } from "./ChatComputerButton";
+import { ChatComputerButton } from "./ChatComputerButton"; import { NewThreadHeaderButton } from "./NewThreadHeaderButton";
 import { ChatStopButton } from "./ChatStopButton"; import { PwaPinBotButton } from "./PwaPinBotButton";
 import { ModelPicker } from "./ModelPicker";
 import { useFailedTurnFix } from "./FailedTurnFix";
@@ -425,6 +425,7 @@ const Bubble = memo(function Bubble({
 
   return (
     <div {...{ [MESSAGE_ROW]: "" }} data-look={user ? "message-user" : "message-bot"} className={cn("group flex w-full flex-col", user ? "animate-msg-in items-end" : "items-start", simple && join?.above && SIMPLE_STACKED)}>
+      {!user && message.concurrentWorker && <ConcurrentWorkerNote worker={message.concurrentWorker} />}
       {message.relay ? <RelayLabel message={message} /> : peer && <PeerLabel peer={peer} />}
       {speaker && <div className="mb-0.5 px-1 text-right text-[13px] [overflow-wrap:anywhere] font-semibold text-ink-secondary">{speaker}</div>}
       <div className={cn("flex w-full items-center gap-1.5", user ? "justify-end" : "justify-start")}>
@@ -515,11 +516,7 @@ const Bubble = memo(function Bubble({
                   return highlightCitationSource(citation);
                 }}
               />}
-              {message.steered && (
-                <div className="mt-1 text-[11px] text-ink-tertiary">
-                  {t("chat.sentMidTurn")}
-                </div>
-              )}
+              {!message.intake && message.steered && (<div className="mt-1 text-[11px] text-ink-tertiary">{t("chat.sentMidTurn")}</div>)}
               {message.quickModel && <QuickModelNote model={message.quickModel} />}
               <UserLineNote message={message} />
               {collapsible && (
@@ -1097,7 +1094,7 @@ export const ChatView = memo(function ChatView({ bot: profile, inForkPanel = fal
           )}
           <ThreadContextWarning bot={bot} messages={messages} />
           {phone && <UsageAlert engine={bot.modelSelection?.instanceId} />}
-          {!isRemotePwaMode() && (!phone || remoteClient) && (!raw || remoteClient) && <ModelPicker key={bot.threadId} bot={bot} threadId={bot.threadId} />}
+          {!isRemotePwaMode() && (!phone || remoteClient) && (!raw || remoteClient) && <ModelPicker key={bot.threadId} bot={bot} threadId={bot.threadId} folded={state.settingsOpen || state.computerOpen} />}
           <LiveCallChip currentBotId={bot.id} onOpen={(botId, threadId) => openThread(dispatch, { botId, threadId }, store.state(), showThreads)} />{!phoneMenu && !isRemotePwaMode() && <WatchScreenButton botId={bot.id} messages={messages} liveTools={liveTools} place={place} />}
           <PinnedMessagesMenu
             pins={pinnedPreview(messages, bot.pinnedMessageId, bot.name)}
@@ -1106,7 +1103,7 @@ export const ChatView = memo(function ChatView({ bot: profile, inForkPanel = fal
             onUnpin={remoteClient ? undefined : () => dispatch({ type: "updateTask", botId: bot.id, threadId: bot.threadId, patch: { pinnedMessageId: "" } })}
           />
           {computerButton}
-          <PwaPinBotButton botId={bot.id} /><HeaderShare bot={bot} />{phoneMenu ? <ChatMoreMenu bot={bot} phoneHeader /> : (advanced || remoteClient) && <ChatHeaderMenu key={`menu:${bot.threadId}`} bot={bot} />}
+          <PwaPinBotButton botId={bot.id} /><HeaderShare bot={bot} />{!inForkPanel && (!raw || remoteClient) && bot.yourAccess !== "view" && <NewThreadHeaderButton botId={bot.id} />}<MobilePwaNotificationBell show={phone && !inForkPanel} bar="flex size-9 shrink-0 items-center justify-center rounded-full border border-hairline bg-card text-ink hover:bg-raised active:scale-95" iconSize={16} />{phoneMenu ? <ChatMoreMenu bot={bot} phoneHeader /> : (advanced || remoteClient) && <ChatHeaderMenu key={`menu:${bot.threadId}`} bot={bot} />}
         </div>
         </div>
       </div>

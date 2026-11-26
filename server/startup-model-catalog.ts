@@ -7,10 +7,10 @@ import { DATA_DIR } from "./config.ts";
 import type { ModelCatalog } from "./contracts.ts";
 import { buildStamp } from "./environment.ts";
 import { afterFirstEngineRead } from "./first-engine-read.ts";
-import { sanitizeModelProviderRoute } from "./model-provider-routes.ts";
+import { sanitizeLoopbackOrigin, sanitizeModelProviderRoute } from "./model-provider-routes.ts";
 
 const SAFE_INSTANCE_ID = /^[\w.-]+$/;
-const CATALOG_SCHEMA_VERSION = 2;
+const CATALOG_SCHEMA_VERSION = 3;
 /** A list this server's build read this recently is used as it is at start; an older one, or one an earlier build read,
  * is read again in the background. A sleeping Cloud wakes many times an hour, and each read can start the engine's CLI. */
 export const STARTUP_MODEL_CACHE_FRESH_MS = 6 * 60 * 60_000;
@@ -57,6 +57,7 @@ function catalogFrom(value: unknown): ModelCatalog | null {
       loaded?: unknown;
       provider?: unknown;
       providerRoute?: unknown;
+      loopbackOrigin?: unknown;
       contextWindow?: unknown;
       effortLevels?: unknown;
       protocolUnsupported?: unknown;
@@ -67,6 +68,7 @@ function catalogFrom(value: unknown): ModelCatalog | null {
     if (typeof option.id !== "string" || typeof option.label !== "string") return null;
     const variants = variantList(option.variants);
     const route = sanitizeModelProviderRoute(option.providerRoute);
+    const loopbackOrigin = sanitizeLoopbackOrigin(option.loopbackOrigin);
     const levels = Array.isArray(option.effortLevels) && option.effortLevels.every(isEffortLevel) ? option.effortLevels : undefined;
     options.push({
       id: option.id,
@@ -75,6 +77,7 @@ function catalogFrom(value: unknown): ModelCatalog | null {
       ...(option.loaded === true ? { loaded: true } : {}),
       ...(typeof option.provider === "string" ? { provider: option.provider } : {}),
       ...(route ? { providerRoute: route } : {}),
+      ...(loopbackOrigin ? { loopbackOrigin } : {}),
       ...(typeof option.contextWindow === "number" && Number.isFinite(option.contextWindow)
         ? { contextWindow: option.contextWindow }
         : {}),

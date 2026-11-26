@@ -140,6 +140,8 @@ function tokenUsage(cached: Cached, now: number, durationMs: number): LocalAgent
     : { coverage: "partial" as const, knownTokens: known > 0 ? known : null };
 }
 
+const MAX_ACTIVE_STEP_MS = 5 * 60 * 1000;
+
 function memberTokenUsage(
   cached: Cached, now: number, durationMs: number, switchedAt: number | null,
   projectTokens: ReturnType<typeof createLocalTokenProjector>,
@@ -152,19 +154,24 @@ function memberTokenUsage(
   const seatContinuous = switchedAt === null || switchedAt <= cutoff;
   const logContinuous = cached.lostAt === null || cached.lostAt <= cutoff;
   let known = 0;
+  let activeMs = 0;
+  let prevSampleAt: number | null = null;
   let invalid = cached.pendingLine;
   let hasUnattributed = false;
   const byModel = new Map<string, { provider: string; model: string; input: number; output: number; cacheRead: number }>();
   for (const sample of cached.tokenSamples) {
     if (sample.at === null || sample.at > now) { invalid = true; continue; }
-    if (sample.at <= cutoff) continue;
-    if (switchedAt !== null && sample.at < switchedAt) continue;
+    if (sample.at <= cutoff) { prevSampleAt = sample.at; continue; }
+    if (switchedAt !== null && sample.at < switchedAt) { prevSampleAt = sample.at; continue; }
     if (sample.gap) invalid = true;
     if (sample.tokens === null || !Number.isSafeInteger(known + sample.tokens)) { invalid = true; continue; }
     known += sample.tokens;
     if (sample.tokens > 0) {
+      const gap = prevSampleAt !== null ? sample.at - prevSampleAt : 0;
+      activeMs += gap > 0 && gap <= MAX_ACTIVE_STEP_MS ? gap : 1000;
       if (!sample.model || !sample.split) {
         hasUnattributed = true;
+        prevSampleAt = sample.at;
         continue;
       }
       const existing = byModel.get(sample.model);
@@ -182,6 +189,7 @@ function memberTokenUsage(
         hasUnattributed = true;
       }
     }
+    prevSampleAt = sample.at;
   }
   const windowCovered = !invalid && continuousFromCutoff && seatContinuous && logContinuous;
   const coverage = windowCovered ? "ready" as const : known > 0 ? "partial" as const : "unavailable" as const;
@@ -191,12 +199,14 @@ function memberTokenUsage(
     return {
       coverage,
       knownTokens: 0,
+      activeSeconds: 0,
       estimatedCost: projectTokens([{ input: 0, output: 0, cacheRead: 0, models: [] }], "ready").estimatedCost,
     };
   }
+  const activeSeconds = activeMs > 0 ? Math.max(1, Math.round(activeMs / 1000)) : null;
   const models = [...byModel.values()];
   if (!models.length) {
-    return { coverage, knownTokens, estimatedCost: { coverage: "unavailable", usd: null } };
+    return { coverage, knownTokens, ...(activeSeconds !== null ? { activeSeconds } : {}), estimatedCost: { coverage: "unavailable", usd: null } };
   }
   const totals = models.reduce(
     (acc, row) => ({ input: acc.input + row.input, output: acc.output + row.output, cacheRead: acc.cacheRead + row.cacheRead }),
@@ -207,6 +217,7 @@ function memberTokenUsage(
   return {
     coverage,
     knownTokens,
+    ...(activeSeconds !== null ? { activeSeconds } : {}),
     estimatedCost: projectTokens([observation], costInputCoverage).estimatedCost,
   };
 }

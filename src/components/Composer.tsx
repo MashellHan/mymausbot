@@ -430,8 +430,8 @@ export function Composer({
       else settle();
     } else if (bot && canSteer) {
       dispatch({ type: "steerQueued", botId: bot.id, threadId, queueId: queueHeadId, onError: settle, onSettled: settle });
-    } else if (bot) {
-      dispatch({ type: "interrupt", botId: bot.id, threadId, onError: settle });
+    } else {
+      settle();
     }
   };
   useEffect(() => setSteering(false), [threadId, queueHeadId]);
@@ -759,8 +759,8 @@ export function Composer({
           items={queuedMessages}
           oneThreadPerBot={state.config?.cloudStarter === true}
           onSeePlans={() => dispatch({ type: "toggleAppSettings", open: true, section: "cloudAccount" })}
-          onSteer={canSteerQueued && (!group || roomSteers) ? steerQueued : undefined}
-          steerInterrupts={!group && !canSteer}
+          onSteer={canSteerQueued && (group ? roomSteers : canSteer) ? steerQueued : undefined}
+          steerInterrupts={false}
           held={Boolean(group) && busy && !roomSteers}
           steerMode={group ? "next" : "all"}
           steering={steering}
@@ -967,7 +967,7 @@ export function Composer({
         {callShown && bot && !group && <CallButton bot={bot} placement="composer" fill={advanced || singleRow ? undefined : slot.fill} ink={slot.ink} inverse={singleRow} />}
         {callShown && group && !advanced && <GroupCallButton group={group} members={members ?? []} placement="composer" fill={slot.fill} ink={slot.ink} />}
         {hasContent && !locked && (
-          <ComposerSendButton compact={simpleDock} waits={busy && !steersNow}
+          <ComposerSendButton compact={simpleDock} waits={false}
             label={unresolvedReply ? t("chat.reply.cancelToSend") : sendNames.label}
             title={unresolvedReply ? t("chat.reply.cancelToSend") : sendNames.title} look={slot.button}
             disabled={attachmentPending || unresolvedReply} onSend={(alternate) => send(followUpFor(alternate))} onChoose={send}

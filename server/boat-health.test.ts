@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createBoatHealth, DEAD_COMPUTER, unansweredStatus } from "./boat-health.ts";
+import { createBoatHealth, DEAD_COMPUTER, stalledProbe, unansweredStatus } from "./boat-health.ts";
 
 const clock = () => {
   let at = 1_000_000;
@@ -37,6 +37,21 @@ describe("cloud computer health", () => {
     time.advance(31_000);
     health.unanswered("bx_a");
     expect(health.notRespondingSince("bx_a")).not.toBeNull();
+  });
+
+  it("does not count a probe that was held far past its timeout here", async () => {
+    const time = clock(), health = createBoatHealth(time.now);
+    health.unanswered("bx_a");
+    time.advance(30_000);
+    health.unanswered("bx_a");
+    time.advance(30_000);
+    health.suspect("bx_a", async () => {
+      time.advance(DEAD_COMPUTER.probeTimeoutMs * 2 + 5_001);
+      return false;
+    });
+    await settle();
+    expect(stalledProbe({ elapsedMs: DEAD_COMPUTER.probeTimeoutMs * 2 + 5_001, timeoutMs: DEAD_COMPUTER.probeTimeoutMs })).toBe(true);
+    expect(health.notRespondingSince("bx_a")).toBeNull();
   });
 
   it("remembers when a person last opened a computer's desktop", () => {

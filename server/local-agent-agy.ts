@@ -14,6 +14,7 @@ import { redactedVisibleText, visibleToolDetail } from "./local-agent-visible-me
 const SESSION_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const RECENT_TAIL_BYTES = 512 * 1024;
+const PREVIEW_BACKSCAN_BYTES = 4 * 1024 * 1024;
 const HISTORY_TAIL_BYTES = 8 * 1024 * 1024;
 const MAX_LINE_BYTES = 1024 * 1024;
 const MAX_SETTINGS_BYTES = 256 * 1024;
@@ -33,9 +34,12 @@ interface AgySettingsInfo {
   byLabel: Map<string, AgyCustomModelEntry>;
 }
 
+const MAX_ACTIVE_STEP_MS = 5 * 60 * 1000;
+
 interface TokenSample {
   at: number;
   tokens: number;
+  durationMs: number;
   observation: DailyTokenObservation;
 }
 
@@ -126,9 +130,26 @@ function readAgySettings(agyHome: string): AgySettingsInfo {
   }
 }
 
+/** Resolves an Agy pane's configured model/effort/contextWindow from `--model` argv or settings.json default, even before a first turn creates a transcript. */
+export function resolveAgyConfiguredRuntime(home: string, configuredModel: string | null): {
+  model: string; effort: string | null; contextWindow: number | null;
+} | null {
+  const settings = readAgySettings(agyHomeDir(home));
+  return resolveConfiguredModel(configuredModel ?? settings.defaultModel, settings);
+}
+
 function resolveBuiltinModel(raw: string): { model: string; effort: string | null; contextWindow: number | null } | null {
   const trimmed = raw.trim();
-  if (!trimmed || trimmed === BYOM_MODEL || !MODEL.test(trimmed)) return null;
+  if (!trimmed || trimmed === BYOM_MODEL) return null;
+  // Handle human-readable Agy settings labels such as "Gemini 4 Neon (High)" or "Gemini 4 Neon (1M / High)".
+  const friendly = /^gemini\s+(4|3\.\d)\s+([a-z0-9-]+)(?:\s*\(([^)]+)\))?$/i.exec(trimmed);
+  if (friendly) {
+    const base = `gemini-${friendly[1]!.toLowerCase()}-${friendly[2]!.toLowerCase()}`;
+    const effort = parseEffortFromLabel(friendly[3]) ?? null;
+    const contextWindow = /^gemini-4-carbon$/i.test(base) ? 1_000_000 : 1_048_576;
+    return { model: base, effort, contextWindow };
+  }
+  if (!MODEL.test(trimmed)) return null;
   const effortMatch = EFFORT_SUFFIX.exec(trimmed);
   const effort = effortMatch ? effortMatch[1]!.toLowerCase() : null;
   const base = effortMatch ? trimmed.slice(0, -effortMatch[0].length) : trimmed;
@@ -160,6 +181,23 @@ export function agyModelFromArgv(argv: readonly unknown[]): string | null {
     if (arg.startsWith("--model=")) {
       const value = arg.slice("--model=".length).trim();
       return value || null;
+    }
+  }
+  return null;
+}
+
+/** Extracts `--conversation <uuid>` from live pane process argv when Herdr has not yet observed an Agy session ID. */
+export function agyConversationFromArgv(argv: readonly unknown[]): string | null {
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index];
+    if (typeof arg !== "string") continue;
+    if ((arg === "--conversation" || arg === "-c") && typeof argv[index + 1] === "string") {
+      const value = (argv[index + 1] as string).trim().toLowerCase();
+      return SESSION_ID.test(value) ? value : null;
+    }
+    if (arg.startsWith("--conversation=")) {
+      const value = arg.slice("--conversation=".length).trim().toLowerCase();
+      return SESSION_ID.test(value) ? value : null;
     }
   }
   return null;
@@ -210,12 +248,16 @@ function agyWindowUsage(samples: readonly TokenSample[], cutoff: number, verifie
     return {
       coverage: "ready",
       knownTokens: 0,
+      activeSeconds: 0,
       estimatedCost: project([{ input: 0, output: 0, cacheRead: 0, models: [] }], "ready").estimatedCost,
     };
   }
+  const activeMs = observed.reduce((sum, row) => sum + row.durationMs, 0);
+  const activeSeconds = activeMs > 0 ? Math.max(1, Math.round(activeMs / 1000)) : null;
   return {
     coverage: "partial",
     knownTokens,
+    ...(activeSeconds !== null ? { activeSeconds } : {}),
     estimatedCost: project(observed.map(({ observation }) => observation), "partial").estimatedCost,
   };
 }
@@ -262,6 +304,8 @@ export async function readAgySession(
     const samples: TokenSample[] = [];
     let sessionStartedAt: number | null = null;
     let lastActivityAt: number | null = null;
+    let prevEventAt: number | null = null;
+    let pendingStepMs = 0;
     let model: string | null = configured?.model ?? null;
     let reasoningEffort: string | null = configured?.effort ?? null;
     let contextWindow: number | null = configured?.contextWindow ?? null;
@@ -301,6 +345,13 @@ export async function readAgySession(
       if (at !== null) {
         if (sessionStartedAt === null || at < sessionStartedAt) sessionStartedAt = at;
         if (lastActivityAt === null || at > lastActivityAt) lastActivityAt = at;
+        if (row.type === "USER_INPUT") {
+          pendingStepMs = 0;
+        } else if (prevEventAt !== null) {
+          const gap = at - prevEventAt;
+          if (gap > 0 && gap <= MAX_ACTIVE_STEP_MS) pendingStepMs += gap;
+        }
+        prevEventAt = at;
       }
 
       const type = row.type;
@@ -335,7 +386,11 @@ export async function readAgySession(
           const total = input + output + cacheRead;
           if (at !== null && at <= now && at > now - 7 * DAY_MS && Number.isSafeInteger(total) && total > 0) {
             const models = model ? [{ provider: "agy", model, input, output, cacheRead }] : [];
-            samples.push({ at, tokens: total, observation: { input, output, cacheRead, models } });
+            const durationMs = pendingStepMs > 0 ? pendingStepMs : 1000;
+            pendingStepMs = 0;
+            samples.push({ at, tokens: total, durationMs, observation: { input, output, cacheRead, models } });
+          } else {
+            pendingStepMs = 0;
           }
         }
         if (Array.isArray(row.tool_calls)) {
@@ -362,6 +417,46 @@ export async function readAgySession(
             preview = redactedVisibleText(row.content, 400).text;
             pushEvent({ id: `e${offset.toString(36)}`, at, kind: "assistant", tool: null, text: visible.text });
           }
+        }
+      }
+    }
+
+    // Long tool-heavy Agy runs (many GENERIC tool outputs) can push the last assistant text or USER_INPUT
+    // past RECENT_TAIL_BYTES; scan a bounded earlier window once so cards retain the latest visible text.
+    if (!history && start > 0 && (preview === null || taskHint === null)) {
+      const backStart = Math.max(0, start - PREVIEW_BACKSCAN_BYTES);
+      const backEnd = Math.min(size, start + first);
+      const backLen = backEnd - backStart;
+      if (backLen > 0) {
+        const backBytes = Buffer.alloc(backLen);
+        const { bytesRead: backRead } = await handle.read(backBytes, 0, backLen, backStart);
+        if (backRead === backLen) {
+          let cursor = backStart === 0 ? 0 : backBytes.indexOf(10) + 1;
+          let fallbackPreview: string | null = null;
+          let fallbackHint: string | null = null;
+          while ((backStart === 0 || cursor > 0) && cursor < backRead) {
+            const end = backBytes.indexOf(10, cursor);
+            if (end < 0) break;
+            const len = end - cursor;
+            const sliceStart = cursor;
+            cursor = end + 1;
+            if (len <= 0 || len > MAX_LINE_BYTES) continue;
+            const line = backBytes.toString("utf8", sliceStart, end);
+            const hasPlanner = preview === null && line.includes("\"PLANNER_RESPONSE\"");
+            const hasUser = taskHint === null && line.includes("\"USER_INPUT\"");
+            if (!hasPlanner && !hasUser) continue;
+            let row: Record<string, unknown>;
+            try { row = record(JSON.parse(line)); } catch { continue; }
+            if (hasPlanner && row.type === "PLANNER_RESPONSE" && typeof row.content === "string" && row.content.trim()) {
+              const text = redactedVisibleText(row.content, 400).text;
+              if (text) fallbackPreview = text;
+            } else if (hasUser && row.type === "USER_INPUT" && typeof row.content === "string") {
+              const hint = dashboardText(stripUserEnvelope(row.content), 400);
+              if (hint) fallbackHint = hint;
+            }
+          }
+          if (preview === null && fallbackPreview !== null) preview = fallbackPreview;
+          if (taskHint === null && fallbackHint !== null) taskHint = fallbackHint;
         }
       }
     }

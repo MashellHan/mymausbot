@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,6 +30,8 @@ import {
   surveyOpenCodeEfforts,
 } from "./opencode-go.ts";
 import { ATTACHMENTS_DIR } from "../../attachments.ts";
+import { configuredProviderRoute } from "../../model-provider-routes.ts";
+import { applyOpenCodeContextWindow, enrichOpenCodeCatalog, parseJsonc } from "./opencode-config.ts";
 import { enginesBinDir, serverInstallFor } from "../../engine-install.ts";
 import { registerFallbackPathDir, registerPathDir, resetPathCacheForTests } from "../../env-path.ts";
 import { standaloneAssetFor, standaloneEngineDir } from "../../engine-standalone.ts";
@@ -1845,5 +1847,198 @@ describe.skipIf(process.platform === "win32")("which OpenCode runs", () => {
     const env = await runTurn(scratch, log, false);
     expect(readFileSync(log, "utf8").trim().split("\n")).toEqual(["standalone"]);
     expect(env.OPENCODE_DISABLE_AUTOUPDATE).toBe("1");
+  });
+});
+
+describe("OpenCode configured providers and context window", () => {
+  let scratch = "";
+  afterEach(async () => {
+    resetOpenCodeModelCache();
+    if (scratch) await removeTempDir(scratch);
+    scratch = "";
+  });
+
+  it("enriches models from OpenCode v2 and v1 JSONC configs with routes, contextWindow, and fallback variants", async () => {
+    scratch = mkdtempSync(join(tmpdir(), "omb-opencode-cfg-"));
+    const configDir = join(scratch, ".config", "opencode");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, "opencode.jsonc"), `{
+      // OpenCode v1 schema
+      "provider": {
+        "legacy": {
+          "name": "Legacy Proxy",
+          "options": { "baseURL": "http://127.0.0.1:4555/v1" },
+          "models": {
+            "m1": {
+              "limit": { "context": 131072.8 },
+              "capabilities": { "reasoning": { "effort": ["low", "high"] } },
+            },
+          },
+        },
+      },
+      /* OpenCode v2 schema */
+      "providers": {
+        "raven": {
+          "name": "Raven (Local)",
+          "settings": { "baseURL": "http://127.0.0.1:4040/v1" },
+          "models": {
+            "gemini-4": {
+              "limit": { "context": 1000000 },
+              "capabilities": { "reasoning": { "effort": ["low", "medium", "high", "xhigh"] } },
+            },
+          },
+        },
+      },
+    }`);
+    const env = { ...process.env, HOME: scratch, XDG_CONFIG_HOME: join(scratch, ".config"), FAKE_ACP_MODELS_LIST: "v2",
+      FAKE_ACP_MODELS: "raven/gemini-4,legacy/m1,opencode/big-pickle" };
+    const found = await discoverOpenCodeModels(env, FAKE_CLI);
+    const byId = new Map(found.options.map((option) => [option.id, option]));
+
+    const raven = byId.get("raven/gemini-4");
+    expect(raven?.providerRoute).toEqual(configuredProviderRoute("raven", "Raven (Local)", "http://127.0.0.1:4040/v1"));
+    expect(raven?.providerRoute?.connectionGroup).toMatch(/^loopback:[0-9a-f]{16}$/);
+    expect(raven?.contextWindow).toBe(1_000_000);
+    expect(raven?.variants?.map((variant) => variant.id)).toEqual(["low", "medium", "high", "xhigh"]);
+
+    const legacy = byId.get("legacy/m1");
+    expect(legacy?.providerRoute).toEqual(configuredProviderRoute("legacy", "Legacy Proxy", "http://127.0.0.1:4555/v1"));
+    expect(legacy?.contextWindow).toBe(131_072);
+    expect(legacy?.variants?.map((variant) => variant.id)).toEqual(["low", "high"]);
+
+    expect(byId.get("opencode/big-pickle")?.providerRoute).toBeUndefined();
+  });
+
+  it("respects OpenCode config precedence and preserves existing catalog metadata", () => {
+    scratch = mkdtempSync(join(tmpdir(), "omb-opencode-prec-"));
+    const xdg = join(scratch, "xdg");
+    const extraDir = join(scratch, "extra-dir");
+    mkdirSync(join(xdg, "opencode"), { recursive: true });
+    mkdirSync(join(scratch, ".opencode"), { recursive: true });
+    mkdirSync(extraDir, { recursive: true });
+    writeFileSync(join(xdg, "opencode", "opencode.json"), JSON.stringify({
+      providers: { raven: { name: "Base", settings: { baseURL: "http://127.0.0.1:4040/v1" }, models: { m: { limit: { context: 64_000 } } } } },
+    }));
+    writeFileSync(join(extraDir, "opencode.jsonc"), `{
+      "providers": { "raven": { "name": "Override", "models": { "m": { "limit": { "context": 256000 } } } } }
+    }`);
+    const baseCatalog: ModelCatalog = {
+      default: "raven/m",
+      options: [
+        { id: "raven/m", label: "Raven · M", variants: [{ id: "existing", label: "Existing" }] },
+      ],
+    };
+    const enriched = enrichOpenCodeCatalog(baseCatalog, {
+      HOME: scratch,
+      XDG_CONFIG_HOME: xdg,
+      OPENCODE_CONFIG_DIR: extraDir,
+      OPENCODE_CONFIG_CONTENT: JSON.stringify({ providers: { raven: { models: { m: { limit: { context: 512_000 }, capabilities: { reasoning: { effort: ["low"] } } } } } } }),
+    });
+    expect(enriched.options[0]?.providerRoute).toEqual(configuredProviderRoute("raven", "Override", "http://127.0.0.1:4040/v1"));
+    expect(enriched.options[0]?.contextWindow).toBe(512_000);
+    expect(enriched.options[0]?.variants).toEqual([{ id: "existing", label: "Existing" }]);
+  });
+
+  it("advertises configurableContextWindow, merges limit.context into OPENCODE_CONFIG_CONTENT without clobbering, and rejects invalid values", async () => {
+    const env: Record<string, string | undefined> = {
+      OPENCODE_CONFIG_CONTENT: JSON.stringify({
+        permission: { bash: "allow" },
+        provider: {
+          other: { models: { keep: { name: "Keep" } } },
+          raven: { name: "Raven", options: { baseURL: "http://127.0.0.1:4040/v1" }, models: { sol: { limit: { output: 16_000 } }, untouched: {} } },
+        },
+        providers: {
+          raven: { settings: { baseURL: "http://127.0.0.1:4040/v1" }, models: { sol: { limit: { output: 16_000 } } } },
+        },
+      }),
+    };
+    applyOpenCodeContextWindow(env, "raven/sol", 100);
+    applyOpenCodeContextWindow(env, "raven/sol", 16_384.5);
+    applyOpenCodeContextWindow(env, "raven/sol", 2_000_000);
+    expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT!).provider.raven.models.sol.limit.context).toBeUndefined();
+
+    applyOpenCodeContextWindow(env, "raven/sol", 262_144);
+    expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT!)).toEqual({
+      permission: { bash: "allow" },
+      provider: {
+        other: { models: { keep: { name: "Keep" } } },
+        raven: {
+          name: "Raven",
+          options: { baseURL: "http://127.0.0.1:4040/v1" },
+          models: { sol: { limit: { output: 16_000, context: 262_144 } }, untouched: {} },
+        },
+      },
+      providers: {
+        raven: {
+          settings: { baseURL: "http://127.0.0.1:4040/v1" },
+          models: { sol: { limit: { output: 16_000, context: 262_144 } } },
+        },
+      },
+    });
+
+    scratch = mkdtempSync(join(tmpdir(), "omb-opencode-ctx-"));
+    const capturedConfig = join(scratch, "captured-config.txt");
+    const wrapper = join(scratch, "opencode-wrapper");
+    writeFileSync(wrapper, `#!/bin/sh\nprintf '%s' "$OPENCODE_CONFIG_CONTENT" > ${JSON.stringify(capturedConfig)}\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(FAKE_CLI)} "$@"\n`);
+    chmodSync(wrapper, 0o755);
+
+    const driver = createOpenCodeDriver(async () => catalog("raven/sol"));
+    const instance = await driver.create({
+      instanceId: "opencode-ctx-test",
+      displayName: "OpenCode",
+      enabled: true,
+      config: { cli: wrapper, fullAuto: true, workspace: scratch },
+      environment: {
+        HOME: scratch,
+        XDG_CONFIG_HOME: scratch,
+        XDG_DATA_HOME: scratch,
+        FAKE_ACP_MODELS: "raven/sol",
+        OPENCODE_CONFIG_CONTENT: JSON.stringify({ provider: { other: { models: { stay: {} } } } }),
+      },
+    });
+    const recorder = recordEvents(instance.adapter);
+    try {
+      expect(instance.adapter.capabilities.configurableContextWindow).toBe(true);
+      await expect(instance.adapter.sendTurn({
+        threadId: "t-invalid",
+        text: "hi",
+        model: "raven/sol",
+        contextWindowTokens: 100,
+      })).rejects.toThrow(/context window/i);
+      await expect(instance.adapter.sendTurn({
+        threadId: "t-invalid-float",
+        text: "hi",
+        model: "raven/sol",
+        contextWindowTokens: 16_384.5,
+      })).rejects.toThrow(/context window/i);
+
+      await instance.adapter.sendTurn({
+        threadId: "t-valid",
+        text: "hi",
+        model: "raven/sol",
+        contextWindowTokens: 131_072,
+      });
+      expect(await recorder.until((event) => event.type === "turn.completed")).toMatchObject({ ok: true });
+      const written = JSON.parse(readFileSync(capturedConfig, "utf8")) as Record<string, any>;
+      expect(written.provider.other.models.stay).toEqual({});
+      expect(written.provider.raven.models.sol.limit.context).toBe(131_072);
+      expect(written.providers.raven.models.sol.limit.context).toBe(131_072);
+    } finally {
+      recorder.stop();
+      await instance.dispose();
+    }
+  });
+
+  it("preserves comma-brace sequences inside quoted JSONC strings while stripping trailing commas outside strings", () => {
+    expect(parseJsonc(`{
+      // comment
+      "note": "keep, } and, ] intact",
+      "escaped": "quote\\", }",
+      "items": ["a, ]", "b", /* trailing */ ],
+    }`)).toEqual({
+      note: "keep, } and, ] intact",
+      escaped: 'quote", }',
+      items: ["a, ]", "b"],
+    });
   });
 });

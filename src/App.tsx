@@ -36,8 +36,12 @@ import { useInterfaceMode } from "@/lib/interface-mode";
 import { RawPresentation } from "@/lib/raw-presentation";
 import { useRoomPanelShown } from "@/lib/room-panel";
 import { WorkspaceBackupRecovery } from "@/components/WorkspaceBackupSettings";
-import { NotificationRail, NotificationsPanel } from "@/components/NotificationsPanel";
+import { NotificationBell, NotificationRail, NotificationsPanel } from "@/components/NotificationsPanel";
 import { useNotificationFeed } from "@/lib/notification-preferences";
+import { PwaNotificationBanner } from "@/components/PwaNotificationBanner";
+import { PwaLiveActivityBar } from "@/components/PwaLiveActivityBar";
+import { installWebPushSwSync, syncAppBadge, syncPushSubscriptionOnForeground } from "@/lib/web-push";
+import { PHONE_TOP_BUTTON } from "@/components/SidebarSimpleTop";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { AppNotices } from "@/components/AppNotices";
 import { AppGrantNotice } from "@/components/AppGrantPrompt";
@@ -73,14 +77,15 @@ import { cloudFirstRun, cloudWelcomeVisible, useCloudWelcome } from "@/lib/cloud
 import { engineReady } from "@/components/EngineLibrary";
 import { CommandPalette } from "@/components/CommandPalette";
 import { t } from "@/lib/i18n";
-import { botCycleStep, shouldOpenKeyboardShortcuts } from "@/lib/keyboard-shortcuts";
+import { botCycleStep, isNewThreadShortcut, shouldOpenKeyboardShortcuts } from "@/lib/keyboard-shortcuts";
 import { effectiveLanguage, useLanguageChoice, usePageLanguage } from "@/lib/language-preference";
 import { botUnreadCount, showBrowserUnread } from "@/lib/bot-unread";
 import { phonePairingSettingsAction, takePhonePairingRequest } from "@/lib/phone-pairing"; import { useConnectLink } from "@/lib/use-connect-link";
 import { isSettingsPage } from "@/components/settings/settings-index";
 import { useBotListDrawer } from "@/hooks/use-bot-list-drawer";
 import { useRememberedSidePanel } from "@/hooks/use-remembered-side-panel";
-import { useDesktopNotificationOpens, useExternalChatLinks } from "@/hooks/use-external-chat-links"; import { useNewBotFromOtherPlace } from "@/lib/places-together";
+import { useSwNotificationOpens, useDesktopNotificationOpens, useExternalChatLinks } from "@/hooks/use-external-chat-links";
+import { useNewBotFromOtherPlace } from "@/lib/places-together";
 import { useUsageSnapshot } from "@/hooks/use-usage-snapshot";
 import { useReadShownChatOnFocus } from "@/hooks/use-read-shown-chat";
 import { usePresence } from "@/hooks/use-presence";
@@ -172,12 +177,14 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   useFilePreviewScope(bot?.id, bot?.threadId, state.computerOpen);
   const { open: drawerOpen, show: openDrawer, hide: hideDrawer, noteAction: noteDrawerAction } = useBotListDrawer({ selectedId: state.selectedId, botThread: bot?.threadId, groupThread: group?.threadId,
     view: state.activeView, pluginsOpen: state.pluginsOpen, settingsOpen: state.settingsOpen });
+  useSwNotificationOpens(state, dispatch, hideDrawer);
   const closeDrawer = useCallback(() => { hideDrawer(); menuButtonRef.current?.focus(); }, [hideDrawer]);
-  const notificationFeed = useNotificationFeed() && !remoteClient;
+  const notificationFeedPref = useNotificationFeed();
+  const notificationFeed = remotePwa || (notificationFeedPref && !remoteClient);
   const interfaceMode = useInterfaceMode();
   const advanced = interfaceMode === "advanced";
   const roomPanelOpen = useRoomPanelShown({ group, state, simple: !advanced && !remoteClient });
-  const sidePanelOpen = (Boolean(bot) && (state.settingsOpen || (!remotePwa && state.computerOpen) || (!remoteClient && (state.inspectorOpen || state.activityOpen)))) || (Boolean(group) && !remoteClient && state.computerOpen) || Boolean(state.forkPanel) || roomPanelOpen || (notificationFeed && state.notificationsOpen) || inboxShown;
+  const sidePanelOpen = (Boolean(bot) && (state.settingsOpen || (!remotePwa && state.computerOpen) || (!remoteClient && state.inspectorOpen) || ((remotePwa || !remoteClient) && state.activityOpen))) || (Boolean(group) && !remoteClient && state.computerOpen) || Boolean(state.forkPanel) || roomPanelOpen || (notificationFeed && state.notificationsOpen) || inboxShown;
   const collapseSidebar = sidePanelOpen && !sidebarAndPanelFit;
   const calendarFocus = state.activeView === "routines" && state.routinesFocus.view === "calendar";
   const notificationTray = notificationFeed && !calendarFocus;
@@ -223,6 +230,17 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
         } else {
           dispatch({ type: "newBot" });
         }
+      } else if (isNewThreadShortcut(e)) {
+        const selected = state.bots.find((bot) => bot.id === state.selectedId && !bot.hidden);
+        const supported = state.activeView === "chat"
+          && !group && !chiefStep && !firstRun && !(teamWelcomeOn && team)
+          && !(!remoteClient && localVmWorkspaceBotId)
+          && !state.appSettingsOpen && !state.pluginsOpen && !state.cloudAdd && !paletteOpen
+          && selected && selected.yourAccess !== "view";
+        if (supported) {
+          e.preventDefault();
+          if (!e.repeat) dispatch({ type: "newTask", botId: selected.id });
+        }
       } else if (/^[1-9]$/.test(e.key)) {
         const target = bots[Number(e.key) - 1];
         if (target) {
@@ -239,13 +257,31 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [state.bots, state.selectedId, state.shortcutsOpen, showThreads, dispatch]);
+  }, [state.bots, state.selectedId, state.shortcutsOpen, state.activeView, state.appSettingsOpen, state.pluginsOpen, state.cloudAdd, group, chiefStep, firstRun, teamWelcomeOn, team, remoteClient, localVmWorkspaceBotId, paletteOpen, showThreads, dispatch]);
 
   useReadShownChatOnFocus();
   useEffect(() => {
     if (window.ogb?.setUnreadCount) window.ogb.setUnreadCount(unreadCount);
-    else showBrowserUnread(unreadCount);
-  }, [unreadCount]);
+    else {
+      showBrowserUnread(unreadCount);
+      if (remotePwa) syncAppBadge(unreadCount);
+    }
+  }, [unreadCount, remotePwa]);
+
+  useEffect(() => {
+    if (!remotePwa) return;
+    const stopSwSync = installWebPushSwSync();
+    const resync = () => {
+      if (document.visibilityState === "visible") void syncPushSubscriptionOnForeground();
+    };
+    window.addEventListener("focus", resync);
+    document.addEventListener("visibilitychange", resync);
+    return () => {
+      stopSwSync();
+      window.removeEventListener("focus", resync);
+      document.removeEventListener("visibilitychange", resync);
+    };
+  }, [remotePwa]);
 
   useEffect(() => {
     if (!state.connected || remotePwa) return;
@@ -341,6 +377,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
     <UpdateBanner sidebarIndicator={framed || (!calendarFocus && (sidebarInline || drawerOpen))} />
     <CloudAsleepStrip />
     <LiveConnectionStrip connected={state.connected} hydrated={state.hydrated === true} cachedHydrated={state.cachedHydrated === true} />
+    {remotePwa && <PwaLiveActivityBar onJump={hideDrawer} />}
     <CloudSendStrip cloudHome={state.config?.cloudHome === true} />
     <HomeLine />
     <AppNotices quiet={paletteOpen || drawerOpen || Boolean(localVmWorkspaceBotId)} viewer={viewer} />
@@ -480,10 +517,27 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
         <RoomPanel key={`room:${group.id}`} group={group} overlay={notificationFeed && state.notificationsOpen && !twoSidePanelsFit} />
       )}
       {!remoteClient && !state.forkPanel && state.inspectorOpen && bot && <InspectorPanel key={bot.threadId} bot={bot} />}
-      {!remoteClient && state.activityOpen && bot && <ActivityPanel key={`activity:${bot.id}`} bot={bot} />}
+      {(remotePwa || !remoteClient) && state.activityOpen && bot && <ActivityPanel key={`activity:${bot.id}`} bot={bot} />}
       {inboxShown && <InboxPanel />}
       {notificationTray && state.notificationsOpen && <NotificationsPanel />}
       {notificationTray && !framed && <NotificationRail />}
+      {remotePwa && !calendarFocus && state.activeView !== "chat" && (
+        <div className="hidden max-md:block absolute right-3 top-3 z-30">
+          <NotificationBell
+            bar={PHONE_TOP_BUTTON}
+            iconSize={18}
+            badgeClassName="-right-1 -top-1 min-w-4 h-4 px-1 text-[10px] font-semibold tabular-nums ring-2 ring-app"
+          />
+        </div>
+      )}
+      {remotePwa && (
+        <PwaNotificationBanner
+          activeView={state.activeView}
+          activeThreadId={bot?.threadId ?? group?.threadId ?? null}
+          drawerOpen={drawerOpen}
+          onJump={hideDrawer}
+        />
+      )}
       </div>
       </div>
       {state.appSettingsOpen && <SettingsModal />}
