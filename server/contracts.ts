@@ -337,6 +337,17 @@ export interface ProviderAdapter {
   enginePid?(threadId: ThreadId): number | undefined;
   stopAll(): Promise<void>;
   onEvent(listener: RuntimeEventListener): () => void;
+  /** Starting a thread's engine before its first message, so that message finds it running. `start` launches the process
+   * exactly as a turn with this input would and sends it nothing; it resolves true once the process is launched. The next
+   * sendTurn on the thread takes that process when its launch would have been the same and it has started up (`ready`),
+   * and replaces it otherwise. `held`: one is launching or waiting. `drop` stops one that no turn took; a taken one is
+   * the turn's own. */
+  prestart?: {
+    start(input: SendTurnInput): Promise<boolean>;
+    held(threadId: ThreadId): boolean;
+    ready(threadId: ThreadId): boolean;
+    drop(threadId: ThreadId): void;
+  };
   /** `ping` sends one tool-less forked request without touching the thread's session; `hold` keeps the live session open until
    * `until` (epoch ms; null releases) and says whether one exists. `compact` summarizes the conversation with the engine's own
    * compaction on a fork of its session (`session`: the one it must still be on), so the next turn starts small; on success the

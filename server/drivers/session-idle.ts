@@ -151,10 +151,24 @@ export function warmEngineKeys(): string[] {
   return [...warmEngines.keys()];
 }
 
+export const armedIdleCount = (): number => armed.size;
+
 /** A person wrote in, opened or read the thread this recently: it is the conversation in front of them. */
 const WATCHED_MS = 30 * 60_000;
 /** A thread nobody has in front of them (a teammate's delegated work, a routine) keeps its engine this long. */
 export const UNWATCHED_IDLE_MS = 30_000;
+
+/** An engine started before any message (a person just made a conversation) waits this long for the first one: the time
+ * an engine nobody is looking at is already kept, and longer than writing a first line usually takes. */
+export const PRESTART_IDLE_MS = UNWATCHED_IDLE_MS;
+/** Each waiting engine holds 250 to 450 MB, so only this many wait at once. */
+export const PRESTART_MOST = 2;
+
+/** Engines start ahead of a first message only where memory is not rationed: never on a small box, and never where turns wait
+ * for room (a Cloud home, a self-hosted server), whose admission counts the engines a turn starts. */
+export function prestartAllowed(box: Pick<BoxMemory, "bytes"> = boxMemory(), memory: Pick<EngineMemory, "enabled"> = engineMemory): boolean {
+  return !memory.enabled && box.bytes > SMALL_BOX_BYTES;
+}
 
 /**
  * How long one thread's idle engine stays up after a turn. Where turns wait for room (a Cloud home, a self-hosted Linux
