@@ -259,3 +259,56 @@ describe("notification titles", () => {
     }
   });
 });
+
+describe("iOS standalone PWA fallback", () => {
+  it("falls back to ServiceWorkerRegistration.showNotification when in standalone PWA mode", async () => {
+    const swShow = vi.fn(async () => {});
+    vi.stubGlobal("Notification", class {
+      static permission = "granted" as NotificationPermission;
+      constructor() {
+        throw new TypeError("Illegal constructor");
+      }
+    });
+    vi.stubGlobal("document", { hasFocus: () => false });
+    vi.stubGlobal("window", { focus: vi.fn(), matchMedia: () => ({ matches: true }) });
+    vi.stubGlobal("navigator", {
+      standalone: true,
+      serviceWorker: {
+        getRegistration: vi.fn(async () => ({ showNotification: swShow })),
+      },
+    });
+
+    showNotification({ ...frame, groupId: "room-42" }, vi.fn(), "/api/attachments/face.png");
+    await vi.waitFor(() => expect(swShow).toHaveBeenCalledOnce());
+    expect(swShow).toHaveBeenCalledWith(frame.title, expect.objectContaining({
+      body: frame.body,
+      tag: `openmausbot:${frame.botId}`,
+      data: expect.objectContaining({
+        botId: frame.botId,
+        threadId: frame.threadId,
+        groupId: "room-42",
+        kind: frame.kind,
+      }),
+    }));
+  });
+
+  it("works in standalone PWA mode even when global Notification constructor throws in browser fallback", async () => {
+    const swShow = vi.fn(async () => {});
+    vi.stubGlobal("Notification", class {
+      static permission = "granted" as NotificationPermission;
+      constructor() {
+        throw new TypeError("Notification constructor not allowed");
+      }
+    });
+    vi.stubGlobal("document", { hasFocus: () => false });
+    vi.stubGlobal("window", { focus: vi.fn() });
+    vi.stubGlobal("navigator", {
+      serviceWorker: {
+        getRegistration: vi.fn(async () => ({ showNotification: swShow })),
+      },
+    });
+
+    showNotification(frame, vi.fn());
+    await vi.waitFor(() => expect(swShow).toHaveBeenCalledOnce());
+  });
+});

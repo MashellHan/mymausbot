@@ -268,7 +268,7 @@ describe("sharing the conversation on screen, on a team", () => {
 });
 
 describe("ChatMoreMenu in remote PWA mode", () => {
-  it("hides model, computer, activity, and inspector while keeping profile, start-fresh, and export", async () => {
+  it("hides model, computer, and inspector while keeping profile, activity, start-fresh, and export", async () => {
     const { setActivePwaAuth } = await import("@/lib/pwa-transport");
     setActivePwaAuth({
       ownerKey: "https://relay.mxhan.com::env::s1",
@@ -288,9 +288,9 @@ describe("ChatMoreMenu in remote PWA mode", () => {
       expect(itemKeys).toContain("start-fresh");
       expect(itemKeys).toContain("copy");
       expect(itemKeys).toContain("download");
+      expect(itemKeys).toContain("activity");
       expect(itemKeys).not.toContain("model");
       expect(itemKeys).not.toContain("computer");
-      expect(itemKeys).not.toContain("activity");
       expect(itemKeys).not.toContain("inspector");
     } finally {
       setActivePwaAuth(null);
