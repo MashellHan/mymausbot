@@ -1,5 +1,6 @@
 // What a one-to-one send carries into acceptDirectSend (server/index.ts), and the receipt it answers with.
 import type { FollowUp } from "../shared/follow-up.ts";
+import type { ProgressiveIntakeMeta } from "../shared/progressive-intake.ts";
 import type { ResolvedSender, SteerQueueReason } from "../shared/wire.ts";
 import type { DataContext } from "./data-context.ts";
 import type { Message } from "./store.ts";
@@ -28,7 +29,7 @@ export interface DirectSendInput {
 
 export type DirectSendReceipt =
   | { ok: true; threadId: string; message: Message; steered?: true }
-  | { ok: true; queued: true; queueId: string; threadId: string; reason?: SteerQueueReason; why?: string };
+  | { ok: true; queued: true; queueId: string; threadId: string; reason?: SteerQueueReason; why?: string; message?: Message; intake?: ProgressiveIntakeMeta };
 
 export class DirectSendRefused extends Error {
   readonly status: number;

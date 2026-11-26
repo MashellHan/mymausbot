@@ -11,6 +11,7 @@ import type { WidgetAction } from "../../shared/widget.ts";
 import { parseFollowUp } from "../../shared/follow-up.ts";
 import type { ResolvedSender } from "../../shared/wire.ts";
 import { admit } from "../admission.ts";
+import { transitionProgressiveIntakeState } from "../../shared/progressive-intake.ts";
 import { dismissQuestionCard } from "../card-dismissal.ts";
 import { AppMessageRate, appContextBlock, prepareAppMessage } from "../chat-apps.ts";
 import { prepareWidgetPress, reopenCancelledPress } from "../chat-widgets.ts";
@@ -30,7 +31,7 @@ import type { RequestAuth } from "../request-auth.ts";
 import type { RoutineManager } from "../routines.ts";
 import { acceptedSendMatch, parseSendId } from "../send-idempotency.ts";
 import type { DirectSendInput, DirectSendReceipt } from "../direct-send.ts";
-import { cancelSteeredMessage, holdSteeredQueue, queuedSteerSender, queuedSteeredMessage, restoreHeldSteeredQueue, settleHeldSteeredQueue } from "../steer-queue.ts";
+import { cancelSteeredMessage, holdSteeredQueue, queuedSteerRowId, queuedSteerSender, queuedSteeredMessage, restoreHeldSteeredQueue, settleHeldSteeredQueue } from "../steer-queue.ts";
 import { routeRunOwners, type Actor, type RouteRunOwners } from "../host/run-owner.ts";
 import type { BotRecord, GroupRecord, Message, Store } from "../store.ts";
 import { extractSteerImages } from "../turn-images.ts";
@@ -147,6 +148,8 @@ export interface BotMessageRouteDeps {
   relayRefusal?(bot: BotRecord, email: string | undefined): string | null;
   /** The answer to someone's ask to chat with a team bot; null for any other card. */
   resolveAccessRequest?(threadId: string, requestId: string, behavior: string, message: unknown): { status: number; body: unknown } | null;
+  /** Clears progressive intake redirect metadata when queued items are cancelled or settled outside normal drain. */
+  onQueueSettled?(threadId: string, queueIds: readonly string[]): void;
 }
 
 /** External interfaces (the Slack worker) opt in. `onBehalfOf`, advertised by /api/health as
@@ -371,10 +374,22 @@ export function createBotMessageRoutes(deps: BotMessageRouteDeps): RouteHandler 
       const waiting = queuedSteerSender(bot.id, bot.threadId, queueId);
       const notYours = waiting && owners.removeRefusal(auth, bot.threadId, waiting.sender);
       if (notYours) return json(res, 403, { error: notYours, code: "queued_not_yours" });
+      const persistedRowId = queuedSteerRowId(bot.id, bot.threadId, queueId);
       if (!cancelSteeredMessage(bot.id, queueId, bot.threadId)) {
         return json(res, 404, { error: "no such queued message" });
       }
+      if (persistedRowId) {
+        const existing = store.messagesFor(bot.threadId).find((message) => message.id === persistedRowId);
+        if (existing) {
+          const intake = transitionProgressiveIntakeState(existing.intake, "superseded");
+          store.patchMessage(bot.threadId, existing.id, {
+            requestCancelled: true,
+            ...(intake ? { intake } : {}),
+          });
+        }
+      }
       reopenCancelledPress(store, bot.threadId, queueId);
+      deps.onQueueSettled?.(bot.threadId, [queueId]);
       return json(res, 200, { ok: true });
     }
 
@@ -424,30 +439,44 @@ export function createBotMessageRoutes(deps: BotMessageRouteDeps): RouteHandler 
         store.taskByThread(bot.id, bot.threadId)
       ) {
         if (auth.kind === "session" || DESKTOP_MANAGED) clearUnattended(bot.threadId);
-        const messages = held.items.map((item) => store.appendMessage(bot.threadId, {
-          role: "user",
-          kind: "text",
-          text: item.text,
-          replyToId: item.replyToId,
-          sendId: item.sendId,
-          ...(item.dataContext ? { dataContext: item.dataContext } : {}),
-          queueId: item.messageId,
-          peerAsk: item.peerAsk,
-          steered: true,
-          sender: item.sender,
-          ...spokenLineFields(item.via, item.callId),
-          ...(item.fromApp ? { fromApp: item.fromApp } : {}),
-        }));
+        const now = Date.now();
+        const messages = held.items.map((item) => {
+          const recorded = item.rowId ? store.messagesFor(bot.threadId).find((message) => message.id === item.rowId) : undefined;
+          if (recorded) {
+            const intake = transitionProgressiveIntakeState(recorded.intake, "processing", now, { mode: "live-steer" });
+            return store.patchMessage(bot.threadId, recorded.id, {
+              steered: true,
+              queueId: item.messageId,
+              ...(intake ? { intake } : {}),
+            }) ?? recorded;
+          }
+          return store.appendMessage(bot.threadId, {
+            role: "user",
+            kind: "text",
+            text: item.text,
+            replyToId: item.replyToId,
+            sendId: item.sendId,
+            ...(item.dataContext ? { dataContext: item.dataContext } : {}),
+            queueId: item.messageId,
+            peerAsk: item.peerAsk,
+            steered: true,
+            sender: item.sender,
+            ...spokenLineFields(item.via, item.callId),
+            ...(item.fromApp ? { fromApp: item.fromApp } : {}),
+          });
+        });
         const asked = messages.filter((_, index) => !held.items[index]?.unattended && !held.items[index]?.peerAsk).at(-1);
         if (asked) store.setTaskAskedAt(bot.id, bot.threadId, asked.at);
         for (const message of messages) handoffs.steered(bot.threadId, steerTarget, instance?.instanceId, message.id);
         const queueIds = held.items.map((item) => item.messageId);
         settleHeldSteeredQueue(held);
+        deps.onQueueSettled?.(bot.threadId, queueIds);
         return json(res, 200, { ok: true, steered: true, threadId: bot.threadId, messages, queueIds });
       }
       if (steered === "indeterminate") {
         // No destination left: settle, so a restart cannot replay words a dead turn may have run.
         settleHeldSteeredQueue(held);
+        deps.onQueueSettled?.(bot.threadId, held.items.map((item) => item.messageId));
         if (!store.taskByThread(bot.id, bot.threadId)) {
           throw Object.assign(new Error("the target task no longer exists"), { status: 409 });
         }
