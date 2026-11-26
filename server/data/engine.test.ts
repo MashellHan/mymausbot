@@ -688,6 +688,23 @@ describe("lifecycle", () => {
     expect((await failure(again.run("SELECT * FROM t", bot))).error.code).toBe("table_not_found");
   });
 
+  it("keeps reporting held on release() even after a strict close left the store unsafe", async () => {
+    const e = createDataEngine({ dataDir: root, botFolder: (botId) => join(root, "bots", botId), catalog: null });
+    const db = await e.forBot("unsafe-release");
+    await db.run("CREATE TABLE t AS SELECT 1", bot);
+    const open = await (db as unknown as { state: Promise<{ instance: { closeSync(): void }; lanes: Record<string, { connection: { run: (sql: string) => Promise<unknown>; closeSync(): void } }> }> }).state;
+    const realRun = open.lanes.bot.connection.run.bind(open.lanes.bot.connection);
+    open.lanes.bot.connection.run = async () => { throw new Error("checkpoint denied"); };
+    try {
+      await expect(db.close(true)).rejects.toThrow(/checkpoint denied/);
+      await expect(e.release()).resolves.toEqual([{ botId: "unsafe-release", why: "failed", detail: "checkpoint denied" }]);
+    } finally {
+      open.lanes.bot.connection.run = realRun;
+      for (const lane of Object.values(open.lanes)) lane.connection.closeSync();
+      open.instance.closeSync();
+    }
+  });
+
   it("closeAll closes every open database", async () => {
     const e = engine();
     const a = await e.forBot("ca");
