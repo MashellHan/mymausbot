@@ -91,6 +91,12 @@ it("keeps historical reply lineage while hiding a generated Wait continuation ac
     messagesTail: (_threadId, limit) => ({
       messages: rows.slice(-limit), hasMore: rows.length > limit, activeLeafId: reply.id,
     }),
+    messagesBefore: (_threadId, before, limit) => {
+      const end = rows.findIndex((msg) => msg.id === before);
+      if (end < 0) return null;
+      const start = Math.max(0, end - limit);
+      return { messages: rows.slice(start, end), hasMore: start > 0, activeLeafId: reply.id };
+    },
     activeLeaf: () => reply.id,
   }, (_threadId, id) => byId.get(id) ?? null);
   const placeholder: Message = {
@@ -101,7 +107,7 @@ it("keeps historical reply lineage while hiding a generated Wait continuation ac
   expect(messagePage("thread", undefined)).toEqual({ messages: [notice, typed, placeholder, reply], activeLeafId: reply.id });
   expect(messagePage("thread", 2)).toEqual({ messages: [placeholder, reply], hasMore: true, activeLeafId: reply.id });
   expect(messagePage("thread", 2, reply.id)).toEqual({ messages: [typed, placeholder], hasMore: true, activeLeafId: reply.id });
-  expect(messageWindow("thread", continuation.id, 1)).toEqual({ messages: [placeholder], hasMore: true });
+  expect(messageWindow("thread", continuation.id, 1)).toEqual({ messages: [placeholder], hasMore: true, activeLeafId: reply.id });
   expect(wireMessage("thread", continuation)).toEqual(placeholder);
   expect(continuation.text).toBe("[Wait finished: Report] Read the sample and summarize it.");
 });
