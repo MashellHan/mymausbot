@@ -2,7 +2,7 @@ import { Calendar, CalendarPlus, ChevronRight, Sparkles } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
-import { currentTaskBot, useStore, type Bot } from "@/state/store";
+import { currentTaskBot, type Bot } from "@/state/store";
 import { useOwnerOrAdmin } from "@/lib/use-owner-or-admin";
 import { approvalModeFor, modelSwitchNeedsAsk } from "../../../shared/approval-mode";
 import { useChatMoreItems } from "../ChatMoreMenu";
@@ -13,6 +13,8 @@ import { BotConversations } from "./Conversations";
 import type { SimplePageId } from "./page-registry";
 import { TryAsking } from "./TryAsking";
 import { Card, CardLabel, LabelAction, panelActionCls, NavRow, RowIcon, rowCls, RowText } from "./rows";
+import { useStoreDispatch, useStoreSelector } from "@/state/store-select";
+import { isNewChatThread, newChatBot } from "@/state/new-chat";
 
 type Derived = ReturnType<typeof useBotSettingsDerived>;
 
@@ -48,12 +50,16 @@ export function DetailsTab({ bot, derived, onOpen }: {
   onOpen: (page: SimplePageId) => void;
 }) {
   const { items } = useChatMoreItems(bot);
-  const { state, dispatch } = useStore();
-  const thread = currentTaskBot(bot);
+  const dispatch = useStoreDispatch();
+  const instances = useStoreSelector((state) => state.instances);
+  // While a blank chat is open the chat shows it, not the conversation it covers: the Model and Reasoning rows show and
+  // set the blank chat's choices, which the first send applies to the conversation it makes.
+  const newChat = useStoreSelector((state) => state.newChat);
+  const thread = currentTaskBot(newChatBot(bot, newChat));
   const ownerOrAdmin = useOwnerOrAdmin();
-  const driverOf = (instanceId: string) => state.instances.find((instance) => instance.instanceId === instanceId)?.driverKind;
-  // The host rejects cross-engine default switches that require dropping to Ask without confirmation, and EffortRow has no Ask prompt.
-  const reasoningSetsDefault = ownerOrAdmin === true
+  const driverOf = (instanceId: string) => instances.find((instance) => instance.instanceId === instanceId)?.driverKind;
+  // Blank chats resolve on first send without a persistent thread; keep bot default writes off while viewing one.
+  const reasoningSetsDefault = ownerOrAdmin === true && !isNewChatThread(thread.threadId)
     && !modelSwitchNeedsAsk(approvalModeFor(bot), driverOf(bot.modelSelection.instanceId), driverOf(thread.modelSelection.instanceId));
   const routinesOn = derived.botRoutines.filter((routine) => routine.enabled).length;
   const conversationItems = CONVERSATION_ITEMS.flatMap((key) => items.filter((item) => item.key === key));
@@ -64,17 +70,17 @@ export function DetailsTab({ bot, derived, onOpen }: {
       <section data-panel-card="model" className="pt-2">
         <div data-panel-row="model" className={cn(rowCls, "rounded-[8px]")}>
           <ModelPicker
-            key={bot.threadId}
+            key={thread.threadId}
             bot={thread}
             contained
-            threadId={bot.threadId}
+            threadId={thread.threadId}
             label={<span className="flex shrink-0 items-center gap-2.5"><RowIcon icon={Sparkles} /><RowText title={t("model.simple.model")} /></span>}
           />
         </div>
         {/* The picker hides its own reasoning row when contained, so this tab draws it as its own row. */}
         <EffortRow
           bot={thread}
-          threadId={bot.threadId}
+          threadId={thread.threadId}
           updateBotDefault={reasoningSetsDefault}
           compact
           className={cn(rowCls, "min-w-0 flex-1 rounded-[8px]")}
