@@ -14,11 +14,17 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { acquireDesktopBuildLock } from "./local-concurrency.mjs";
 
-export const DEFAULT_DELIVERY_WORKTREE = "/Users/mengxionghan/workspace/OpenMausBot-desktop-delivery-worktree";
+export function resolveDefaultDeliveryWorktree(repo = process.cwd(), env = process.env) {
+  const override = env.OMB_DELIVERY_WORKTREE?.trim();
+  if (override) return resolve(override);
+  const resolvedRepo = resolve(repo);
+  return join(dirname(resolvedRepo), `${basename(resolvedRepo)}-desktop-delivery-worktree`);
+}
+
 export const DEFAULT_TARGET_APP = join(homedir(), "Applications", "mymausbot.app");
 export const OFFICIAL_APP = "/Applications/OpenMausBot.app";
 export const DEFAULT_STATE_PATH = join(homedir(), ".openmausbot", "desktop-delivery-state.json");
@@ -38,6 +44,7 @@ const RETAINED_WORKTREE_PATHS = ["node_modules", "dist-native", "electron/resour
 const FULL_BUILD_PATTERNS = [
   /^electron\//,
   /^build\//,
+  /^src\/locales\/.*\.json$/,
   /^(?:pnpm-lock\.yaml|pnpm-workspace\.yaml|\.npmrc|electron-builder\.yml|vite\.config\.ts|tsconfig[^/]*|index\.html|rail\.html)$/,
   /^(?:patches|packages|third_party)\//,
   /^scripts\/(?:after-pack\.mjs|mark-module-scope\.mjs|prepare-|cua-)/,
@@ -58,7 +65,16 @@ export function isPackageJsonDependencySame(beforeText, afterText) {
   try {
     const before = JSON.parse(beforeText);
     const after = JSON.parse(afterText);
-    const keys = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies", "packageManager", "engines", "main"];
+    const keys = [
+      "version",
+      "dependencies",
+      "devDependencies",
+      "optionalDependencies",
+      "peerDependencies",
+      "packageManager",
+      "engines",
+      "main",
+    ];
     return keys.every((key) => JSON.stringify(before[key] ?? null) === JSON.stringify(after[key] ?? null));
   } catch {
     return false;
@@ -175,7 +191,7 @@ export function parseDeliveryArgs(argv) {
   const opts = {
     command,
     repo: process.cwd(),
-    worktree: process.env.OMB_DELIVERY_WORKTREE || DEFAULT_DELIVERY_WORKTREE,
+    worktree: null,
     donor: null,
     targetRef: "origin/main",
     baseCommit: null,
@@ -210,6 +226,7 @@ export function parseDeliveryArgs(argv) {
     else if (arg === "--json") opts.json = true;
     else throw new Error(`Unknown option: ${arg}`);
   }
+  if (!opts.worktree) opts.worktree = resolveDefaultDeliveryWorktree(opts.repo);
   return opts;
 }
 
@@ -251,7 +268,51 @@ export function pruneOldDeliveryDirs(scratchDir, keep = MAX_DELIVERY_BACKUPS) {
   return removed;
 }
 
+export function resolveOsxSignPath(worktree) {
+  const pnpmDir = join(worktree, "node_modules", ".pnpm");
+  if (existsSync(pnpmDir)) {
+    const entry = readdirSync(pnpmDir)
+      .filter((name) => name.startsWith("@electron+osx-sign@"))
+      .sort()
+      .at(-1);
+    if (entry) {
+      const candidate = join(pnpmDir, entry, "node_modules", "@electron", "osx-sign");
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  const direct = join(worktree, "node_modules", "@electron", "osx-sign");
+  if (existsSync(direct)) return direct;
+  throw new Error(`Could not resolve @electron/osx-sign under ${worktree}`);
+}
+
+export function readElectronVersion(worktree) {
+  const pkgPath = join(worktree, "node_modules", "electron", "package.json");
+  if (!existsSync(pkgPath)) throw new Error(`Missing installed electron package.json at ${pkgPath}`);
+  const { version } = JSON.parse(readFileSync(pkgPath, "utf8"));
+  if (typeof version !== "string" || !version) throw new Error(`Invalid Electron version in ${pkgPath}`);
+  return version;
+}
+
+export function assertDedicatedWorktreeForReset(repo, worktree) {
+  const resolvedRepo = resolve(repo);
+  const resolvedWorktree = resolve(worktree);
+  if (resolvedWorktree === resolvedRepo) {
+    throw new Error(`Refusing destructive git clean/reset on source repo itself: ${resolvedWorktree}`);
+  }
+  const gitMarker = join(resolvedWorktree, ".git");
+  if (!existsSync(gitMarker)) {
+    throw new Error(`Refusing git clean/reset without ${gitMarker} (would target parent repository)`);
+  }
+  const topLevel = gitOut(resolvedWorktree, "rev-parse", "--show-toplevel");
+  if (resolve(topLevel) !== resolvedWorktree) {
+    throw new Error(`Refusing git clean/reset: toplevel ${topLevel} does not match worktree ${resolvedWorktree}`);
+  }
+}
+
 export function syncResidentWorktree({ repo, worktree, targetCommit, donor = null, forceFresh = false }) {
+  if (resolve(worktree) === resolve(repo)) {
+    throw new Error(`Delivery worktree must differ from source repository: ${worktree}`);
+  }
   const lockBytes = execFileSync("/usr/bin/git", ["show", `${targetCommit}:pnpm-lock.yaml`], { cwd: repo });
   const targetLockSha = createHash("sha256").update(lockBytes).digest("hex");
   const currentLockSha = existsSync(join(worktree, "pnpm-lock.yaml")) ? sha256File(join(worktree, "pnpm-lock.yaml")) : null;
@@ -266,6 +327,7 @@ export function syncResidentWorktree({ repo, worktree, targetCommit, donor = nul
   if (!existsSync(worktree)) {
     gitOut(repo, "worktree", "add", "--detach", worktree, targetCommit);
   } else {
+    assertDedicatedWorktreeForReset(repo, worktree);
     gitOut(worktree, "reset", "--hard", "HEAD");
     gitOut(worktree, "clean", "-fdx", "-e", "node_modules", "-e", "dist-native", "-e", "electron/resources/OpenMausBot Speech.app");
     gitOut(worktree, "checkout", "--detach", targetCommit);
@@ -350,12 +412,25 @@ function stageFullPackage({ worktree, stagedApp, jobDir }) {
     timeout: 600_000,
   });
   const builtApp = join(pkgOut, "mac-arm64", "mymausbot.app");
+  const signArgs = {
+    osxSignPath: resolveOsxSignPath(worktree),
+    app: builtApp,
+    electronVersion: readElectronVersion(worktree),
+    entitlements: join(worktree, "build", "entitlements.mac.plist"),
+  };
   run(
     "node",
     [
       "--input-type=module",
       "-e",
-      `import { createRequire } from "node:module"; const r = createRequire(import.meta.url); const { signAsync } = r("${worktree}/node_modules/.pnpm/@electron+osx-sign@1.3.3/node_modules/@electron/osx-sign"); await signAsync({ app: ${JSON.stringify(builtApp)}, identity: "-", identityValidation: false, platform: "darwin", version: "43.7.9", preAutoEntitlements: false, preEmbedProvisioningProfile: false, strictVerify: true, optionsForFile: () => ({ entitlements: ${JSON.stringify(join(worktree, "build", "entitlements.mac.plist"))}, hardenedRuntime: true, timestamp: "none" }) });`,
+      [
+        'import { createRequire } from "node:module";',
+        "const opts = JSON.parse(process.argv[1]);",
+        "const require = createRequire(import.meta.url);",
+        "const { signAsync } = require(opts.osxSignPath);",
+        'await signAsync({ app: opts.app, identity: "-", identityValidation: false, platform: "darwin", version: opts.electronVersion, preAutoEntitlements: false, preEmbedProvisioningProfile: false, strictVerify: true, optionsForFile: () => ({ entitlements: opts.entitlements, hardenedRuntime: true, timestamp: "none" }) });',
+      ].join(" "),
+      JSON.stringify(signArgs),
     ],
     { cwd: worktree, timeout: 300_000 },
   );

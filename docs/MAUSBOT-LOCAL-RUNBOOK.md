@@ -24,14 +24,17 @@ For batched `origin/main` local builds after GitHub CI `typecheck + lint` passes
 use the automated delivery runner:
 
 ```sh
-pnpm delivery:desktop --worktree /Users/mengxionghan/workspace/OpenMausBot-desktop-delivery-worktree
+pnpm delivery:desktop
+# Or override the resident delivery worktree path explicitly:
+pnpm delivery:desktop --worktree ../OpenMausBot-desktop-delivery-worktree
 # Build and verify only (skip idle-guarded switch and restart):
 pnpm delivery:desktop --no-switch
 ```
 
-- **Resident delivery worktree**: Keep `/Users/mengxionghan/workspace/OpenMausBot-desktop-delivery-worktree`
-  with persistent `node_modules/`, `dist-native/`, and `electron/resources/OpenMausBot Speech.app`.
-  When `pnpm-lock.yaml` SHA-256 matches, reuse `node_modules` via detached checkout instead of cloning.
+- **Resident delivery worktree**: Defaults to `../<repo>-desktop-delivery-worktree`
+  (or `OMB_DELIVERY_WORKTREE`), retaining persistent `node_modules/`, `dist-native/`, and
+  `electron/resources/OpenMausBot Speech.app`. When `pnpm-lock.yaml` SHA-256 matches,
+  `node_modules` is reused via detached checkout instead of cloning.
 - **Desktop build lock**: `scripts/desktop-delivery.mjs` acquires `acquireDesktopBuildLock`
   (`scripts/local-concurrency.mjs`, controlled by `OMB_BUILD_LOCK`) for the duration of the build
   so tests in sibling worktrees yield to one slot and release automatically on exit.
