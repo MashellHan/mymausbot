@@ -12,6 +12,8 @@ import { inspectLocalConcurrency } from "./local-concurrency.mjs";
 
 const DEFAULT_WINDOW_MIN = 60;
 const STALE_WORKTREE_DAYS = 2;
+const WORKTREE_TOTAL_ALERT_THRESHOLD = 15;
+const POLL_ALERT_THRESHOLD = 5;
 const MAX_DELIVERY_BACKUPS = 3;
 
 export function parseArgs(argv) {
@@ -72,7 +74,7 @@ export function analyzeTranscriptRows(rows, cutoffMs) {
           else if (name === "run_command") {
             const cmd = String(tc?.args?.CommandLine || "");
             if (/\b(?:tsc|typecheck)\b/.test(cmd)) tscRuns += 1;
-            if (/\b(?:pnpm\s+build(?::|\s|$)|build\.py|desktop-delivery\.mjs|electron-builder|package:mac)\b/.test(cmd)) buildRuns += 1;
+            if (/(?:\bpnpm(?:\s+run)?\s+build(?::|\b)|\bvite\s+build\b|build\.py|desktop-delivery\.mjs|\belectron-builder\b|\bpackage:(?:mac|win|linux|arch)\b)/.test(cmd)) buildRuns += 1;
             if (/\bcheck:ready\b/.test(cmd)) checkReadyRuns += 1;
             if (/\bvitest\b/.test(cmd)) vitestRuns += 1;
           }
@@ -105,7 +107,7 @@ export function analyzeTranscriptRows(rows, cutoffMs) {
   };
 }
 
-export function detectAnomalies({ seats, load1m, cpuCount, staleWorktrees, deliveryBackups, stuckTscCount }) {
+export function detectAnomalies({ seats, load1m, cpuCount, totalWorktrees = 0, staleWorktrees, deliveryBackups, stuckTscCount }) {
   const anomalies = [];
   if (cpuCount > 0 && load1m >= cpuCount * 2) {
     anomalies.push({
@@ -122,20 +124,20 @@ export function detectAnomalies({ seats, load1m, cpuCount, staleWorktrees, deliv
     });
   }
   for (const seat of seats) {
-    if (seat.polls >= 20) {
+    if (seat.polls > POLL_ALERT_THRESHOLD) {
       anomalies.push({
-        severity: "medium",
+        severity: seat.polls >= 20 ? "high" : "medium",
         code: "poll-loop",
         seat: seat.name,
-        detail: `${seat.name} called manage_task ${seat.polls} times in window; wait for async completion notifications instead of polling.`,
+        detail: `${seat.name} called manage_task ${seat.polls} times in window (> ${POLL_ALERT_THRESHOLD}); wait for async completion notifications instead of polling.`,
       });
     }
     if (!/front|lead/i.test(seat.name) && (seat.tscRuns > 0 || seat.buildRuns > 0)) {
       anomalies.push({
-        severity: "medium",
+        severity: "high",
         code: "dev-local-build",
         seat: seat.name,
-        detail: `${seat.name} ran local tsc (${seat.tscRuns}) / build (${seat.buildRuns}); feature devs should skip local builds and rely on CI + single build owner.`,
+        detail: `${seat.name} ran local tsc (${seat.tscRuns}) / build (${seat.buildRuns}) in window; feature devs must skip local tsc/builds and rely on CI + single build owner.`,
       });
     }
     if (seat.errors >= 5) {
@@ -155,11 +157,11 @@ export function detectAnomalies({ seats, load1m, cpuCount, staleWorktrees, deliv
       });
     }
   }
-  if (staleWorktrees >= 20) {
+  if (totalWorktrees > WORKTREE_TOTAL_ALERT_THRESHOLD || staleWorktrees > 0) {
     anomalies.push({
-      severity: "medium",
+      severity: totalWorktrees >= 30 || staleWorktrees >= 10 ? "high" : "medium",
       code: "worktree-bloat",
-      detail: `${staleWorktrees} git worktrees older than ${STALE_WORKTREE_DAYS} days; prune merged/detached worktrees to reduce git/Spotlight/usage-collector overhead.`,
+      detail: `${totalWorktrees} total git worktrees (${staleWorktrees} older than ${STALE_WORKTREE_DAYS} days; threshold > ${WORKTREE_TOTAL_ALERT_THRESHOLD} total or > 0 stale); prune merged/detached worktrees to reduce git/Spotlight/usage-collector overhead.`,
     });
   }
   if (deliveryBackups > MAX_DELIVERY_BACKUPS) {
@@ -271,6 +273,7 @@ export function collectTeamHealth({
     seats,
     load1m,
     cpuCount,
+    totalWorktrees: worktrees.total,
     staleWorktrees: worktrees.stale,
     deliveryBackups,
     stuckTscCount,

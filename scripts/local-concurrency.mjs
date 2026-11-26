@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -335,16 +335,87 @@ export function acquireLocalTestSlot({
   }
 }
 
-function main() {
-  const [command = "status", ...rest] = process.argv.slice(2);
+function isHeavyVitestTarget(arg) {
+  if (typeof arg !== "string" || !arg || arg.startsWith("-")) return false;
+  const normalized = arg.replace(/\\/g, "/");
+  return /\.e2e\.test\.[cm]?[jt]sx?$/.test(normalized)
+    || normalized === "server/index.test.ts"
+    || normalized.endsWith("/server/index.test.ts");
+}
+
+export function findBlockedHeavyVitestArgs(args, { buildActive = false, allowHeavy = false } = {}) {
+  if (!buildActive || allowHeavy) return [];
+  return (Array.isArray(args) ? args : []).filter(isHeavyVitestTarget);
+}
+
+export function runWithLocalTestSlot({
+  commandArgs,
+  label = "vitest",
+  allowHeavy = false,
+  cwd = process.cwd(),
+  pid = process.pid,
+  lockDir = resolveLocalLockDir(),
+  env = process.env,
+  detectBuildProcess = defaultDetectDesktopBuildProcess,
+  acquireSlot = acquireLocalTestSlot,
+  readBuild = readBuildLockState,
+  spawn = spawnSync,
+  log = (msg) => console.error(msg),
+} = {}) {
+  const args = Array.isArray(commandArgs) ? commandArgs : [];
+  if (args.length === 0) {
+    throw new Error("Missing command after `--` for local-concurrency run");
+  }
+  const hasBypass = Boolean(env.CI) || env.OMB_LOCAL_LOCK_BYPASS === "1";
+  if (!hasBypass) {
+    const build = readBuild({ lockDir, detectBuildProcess });
+    const blocked = findBlockedHeavyVitestArgs(args, {
+      buildActive: build.active,
+      allowHeavy: allowHeavy || env.OMB_ALLOW_HEAVY_TESTS === "1",
+    });
+    if (blocked.length > 0) {
+      const error = new Error(
+        `[local-concurrency] Refusing heavy Vitest target(s) (${blocked.join(", ")}) while desktop build is active (${build.source}); re-run with --allow-heavy after packaging finishes.`,
+      );
+      error.code = "HEAVY_TEST_BLOCKED_BY_BUILD";
+      error.blockedTargets = blocked;
+      throw error;
+    }
+  }
+  const slot = acquireSlot({ label, cwd, pid, lockDir, env, detectBuildProcess, log });
+  try {
+    const [cmd, ...cmdArgs] = args;
+    const childEnv = slot.buildActive && !env.OMB_VITEST_WORKERS
+      ? { ...env, OMB_VITEST_WORKERS: "1" }
+      : env;
+    const result = spawn(cmd, cmdArgs, { cwd, env: childEnv, stdio: "inherit" });
+    if (result?.error) throw result.error;
+    return { status: typeof result?.status === "number" ? result.status : 1, slot };
+  } finally {
+    slot.release();
+  }
+}
+
+export function parseConcurrencyCliArgs(argv) {
+  const [command = "status", ...rest] = argv;
+  const separator = rest.indexOf("--");
+  const optionTokens = separator === -1 ? rest : rest.slice(0, separator);
+  const trailingArgs = separator === -1 ? [] : rest.slice(separator + 1);
   let label = "cli";
   let explicitPid;
   let cwd = process.cwd();
-  for (let i = 0; i < rest.length; i++) {
-    if (rest[i] === "--label" && rest[i + 1]) label = rest[++i];
-    else if (rest[i] === "--pid" && rest[i + 1]) explicitPid = Number(rest[++i]);
-    else if (rest[i] === "--cwd" && rest[i + 1]) cwd = rest[++i];
+  let allowHeavy = false;
+  for (let i = 0; i < optionTokens.length; i++) {
+    if (optionTokens[i] === "--label" && optionTokens[i + 1]) label = optionTokens[++i];
+    else if (optionTokens[i] === "--pid" && optionTokens[i + 1]) explicitPid = Number(optionTokens[++i]);
+    else if (optionTokens[i] === "--cwd" && optionTokens[i + 1]) cwd = optionTokens[++i];
+    else if (optionTokens[i] === "--allow-heavy") allowHeavy = true;
   }
+  return { command, label, explicitPid, cwd, allowHeavy, trailingArgs };
+}
+
+function main() {
+  const { command, label, explicitPid, cwd, allowHeavy, trailingArgs } = parseConcurrencyCliArgs(process.argv.slice(2));
   const ownerPid = Number.isInteger(explicitPid) && explicitPid > 0
     ? explicitPid
     : (process.ppid > 1 ? process.ppid : process.pid);
@@ -365,7 +436,22 @@ function main() {
     console.log(JSON.stringify(releaseDesktopBuildLock(), null, 2));
     return;
   }
-  throw new Error("Use status | cleanup | acquire-build [--label name] [--pid pid] [--cwd path] | release-build");
+  if (command === "run") {
+    try {
+      const outcome = runWithLocalTestSlot({
+        commandArgs: trailingArgs,
+        label: label === "cli" ? "vitest" : label,
+        allowHeavy,
+        cwd,
+      });
+      process.exitCode = outcome.status;
+    } catch (error) {
+      console.error(error?.message || String(error));
+      process.exitCode = 1;
+    }
+    return;
+  }
+  throw new Error("Use status | cleanup | acquire-build [--label name] [--pid pid] [--cwd path] | release-build | run [--label name] [--allow-heavy] -- <cmd> ...");
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();

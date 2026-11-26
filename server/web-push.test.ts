@@ -15,14 +15,15 @@ import { removeTempDir } from "./testing/cleanup.ts";
 import { vapidPublicKeyObject } from "./web-push-crypto.ts";
 import {
   DEFAULT_VAPID_SUBJECT,
-  WEB_PUSH_ACTIVITY_MIN_INTERVAL_MS,
   WEB_PUSH_COALESCE_MS,
   WEB_PUSH_DEVICE_WINDOW_MAX,
   WEB_PUSH_DEVICE_WINDOW_MS,
+  WEB_PUSH_NOTIFY_DEDUPE_MS,
   WEB_PUSH_RETRY_MS,
   WEB_PUSH_SUBSCRIPTIONS_FILE,
   WEB_PUSH_VAPID_FILE,
   WebPushService,
+  buildNotificationPayload,
   buildRedactedNotificationPayload,
   defaultVapidSubject,
   isForbiddenWebPushIp,
@@ -218,7 +219,7 @@ describe("WebPushService", () => {
     expect(requests).toHaveLength(0);
   });
 
-  it("encrypts payloads with verifiable VAPID headers and strictly redacts lock-screen content", async () => {
+  it("encrypts payloads with verifiable VAPID headers, scrubs secrets from previews, and strictly redacts secret prompts", async () => {
     const keys = makeDeviceKeys();
     const { service, requests } = createHarness({
       unreadCount: () => 4,
@@ -230,7 +231,8 @@ describe("WebPushService", () => {
     });
 
     const rawSecret = "sk-live-super-secret-value";
-    const rawCommand = "rm -rf /tmp/secrets && curl evil.example";
+    const ghToken = "ghp_1234567890abcdefghijklmnop123456";
+    const summaryText = "Allow running deployment check";
     service.offerBroadcast(
       {
         kind: "notify",
@@ -242,7 +244,7 @@ describe("WebPushService", () => {
           threadId: "thread-1",
           groupId: "g1",
           title: `Approval with ${rawSecret}`,
-          body: `${rawSecret} ${rawCommand}`,
+          body: `**${summaryText}** using ${rawSecret} and ${ghToken}`,
         },
       },
       () => true,
@@ -267,7 +269,9 @@ describe("WebPushService", () => {
     const decrypted = decryptPushBody(req.body, keys.privateKey, keys.authSecret);
     const serialized = JSON.stringify(decrypted);
     expect(serialized).not.toContain(rawSecret);
-    expect(serialized).not.toContain(rawCommand);
+    expect(serialized).not.toContain(ghToken);
+    expect(decrypted.body).toContain(summaryText);
+    expect(decrypted.body).not.toContain("**");
     expect(decrypted).toMatchObject({
       version: 1,
       id: "n-1",
@@ -281,11 +285,105 @@ describe("WebPushService", () => {
     });
 
     const redactedSecret = buildRedactedNotificationPayload(
-      { kind: "secret", botId: "b1", botName: "Scout", threadId: "t1" },
+      {
+        kind: "secret",
+        botId: "b1",
+        botName: "Scout",
+        threadId: "t1",
+        title: "Stripe Live Key",
+        body: `Enter ${rawSecret}`,
+      },
       { id: "n-2", ts: 100 },
     );
     expect(redactedSecret?.title).toBe("Scout needs a credential");
     expect(redactedSecret?.body).toBe("Credential requested");
+    expect(JSON.stringify(redactedSecret)).not.toContain("Stripe");
+    expect(JSON.stringify(redactedSecret)).not.toContain(rawSecret);
+
+    const zhSecret = buildNotificationPayload(
+      {
+        kind: "secret",
+        botId: "b2",
+        botName: "二娃 - 千里眼",
+        threadId: "t2",
+        title: "OpenAI API Key",
+        body: rawSecret,
+      },
+      { id: "n-3", ts: 101 },
+    );
+    expect(zhSecret?.title).toBe("二娃 - 千里眼 需要凭证");
+    expect(zhSecret?.body).toBe("请打开应用安全填写");
+    expect(JSON.stringify(zhSecret)).not.toContain("OpenAI");
+    expect(JSON.stringify(zhSecret)).not.toContain(rawSecret);
+  });
+
+  it("delivers localized Chinese/English dynamic summaries for done, question, approval, and failures", async () => {
+    const keys = makeDeviceKeys();
+    const { service, requests } = createHarness({
+      room: (n) => (n.groupId ? { id: n.groupId, name: "发布群" } : undefined),
+    });
+    await service.upsertSubscription("session:s1", {
+      endpoint: "https://web.push.apple.com/QMx/sub-zh",
+      keys: { p256dh: keys.p256dh, auth: keys.auth },
+    });
+
+    service.offerBroadcast(
+      {
+        kind: "notify",
+        notification: {
+          id: "zh-done-1",
+          kind: "done",
+          botId: "bot-erwa",
+          botName: "二娃 - 千里眼",
+          threadId: "t-zh-1",
+          body: "**构建已完成**，所有 12 项校验全部通过。",
+        },
+      },
+      () => true,
+    );
+    service.offerBroadcast(
+      {
+        kind: "notify",
+        notification: {
+          id: "zh-q-1",
+          kind: "question",
+          botId: "bot-erwa",
+          botName: "二娃 - 千里眼",
+          threadId: "t-zh-2",
+          groupId: "g-rel",
+          body: "是否立即推送到生产环境？",
+        },
+      },
+      () => true,
+    );
+    service.offerBroadcast(
+      {
+        kind: "notify",
+        notification: {
+          id: "zh-fail-1",
+          kind: "turn-failed",
+          botId: "bot-erwa",
+          botName: "二娃 - 千里眼",
+          threadId: "t-zh-3",
+          body: "连接上游超时（HTTP 504）",
+        },
+      },
+      () => true,
+    );
+    await service.flush();
+
+    expect(requests).toHaveLength(3);
+    const donePayload = decryptPushBody(requests[0]!.body, keys.privateKey, keys.authSecret);
+    expect(donePayload.title).toBe("二娃 - 千里眼");
+    expect(donePayload.body).toBe("构建已完成，所有 12 项校验全部通过。");
+
+    const questionPayload = decryptPushBody(requests[1]!.body, keys.privateKey, keys.authSecret);
+    expect(questionPayload.title).toBe("二娃 - 千里眼 · 发布群 向你提问");
+    expect(questionPayload.body).toBe("是否立即推送到生产环境？");
+
+    const failPayload = decryptPushBody(requests[2]!.body, keys.privateKey, keys.authSecret);
+    expect(failPayload.title).toBe("二娃 - 千里眼 运行出错");
+    expect(failPayload.body).toBe("连接上游超时（HTTP 504）");
   });
 
   it("enforces tier preferences, spend admin gate, focused SSE dedupe, and audience rules", async () => {
@@ -327,50 +425,150 @@ describe("WebPushService", () => {
     expect(requests[0]!.url.pathname).toBe("/fcm/send/admin");
   });
 
-  it("handles P2 Live Activities with Topic/tag replacement, >=20s rate limit, and immediate terminal override", async () => {
+  it("suppresses noisy bot/runtime stage pushes (Started working / Waiting) and only pushes real notify events once", async () => {
     const keys = makeDeviceKeys();
-    let botState = { id: "b1", name: "Scout", threadId: "t1", busy: true, hasOpenAsk: false };
+    let botState = { id: "b1", name: "二娃 - 千里眼", threadId: "t1", busy: true, hasOpenAsk: false };
     const { service, requests } = createHarness({
       bot: () => botState,
       botOfThread: () => "b1",
     });
     await service.upsertSubscription("session:s1", {
-      endpoint: "https://web.push.apple.com/QMx/act-1",
+      endpoint: "https://web.push.apple.com/QMx/dedupe-1",
       keys: { p256dh: keys.p256dh, auth: keys.auth },
-      preferences: { liveActivities: true },
+      preferences: { liveActivities: true, finished: true, urgent: true, failures: true },
     });
 
-    // Initial turn start -> sent immediately with Topic & tag.
+    // 1. Intermediate bot/runtime broadcasts (turn.started, item.started, turn.wait_started, request.opened, turn.completed) emit 0 pushes.
     service.offerBroadcast({ kind: "runtime", event: { type: "turn.started", threadId: "t1" } }, () => true);
-    await service.flush();
-    expect(requests).toHaveLength(1);
-    expect(requests[0]!.headers.topic).toBe(activityTopicForThread("t1"));
-    expect(requests[0]!.headers.topic!.length).toBeLessThanOrEqual(32);
-    const firstPayload = decryptPushBody(requests[0]!.body, keys.privateKey, keys.authSecret);
-    expect(firstPayload.phase).toBe("started");
-    expect(firstPayload.tag).toBe(activityNotificationTag("t1"));
-
-    // Stage change 5s later is rate-limited (<20s).
-    clock += 5_000;
-    service.offerBroadcast({ kind: "runtime", event: { type: "turn.wait_ended", threadId: "t1" } }, () => true);
-    await service.flush();
-    expect(requests).toHaveLength(1);
-
-    // After interval (>= 20s) stage change is sent.
-    clock += WEB_PUSH_ACTIVITY_MIN_INTERVAL_MS;
-    service.offerBroadcast({ kind: "runtime", event: { type: "turn.wait_ended", threadId: "t1" } }, () => true);
-    await service.flush();
-    expect(requests).toHaveLength(2);
-    expect(decryptPushBody(requests[1]!.body, keys.privateKey, keys.authSecret).phase).toBe("working");
-
-    // Terminal completion inside 20s window immediately overrides and replaces in place.
-    clock += 2_000;
-    botState = { ...botState, busy: false };
+    service.offerBroadcast({ kind: "bot", bot: { id: "b1" } }, () => true);
+    service.offerBroadcast(
+      { kind: "runtime", event: { type: "item.started", itemType: "tool", threadId: "t1", title: "web_search", summary: "OpenMausBot" } },
+      () => true,
+    );
+    service.offerBroadcast({ kind: "runtime", event: { type: "turn.wait_started", threadId: "t1", resource: "browser" } }, () => true);
+    botState = { ...botState, hasOpenAsk: true };
+    service.offerBroadcast({ kind: "runtime", event: { type: "request.opened", threadId: "t1" } }, () => true);
+    service.offerBroadcast({ kind: "bot", bot: { id: "b1" } }, () => true);
+    botState = { ...botState, busy: false, hasOpenAsk: false };
     service.offerBroadcast({ kind: "runtime", event: { type: "turn.completed", threadId: "t1", ok: true } }, () => true);
     await service.flush();
-    expect(requests).toHaveLength(3);
-    expect(requests[2]!.headers.topic).toBe(activityTopicForThread("t1"));
-    expect(decryptPushBody(requests[2]!.body, keys.privateKey, keys.authSecret).phase).toBe("done");
+    expect(requests).toHaveLength(0);
+
+    // 2. Real approval notify sends 1 push with scrubbed summary.
+    service.offerBroadcast(
+      {
+        kind: "notify",
+        notification: {
+          id: "ask-1",
+          kind: "approval",
+          botId: "b1",
+          botName: "二娃 - 千里眼",
+          threadId: "t1",
+          body: "需要确认执行部署脚本",
+        },
+      },
+      () => true,
+    );
+    await service.flush();
+    expect(requests).toHaveLength(1);
+    const approval = decryptPushBody(requests[0]!.body, keys.privateKey, keys.authSecret);
+    expect(approval.kind).toBe("approval");
+    expect(approval.body).toBe("需要确认执行部署脚本");
+
+    // 3. Real done notify sends 1 push with clean title & reply summary.
+    service.offerBroadcast(
+      {
+        kind: "notify",
+        notification: {
+          id: "done-1",
+          kind: "done",
+          botId: "b1",
+          botName: "二娃 - 千里眼",
+          threadId: "t1",
+          body: "部署脚本已运行完成，无报错。",
+        },
+      },
+      () => true,
+    );
+    await service.flush();
+    expect(requests).toHaveLength(2);
+    const done = decryptPushBody(requests[1]!.body, keys.privateKey, keys.authSecret);
+    expect(done.kind).toBe("done");
+    expect(done.title).toBe("二娃 - 千里眼");
+    expect(done.body).toBe("部署脚本已运行完成，无报错。");
+
+    // 4. Duplicate notify by same id (even >15s later) OR identical (threadId, kind, body) within 15s is deduplicated.
+    service.offerBroadcast(
+      {
+        kind: "notify",
+        notification: {
+          id: "done-1-dup-body",
+          kind: "done",
+          botId: "b1",
+          botName: "二娃 - 千里眼",
+          threadId: "t1",
+          body: "部署脚本已运行完成，无报错。",
+        },
+      },
+      () => true,
+    );
+    clock += WEB_PUSH_NOTIFY_DEDUPE_MS + 1_000;
+    service.offerBroadcast(
+      {
+        kind: "notify",
+        notification: {
+          id: "done-1",
+          kind: "done",
+          botId: "b1",
+          botName: "二娃 - 千里眼",
+          threadId: "t1",
+          body: "新内容但相同 id",
+        },
+      },
+      () => true,
+    );
+    await service.flush();
+    expect(requests).toHaveLength(2);
+
+    // 5. Real turn-failed and P2 brief notifies still deliver cleanly once each.
+    service.offerBroadcast({ kind: "runtime", event: { type: "turn.completed", threadId: "t1", ok: false } }, () => true);
+    service.offerBroadcast(
+      {
+        kind: "notify",
+        notification: {
+          id: "fail-1",
+          kind: "turn-failed",
+          botId: "b1",
+          botName: "二娃 - 千里眼",
+          threadId: "t1",
+          body: "模型请求超时",
+        },
+      },
+      () => true,
+    );
+    service.offerBroadcast(
+      {
+        kind: "notify",
+        notification: {
+          id: "brief-1",
+          kind: "brief",
+          botId: "b1",
+          botName: "二娃 - 千里眼",
+          threadId: "t1",
+          body: "每日简报已更新",
+        },
+      },
+      () => true,
+    );
+    await service.flush();
+    expect(requests).toHaveLength(4);
+    const failed = decryptPushBody(requests[2]!.body, keys.privateKey, keys.authSecret);
+    expect(failed.kind).toBe("turn-failed");
+    expect(failed.body).toBe("模型请求超时");
+    expect(requests[3]!.headers.topic).toBe(activityTopicForThread("t1"));
+    const brief = decryptPushBody(requests[3]!.body, keys.privateKey, keys.authSecret);
+    expect(brief.tag).toBe(activityNotificationTag("t1"));
+    expect(brief.body).toBe("每日简报已更新");
   });
 
   it("coalesces 10s same-slot pushes, caps 30/10min per device, retries transiently, and prunes on 404/410", async () => {
