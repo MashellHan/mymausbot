@@ -7,6 +7,7 @@ import { signInOutcome } from "../../shared/sign-in-request";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import { cardSaveTarget, saveLoginFromCard } from "@/lib/logins";
+import { isRemoteClientSession, isRemotePwaMode } from "@/lib/pwa-transport";
 import { answerSignIn, signInHostIsHere } from "@/lib/sign-in";
 import { useStore, type Bot, type Message } from "@/state/store";
 import { ASK_CHIP, ASK_CHIP_IDLE, askPrimary, ASK_QUIET_BUTTON, AskCard, AskSettledLine, returnFocusToComposer } from "./AskCard";
@@ -122,8 +123,9 @@ export function SignInRequestCard({
     if (card.place === "local") setExplained(true);
     else dispatch({ type: "openSignIn", botId, messageId: message.id, url: card.url, site: card.site, place: card.place });
   };
-  // fill_login reaches only the built-in browser (and My Chrome); a desktop paired to another host relays no passwords.
-  const canSave = card.place === "browser" && window.ogb?.remoteClient?.active !== true;
+  // fill_login reaches only the built-in browser (and My Chrome); paired desktops and remote PWAs relay no passwords.
+  const remotePwa = isRemotePwaMode();
+  const canSave = card.place === "browser" && !isRemoteClientSession();
   let pageHost = card.site;
   try { pageHost = new URL(card.url).hostname; } catch {}
   return (
@@ -182,6 +184,9 @@ export function SignInRequestCard({
       ) : <p className="mt-2 text-[13px] leading-snug text-ink-secondary">{t(where, { name: botName })}</p>}
       {explained && (
         <p role="note" className="mt-1.5 text-[13px] leading-snug text-ink">{t(here ? "signIn.local.explain" : "signIn.local.explainHost", { name: botName })}</p>
+      )}
+      {card.place === "browser" && remotePwa && !saving && (
+        <p role="note" className="mt-1.5 text-[12px] text-ink-tertiary">{t("approvalMode.needsDesktopApp")}</p>
       )}
       {!saving && (
         <p className="mt-2 flex items-center gap-1 text-[12px] text-ink-tertiary">

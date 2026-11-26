@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { DEFAULT_BRAND, describeBrand, loadBrand, productName } from "./brand.ts";
+import { DEFAULT_BRAND, describeBrand, loadBrand, productName, publicBrandResponse } from "./brand.ts";
 
 const dirs: string[] = [];
 const licensed = (feature: string) => feature === "whitelabel";
@@ -52,6 +52,17 @@ describe("brand.json", () => {
     expect(status.brand).toEqual(DEFAULT_BRAND);
     expect(status.source).toBe("default");
     expect(status.notice).toContain("not licensed for whitelabel");
+  });
+
+  it("strips host file paths and internal notices from publicBrandResponse", () => {
+    const file = brandFile(JSON.stringify({ name: "Acme" }));
+    const full = loadBrand({ file, isEntitled: unlicensed });
+    expect(full.file).toBe(file);
+    expect(full.notice).toContain("not licensed for whitelabel");
+    expect(publicBrandResponse(full)).toEqual({
+      brand: DEFAULT_BRAND,
+      source: "default",
+    });
   });
 
   it("explains a broken file in terms of what to change, and never applies it", () => {

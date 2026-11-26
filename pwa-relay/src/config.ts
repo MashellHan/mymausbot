@@ -14,6 +14,9 @@ export interface BridgeConfig {
   maxBodyBytes: number;
   maxFrameBytes: number;
   maxConcurrentStreams: number;
+  maxConcurrentStreamsPerIp: number;
+  ipRateWindowMs: number;
+  ipRateMaxRequests: number;
   maxStreamBufferBytes: number;
   maxWsBufferedBytes: number;
   maxPendingBodyBytes: number;
@@ -139,6 +142,15 @@ export function loadConfig(env: NodeJS.ProcessEnv): BridgeConfig {
     maxBodyBytes,
     maxFrameBytes,
     maxConcurrentStreams: parsePositiveInt(env.MAX_CONCURRENT_STREAMS, 128, "MAX_CONCURRENT_STREAMS", 1, 4096),
+    maxConcurrentStreamsPerIp: parsePositiveInt(
+      env.MAX_CONCURRENT_STREAMS_PER_IP,
+      16,
+      "MAX_CONCURRENT_STREAMS_PER_IP",
+      1,
+      4096,
+    ),
+    ipRateWindowMs: parsePositiveInt(env.IP_RATE_WINDOW_MS, 60_000, "IP_RATE_WINDOW_MS", 100, 3_600_000),
+    ipRateMaxRequests: parsePositiveInt(env.IP_RATE_MAX_REQUESTS, 300, "IP_RATE_MAX_REQUESTS", 1, 100_000),
     maxStreamBufferBytes: parsePositiveInt(env.MAX_STREAM_BUFFER_BYTES, 4 * MiB, "MAX_STREAM_BUFFER_BYTES", 64 * KiB, 32 * MiB),
     maxWsBufferedBytes: parsePositiveInt(env.MAX_WS_BUFFERED_BYTES, 64 * MiB, "MAX_WS_BUFFERED_BYTES", 1024, 512 * MiB),
     maxPendingBodyBytes: parsePositiveInt(env.MAX_PENDING_BODY_BYTES, 32 * MiB, "MAX_PENDING_BODY_BYTES", 256, 256 * MiB),

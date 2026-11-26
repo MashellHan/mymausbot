@@ -169,6 +169,30 @@ describe("SignInRequestCard while it waits", () => {
     expect(view()).not.toContain("Save a login");
   });
 
+  it("does not offer to save a login from remote PWA mode and notes desktop app requirement", async () => {
+    const { setActivePwaAuth } = await import("@/lib/pwa-transport");
+    setActivePwaAuth({
+      ownerKey: "https://relay.mxhan.com::env-1::ses-1",
+      relayUrl: "https://relay.mxhan.com",
+      token: "omb_sess_test_1",
+      deviceId: "dev-1",
+      environmentId: "env-1",
+      sessionId: "ses-1",
+      serverName: "Mac",
+      scopes: ["client"],
+      pairedAt: 1700000000000,
+    });
+    try {
+      const html = view();
+      expect(html).not.toContain("Save a login");
+      expect(html).toContain("This approval change requires the packaged desktop app");
+      expect(html).toContain("Done");
+      expect(html).toContain("Cancel");
+    } finally {
+      setActivePwaAuth(null);
+    }
+  });
+
   it.each(["done", "cancel"] as const)("%s settles this card", async (choice) => {
     button(tree(), choice === "done" ? "Done" : "Cancel").props.onClick!();
     await settle();
