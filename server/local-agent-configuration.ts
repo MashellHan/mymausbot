@@ -105,13 +105,13 @@ export function createLocalAgentConfigurationProvider({ run = runHerdr, home = h
   run?: HerdrRunner; home?: string; discoverSkills?: (cwd: string) => Promise<CodexSkillDiscovery>;
   roleFileExchange?: RoleFileExchange;
 } = {}) {
-  async function context(teamId: string, agentId?: string) {
+  async function context(teamId: string, agentId?: string, options: { includeWorktrees?: boolean } = {}) {
     const live = await liveRows(run);
     if (!live || live.workspaces.filter((workspace) => workspace.workspace_id === teamId).length !== 1) return null;
     const agents = verifiedLocalAgentMembers(live.agents);
     const member = agentId ? agents.filter((agent) => agent.pane_id === agentId && agent.workspace_id === teamId) : [];
     if (agentId && member.length !== 1) return null;
-    const selected = await teamSource(agents, teamId, home);
+    const selected = await teamSource(agents, teamId, home, undefined, options);
     const playbook = selected.source ? await readDocument(selected.source.root, selected.source.playbook)
       : empty(selected.error ? "error" : "unverified");
     return { source: selected.source, sourceError: selected.error, playbook, member: member[0] ?? null,
@@ -232,7 +232,7 @@ export function createLocalAgentConfigurationProvider({ run = runHerdr, home = h
     },
     async getTeamRules(teamId: string): Promise<LocalAgentTeamRulesResponse> {
       if (!TEAM_ID.test(teamId)) return { teamId, ...empty("unavailable") };
-      const found = await context(teamId);
+      const found = await context(teamId, undefined, { includeWorktrees: false });
       return { teamId, ...(found?.playbook ?? empty("unavailable")) };
     },
   };

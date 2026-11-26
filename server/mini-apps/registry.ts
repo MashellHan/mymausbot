@@ -689,7 +689,7 @@ export class MiniApps {
     this.running.set(key, (this.running.get(key) ?? 0) + 1);
     try {
       const currentMember = async () => {
-        const teams = await providers.agents.get(true);
+        const teams = providers.agents.getRoster ? await providers.agents.getRoster() : await providers.agents.get(true);
         if (teams.status !== "ready") throw appFailure(409, "The current Agent Team session is unavailable.");
         if (input.resource === "team-rules") {
           if (teams.teams.filter((team) => team.id === input.teamId).length !== 1) {
