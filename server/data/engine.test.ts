@@ -696,7 +696,7 @@ describe("lifecycle", () => {
     const realRun = open.lanes.bot.connection.run;
     open.lanes.bot.connection.run = async () => { throw new Error("checkpoint denied"); };
     try {
-      await expect(db.close(true)).rejects.toThrow(/checkpoint denied/);
+      await expect((db as unknown as { close(strict?: boolean): Promise<void> }).close(true)).rejects.toThrow(/checkpoint denied/);
       await expect(e.release()).resolves.toEqual([{ botId: "unsafe-release", why: "failed", detail: "checkpoint denied" }]);
     } finally {
       open.lanes.bot.connection.run = realRun;
