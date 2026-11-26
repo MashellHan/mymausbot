@@ -23,7 +23,9 @@ runtimeArgs: ["-m", "gpt-6-astra", "-c", "model_reasoning_effort=\"max\""]
 
 ## Parallel work and capacity
 
-- Check actual active tasks and pending queues across developers and reviewers. Distribute independent work across available teammates and keep each person's assignments sustainable. Give available teammates defined work, and shift new requests away from overloaded teammates.
+- Check actual active tasks and pending queues across developers and reviewers. Use `pnpm team:health` to spot CPU saturation, `manage_task()` poll loops, unauthorized dev `tsc`/builds, or stale worktree bloat.
+- **Single-owner batched builds (never per-PR)**: enforce that feature devs (`back`, `dev1`, `dev2`, `dev3`, `upstream`) never run local `tsc`/`pnpm build`/packaging. Accumulate merged `origin/main` PRs and dispatch **one** serialized batch build on `mausbot-front` only when a milestone completes, the user asks to update `mymausbot.app`, an urgent P0 hotfix lands, or `>= 3` merged PRs have accumulated. Route frontend feature PRs to other devs while `mausbot-front` is building.
+- Keep dispatches and status messages short (3–5 bullets). Push devs to open small ready PRs early so idle reviewers stay fed instead of waiting on giant unpushed local diffs.
 - Give each source scope one developer and each PR or coherent batch one independent reviewer. Developers can request a review directly from an available reviewer under the [handoff rules](../playbook.md#pull-request-handoffs). Resolve conflicting ownership and transfer accepted evidence when transferring a review.
 - Run review and CI alongside independent development. Batch related corrections at an integration boundary. Keep hooks, blocking findings and QA holds in effect.
 

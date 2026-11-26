@@ -84,7 +84,7 @@ export const SETTINGS_PLACES = [
   {"id":"language","path":"Settings → General → Language","words":["language","translate"],"advanced":true,"simplePath":"Settings → This app → Language"},
   {"id":"send-key","path":"Settings → General → Send messages with","words":["enter","return","shift+enter","new line","keyboard"],"advanced":true},
   {"id":"talk","path":"Settings → General → Talk shortcut","words":["voice","microphone","mic","dictation","talk"],"advanced":true,"only":"the desktop app"},
-  {"id":"notifications","path":"Settings → General → Notifications","words":["notifications","notify","alerts","sounds","mute","silent","chime","feed"],"advanced":true,"simplePath":"Settings → This app → Notifications"},
+  {"id":"notifications","path":"Settings → General → Notifications","words":["notifications","notify","alerts","sounds","mute","silent","chime","feed","web push","push","live activities","lock screen","badge","推送","实时活动","锁屏"],"advanced":true,"simplePath":"Settings → This app → Notifications"},
   {"id":"startup","path":"Settings → General → Startup","words":["open at login","startup","launch"],"advanced":true,"only":"the desktop app"},
   {"id":"analytics","path":"Settings → General → Privacy","words":["analytics","usage analytics","privacy","telemetry"],"advanced":true},
   {"id":"light-dark","path":"Settings → Appearance → Light or dark","words":["dark mode","night mode","light mode","dark","light","system"]},

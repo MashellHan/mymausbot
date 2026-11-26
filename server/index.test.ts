@@ -1737,6 +1737,8 @@ describe("harness HTTP API", () => {
     });
     expect(brand.status).toBe(200);
     expect(Reflect.get(Object(Reflect.get(Object(brand.body), "brand")), "name")).toBe("mymausbot");
+    expect(brand.body).not.toHaveProperty("file");
+    expect(brand.body).not.toHaveProperty("notice");
     expect(await statusWithHeaders({ origin: "https://example.com" })).toBe(403);
     expect(await statusWithHeaders({ host: `127.0.0.2:${PORT}` })).toBe(200);
     expect(await statusWithHeaders({ host: `[::1]:${PORT}` })).toBe(200);

@@ -14,7 +14,7 @@ import {
 } from "@/lib/export-transcript";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
-import { isRemoteClientSession } from "@/lib/pwa-transport";
+import { isRemoteClientSession, isRemotePwaMode } from "@/lib/pwa-transport";
 import { localizedTaskTitle } from "@/lib/task-title";
 import { useContextAction } from "./ContextWarning";
 import { ELEVATED_CONTROL, ELEVATED_HOVER, ELEVATED_OPEN } from "./elevated";
@@ -41,6 +41,7 @@ export function useChatMoreItems(profile: Bot, phoneHeader = false): { items: Si
   const findOpen = useChatFindOpen(bot.threadId);
   const [copyStatus, setCopyStatus] = useState<"copied" | "failed" | null>(null);
   const remoteClient = isRemoteClientSession();
+  const remotePwa = isRemotePwaMode();
   const usage = usageSummary(bot, state.instances);
   const hasMessages = messages.length > 0;
   const contextAction = useContextAction();
@@ -159,14 +160,15 @@ export function useChatMoreItems(profile: Bot, phoneHeader = false): { items: Si
       trailing: <span title={usage.detail} data-testid="usage-chip" className="tabular-nums text-[12px] text-ink-secondary">{usage.short}</span>,
       onSelect: () => advanced ? openBotSettings(dispatch, "usage") : dispatch({ type: "toggleAppSettings", open: true, section: "usage" }),
     } satisfies SidebarMenuItem] : []),
-    ...(remoteClient ? [] : [{
+    ...(remotePwa || !remoteClient ? [{
       key: "activity",
       label: t("activity.panel.title"),
       icon: <ListChecks size={16} />,
       active: state.activityOpen,
       separatorBefore: !usage,
       onSelect: () => dispatch({ type: "toggleActivity" }),
-    } satisfies SidebarMenuItem, {
+    } satisfies SidebarMenuItem] : []),
+    ...(remoteClient ? [] : [{
       key: "inspector",
       label: t("chat.inspector"),
       icon: <Bug size={16} />,

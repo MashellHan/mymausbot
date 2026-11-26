@@ -428,3 +428,10 @@ export function resetPwaCacheForTests(): void {
   loadedPrefsOwnerKey = null;
   notifyPrefsListeners();
 }
+
+export function clearPwaMemoryCaches(): void {
+  bootCache = null;
+  activePrefs = null;
+  loadedPrefsOwnerKey = null;
+  notifyPrefsListeners();
+}

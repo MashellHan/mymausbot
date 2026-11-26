@@ -13,11 +13,18 @@ describe("Stage 8 Cloudflare Pages headers & optional Worker proxy", () => {
 
   it("defines no-cache for sw.js, immutable for assets, and strict CSP allowing relay.mxhan.com + blob:", () => {
     const headersPath = resolve(ROOT, "deploy/pwa-cf/public/_headers");
+    const rootHeadersPath = resolve(ROOT, "public/_headers");
     expect(existsSync(headersPath)).toBe(true);
+    expect(existsSync(rootHeadersPath)).toBe(true);
     const content = readFileSync(headersPath, "utf8");
+    const rootContent = readFileSync(rootHeadersPath, "utf8");
+    expect(rootContent.trimEnd()).toBe(content.trimEnd());
     expect(content).toContain("https://relay.mxhan.com");
     expect(content).toContain("wss://relay.mxhan.com");
     expect(content).toContain("blob:");
+    expect(content).toContain("Strict-Transport-Security: max-age=31536000; includeSubDomains");
+    expect(content).toContain("X-Frame-Options: DENY");
+    expect(content).toContain("Referrer-Policy: no-referrer");
     expect(content).toMatch(/\/sw\.js[\s\S]*?Cache-Control:\s*no-cache/);
     expect(content).toMatch(/\/assets\/\*[\s\S]*?Cache-Control:[^\n]*immutable/);
   });

@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { availableParallelism, totalmem } from "node:os";
+import { availableParallelism, loadavg, totalmem } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { changedCodeLines, readCheckPolicy, SAFE_TEST_PATH, selectCheckPlan } from "./ci-scope.mjs";
@@ -10,8 +10,13 @@ const git = (args, cwd) => execFileSync("git", args, { cwd, encoding: "utf8", ma
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const nul = (value) => value ? value.replace(/\0$/, "").split("\0") : [];
 
-export function localVitestWorkers(action, parallelism = availableParallelism(), memory = totalmem()) {
-  return action === "ready" ? Math.min(4, Math.max(1, Math.floor(parallelism / 2)), Math.max(1, Math.floor(memory / (4 * 1024 ** 3)))) : 1;
+export function localVitestWorkers(action, parallelism = availableParallelism(), memory = totalmem(), load1m = loadavg()[0] ?? 0) {
+  if (action !== "ready") return 1;
+  const base = Math.min(4, Math.max(1, Math.floor(parallelism / 2)), Math.max(1, Math.floor(memory / (4 * 1024 ** 3))));
+  // Throttle worker fan-out when multiple local agents or builds already saturate CPU.
+  if (Number.isFinite(load1m) && parallelism > 0 && load1m >= parallelism * 2) return 1;
+  if (Number.isFinite(load1m) && parallelism > 0 && load1m >= parallelism) return Math.min(2, base);
+  return base;
 }
 
 export function localChange(base = "origin/main", cwd = process.cwd()) {

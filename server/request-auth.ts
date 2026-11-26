@@ -331,6 +331,10 @@ export const CLIENT_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Reg
   { methods: ["POST"], path: /^\/api\/phones\/self\/jobs\/[\w-]+\/(?:lease|result)$/ },
   // This phone's own push registrations, alerts and Live Activities, keyed by its session (routes/phone-push.ts).
   { methods: ["GET", "PUT", "DELETE"], path: /^\/api\/push\/(?:device|activity)$/ },
+  // Browser/PWA Web Push VAPID public key, device-bound subscription, and self-test push (routes/web-push.ts).
+  { methods: ["GET"], path: /^\/api\/push\/web\/vapid-key$/ },
+  { methods: ["GET", "PUT", "DELETE"], path: /^\/api\/push\/web\/subscription$/ },
+  { methods: ["POST"], path: /^\/api\/push\/web\/test$/ },
   { methods: ["GET"], path: /^\/api\/health$/ },
   { methods: ["GET"], path: /^\/api\/edition$/ },
   { methods: ["GET"], path: /^\/api\/brand$/ },
@@ -338,6 +342,7 @@ export const CLIENT_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Reg
   // reads that carry no secrets
   { methods: ["GET"], path: /^\/api\/bots$/ },
   { methods: ["GET"], path: /^\/api\/bots\/[\w-]+$/ },
+  { methods: ["GET"], path: /^\/api\/bots\/[\w-]+\/activity$/ },
   { methods: ["GET"], path: /^\/api\/team-map$/ },
   // a link into the organisation's Admin: identifiers only, and Admin authorizes its own visitor
   { methods: ["GET"], path: /^\/api\/bots\/[\w-]+\/slack-management$/ },
@@ -605,7 +610,11 @@ export interface ResolveOptions {
   restricted?(session: SessionRecord, method: string, path: string, url: URL): string | null;
   /** The sentence a person reads when their session lacks the scope for this request; null keeps the bare refusal. */
   scopeRefusal?(method: string, path: string): string | null;
+  /** Verifies a DPoP proof for bearer sessions bound to a public key; returns null on success or a refusal message. */
+  verifyDpop?(req: IncomingMessage, session: SessionRecord, method: string, url: URL): string | null;
 }
+
+const dpopVerifiedRequests = new WeakMap<IncomingMessage, string>();
 
 const CLI_OWNER_HEADER = "x-openmausbot-cli-owner";
 const CLI_OWNER_ROUTE = /^\/api\/auth\/pairing$/;
@@ -670,6 +679,18 @@ export function resolveRequestAuth(req: IncomingMessage, options: ResolveOptions
     if (via === "cookie" && !isSameOrigin(req)) return deny(403, "forbidden: cross-origin request");
     // A browser sign-in's session is its cookie, never a bearer token.
     if (via === "bearer" && session.cookieOnly) return deny(401, "unauthorized: this session belongs to a browser; sign in with a pairing code");
+    if (via === "cookie" && session.dpopJwk) return deny(401, "unauthorized: DPoP-bound session requires Bearer authentication");
+    if (via === "bearer" && session.dpopJwk) {
+      const dpopHeader = typeof req.headers.dpop === "string" ? req.headers.dpop : "";
+      const verifiedKey = `${session.id}:${method.toUpperCase()}:${options.url.pathname}${options.url.search}:${dpopHeader}`;
+      if (options.verifyDpop) {
+        const refusal = options.verifyDpop(req, session, method, options.url);
+        if (refusal !== null) return deny(401, refusal || "unauthorized: DPoP proof required");
+        dpopVerifiedRequests.set(req, verifiedKey);
+      } else if (dpopVerifiedRequests.get(req) !== verifiedKey) {
+        return deny(401, "unauthorized: DPoP proof required");
+      }
+    }
     if (via === "cookie" && session.cookieOnly && (!["GET", "HEAD", "OPTIONS"].includes(method) || mutatingPublicRoute(method, path)) &&
       !provesSameOrigin(req)) {
       return deny(403, "forbidden: this browser's session makes changes only from its own page");

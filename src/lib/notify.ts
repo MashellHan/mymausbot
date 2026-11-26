@@ -1,6 +1,7 @@
 import type { Notification } from "../../shared/notification";
 import { plainPreviewText } from "../../shared/plain-preview";
 import { finishedNotificationsEnabled, notificationSoundsEnabled } from "./notification-preferences";
+import { isStandalonePwa } from "./web-push";
 
 export type NotifyFrame = Notification;
 
@@ -31,17 +32,50 @@ export function buildNotificationOptions(bot: NotificationBotIdentity): Notifica
   return { tag: `openmausbot:${bot.id}`, icon: bot.avatarUrl ?? undefined };
 }
 
+function buildDeepLinkUrl(frame: NotifyFrame): string {
+  const params = new URLSearchParams();
+  if (frame.botId) params.set("bot", frame.botId);
+  if (frame.groupId) params.set("group", frame.groupId);
+  if (frame.threadId) params.set("thread", frame.threadId);
+  const query = params.toString();
+  return query ? `/?${query}` : "/";
+}
+
+async function showViaServiceWorker(title: string, options: NotificationOptions, frame: NotifyFrame): Promise<boolean> {
+  if (typeof navigator === "undefined" || !("serviceWorker" in navigator) || !navigator.serviceWorker) return false;
+  const sw = navigator.serviceWorker;
+  try {
+    const registration = (typeof sw.getRegistration === "function" ? await sw.getRegistration() : undefined) ?? (await sw.ready);
+    if (!registration || typeof registration.showNotification !== "function") return false;
+    await registration.showNotification(title, {
+      ...options,
+      data: {
+        botId: frame.botId,
+        threadId: frame.threadId,
+        ...(frame.groupId ? { groupId: frame.groupId } : {}),
+        kind: frame.kind,
+        url: buildDeepLinkUrl(frame),
+      },
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function showNotification(
   frame: NotifyFrame,
   onOpen: (target: NotificationTarget) => void,
   avatarUrl?: string | null,
   visibleThreadId?: string | null,
 ) {
-  if (typeof Notification === "undefined") return;
+  const hasNotificationGlobal = typeof Notification !== "undefined";
+  const hasServiceWorker = typeof navigator !== "undefined" && "serviceWorker" in navigator && Boolean(navigator.serviceWorker);
+  if (!hasNotificationGlobal && !(isStandalonePwa() && hasServiceWorker)) return;
   if (frame.kind === "done" && !finishedNotificationsEnabled()) return;
   const spend = frame.kind === "spend";
   if (!spend && document.hasFocus() && visibleThreadId === frame.threadId) return;
-  if (Notification.permission !== "granted") return;
+  if (hasNotificationGlobal && Notification.permission !== "granted") return;
 
   const title = placeName ? `${placeName} · ${frame.title}` : frame.title;
   // Entries saved before the harness spoke plain text still carry Markdown.
@@ -53,10 +87,21 @@ export function showNotification(
     ...(notificationSoundsEnabled() ? {} : { silent: true }),
   };
   const shownByPage = () => {
-    new Notification(title, options).onclick = () => {
-      window.focus();
-      onOpen({ botId: frame.botId, threadId: frame.threadId });
-    };
+    // iOS standalone PWAs expose Notification.permission but throw if new Notification() is called instead of SW showNotification().
+    if ((!hasNotificationGlobal || isStandalonePwa()) && hasServiceWorker) {
+      void showViaServiceWorker(title, options, frame);
+      return;
+    }
+    try {
+      new Notification(title, options).onclick = () => {
+        window.focus();
+        onOpen({ botId: frame.botId, threadId: frame.threadId });
+      };
+    } catch {
+      if (hasServiceWorker) {
+        void showViaServiceWorker(title, options, frame);
+      }
+    }
   };
   const desktop = window.ogb?.desktopNotifications;
   if (!desktop) return shownByPage();

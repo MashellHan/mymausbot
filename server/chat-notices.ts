@@ -153,6 +153,8 @@ export const CHAT_NOTICE = {
   "chat.notice.memoryReclaimedTask": "Ran out of room, so I stopped this task to keep everything else running.",
   "chat.notice.memoryReclaimedBrowserDetail": "Ran out of room, so I closed the browser to keep everything else running. ({detail})",
   "chat.notice.memoryReclaimedTaskDetail": "Ran out of room, so I stopped this task to keep everything else running. ({detail})",
+  "chat.notice.memoryReclaimedOnly": "Ran out of room, so I stopped this task to keep everything here from freezing.",
+  "chat.notice.memoryReclaimedOnlyDetail": "Ran out of room, so I stopped this task to keep everything here from freezing. ({detail})",
   "chat.notice.outOfProcesses": "There is no room to start another program ({code}), so this task could not run. Nothing was sent to the AI. It starts again by itself when there is room.",
 } as const;
 

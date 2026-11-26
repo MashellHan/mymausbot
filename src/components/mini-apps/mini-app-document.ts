@@ -221,7 +221,10 @@ export function miniAppFrameDocument(document: MiniAppDocument, desktopOpenerAva
     csp: MINI_APP_CSP,
     network: { connect: [], resources: [] },
     can: { serverTools: false, serverResources: false, message: false,
-      openLinks: desktopOpenerAvailable && document.app.status === "active" && (document.app.shippedTemplateKind === "x_ai_digest" || document.app.shippedTemplateKind === "github_activity"),
+      openLinks: desktopOpenerAvailable && document.app.status === "active"
+        && (document.app.shippedTemplateKind === "x_ai_digest"
+          || document.app.shippedTemplateKind === "github_activity"
+          || (document.app.dashboardIdentity === "agent-team" && document.app.dashboard?.kind === "agent-team" && document.app.dashboard.renderer === "html")),
       modelContext: false },
   };
 }
