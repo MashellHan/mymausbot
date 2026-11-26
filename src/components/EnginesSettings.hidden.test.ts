@@ -3,15 +3,15 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const fixture = vi.hoisted(() => ({ hidden: [] as Array<{ instanceId: string; displayName: string }>, calls: [] as Array<{ path: string; body?: unknown }>, refresh: vi.fn() }));
+const fixture = vi.hoisted(() => ({ hidden: [] as Array<{ instanceId: string; displayName: string }>, calls: [] as Array<{ path: string; body?: unknown }>, refresh: vi.fn(), dispatch: vi.fn(), answer: [{ instanceId: "codex" }] as unknown[] }));
 vi.mock("@/state/store", async (original) => ({
   ...await original<typeof import("@/state/store")>(),
-  useStore: () => ({ state: { instances: [] }, refreshInstances: fixture.refresh }),
+  useStore: () => ({ state: { instances: [] }, dispatch: fixture.dispatch, refreshInstances: fixture.refresh }),
   api: async (path: string, init?: RequestInit) => {
     fixture.calls.push({ path, ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}) });
     if (path === "/api/instances/hidden") return { instances: fixture.hidden };
     fixture.hidden = [];
-    return { instances: [] };
+    return { instances: fixture.answer };
   },
 }));
 
@@ -23,6 +23,7 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   fixture.calls = [];
   fixture.refresh.mockReset();
+  fixture.dispatch.mockReset();
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -49,6 +50,7 @@ describe("hidden providers in Settings", () => {
     expect(list.textContent).toContain("Hermes");
     await act(async () => host.querySelector<HTMLButtonElement>('[data-unhide-engine="hermes"]')!.click());
     expect(fixture.calls).toContainEqual({ path: "/api/instances/hermes", body: { hidden: false } });
-    expect(fixture.refresh).toHaveBeenCalled();
+    expect(fixture.refresh).not.toHaveBeenCalled();
+    expect(fixture.dispatch).toHaveBeenCalledWith({ type: "instances", instances: fixture.answer });
   });
 });
