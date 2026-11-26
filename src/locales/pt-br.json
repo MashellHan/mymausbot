@@ -6588,7 +6588,7 @@
   "people.turns": "Sessões este mês: {turns}",
   "permissions.approval.applyFull": "Aplicar acesso total a todas as conversas",
   "permissions.approval.draftHanded": "Padrão para as conversas, rotinas e trabalhos delegados ao novo bot.",
-  "permissions.approval.helpHanded": "Padrão para novas conversas, rotinas e trabalhos delegados ao bot. O acesso total também se aplica imediatamente a todas as conversas existentes. Use “Atualizar permissões” em uma conversa para aplicar o nível atual a ela.",
+  "permissions.approval.helpHanded": "Padrão para novas conversas, rotinas e trabalhos delegados ao bot. “Pedir aprovação” e “Acesso total” também se aplicam imediatamente a todas as conversas existentes.",
   "permissions.approval.title": "Nível de aprovação",
   "permissions.cannotCoordinate": "Este modelo não pode entrar em contato com outros bots",
   "permissions.chief.active": "Este é o contato principal de {section}. Ele pode criar e coordenar especialistas nesta equipe e reunir o trabalho deles em uma resposta.",
