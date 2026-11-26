@@ -8,6 +8,7 @@ import { createBotLink, type CoordinateContext } from "../bot-link/link.ts";
 import type { CoordinateBotsCall, Coordinator, HandoffView } from "../coordinator.ts";
 import { peerApprovalFailure, requestPeerApproval, type ApprovalBus } from "../peer-approval.ts";
 import { peerAllowed } from "../peer-roster.ts";
+import type { createPlacesElsewhere, Explained } from "../places-elsewhere.ts";
 import { redactSecretsInText } from "../redact.ts";
 import type { RequestAuth } from "../request-auth.ts";
 import { createBotLinkRoutes, linkSessionUser } from "../routes/bot-link.ts";
@@ -48,6 +49,8 @@ export interface BotLinkHostDeps {
   storeFile(path: string, name: string, root: string): Promise<{ attachment: { kind: string; path: string; mime: string; name?: string }; bytes: number }>;
   log(line: string): void;
 }
+
+type PlacesElsewhere = ReturnType<typeof createPlacesElsewhere>;
 
 export function createBotLinkHost(deps: BotLinkHostDeps) {
   const { store } = deps;
@@ -134,9 +137,11 @@ export function createBotLinkHost(deps: BotLinkHostDeps) {
   });
   const dialer = createDialer({ link, log: deps.log });
   let stopWatching: (() => void) | undefined, upkeep: NodeJS.Timeout | undefined;
-  /** While the link is on: bot changes reach the other places, and old records and stray file bytes are cleared hourly. */
+  /** While the link is on: bot changes reach the other places, and old records and stray file bytes are cleared hourly.
+   * Every change to a bot can change what the other places are told (a bot made, renamed, hidden, moved, its look, model
+   * or level); the link tells them once changes settle, and only what did change. */
   const watch = () => {
-    stopWatching ??= store.onChange((change) => { if (change.type.startsWith("bot.")) link.botsChanged(); });
+    stopWatching ??= store.onChange((change) => { if (link.on() && (change.type === "bot" || change.type === "bot.deleted" || change.type === "bots.order")) link.botsChanged(); });
     watchRooms();
     if (upkeep) return;
     upkeep = setInterval(() => link.tidy(), 60 * 60_000);
@@ -185,6 +190,13 @@ export function createBotLinkHost(deps: BotLinkHostDeps) {
   }
   return {
     link, routes, rooms, sourceProblem, requireLocalSender, localBatchProblem, reviewLocalBatch,
+    /** Why no bot here has the name a bot asked for, past "no such bot". With the link on, the other places' bots it can
+     * reach are listed and nothing says another place cannot be reached; a team, which the link never joins, is named as
+     * before. Off: what the person's app said of their other places, as always. */
+    explain(name: string, places: Pick<PlacesElsewhere, "explain" | "kindOf">): Explained {
+      if (!link.on() || places.kindOf(name) === "team") return places.explain(name);
+      return { hint: link.reachableElsewhere() };
+    },
     coordinate(call: CoordinateBotsCall, context: Omit<CoordinateContext, "problem" | "approveLinked">,
       requireActive: () => void, local: Parameters<typeof link.coordinate>[2]) {
       const { botId, threadId } = context.address;
