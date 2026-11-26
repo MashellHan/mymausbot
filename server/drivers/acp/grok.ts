@@ -14,7 +14,6 @@ import { LiveSwitchRefused } from "./driver-hooks.ts";
 import { AcpReportedFailure } from "./failure-words.ts";
 import { grokLoginCheck } from "./grok-sign-in.ts";
 import { GROK_CANCEL_META, GROK_INITIALIZE_META, GROK_PROMPT_COMPLETION, grokPromptOutcome, grokReportedFailure as grokRateLimitFailure } from "./grok-signals.ts";
-import type { AcpPromptSteer } from "./steer.ts";
 import { bundledEngineCatalog } from "../../model-manifest/bundled.ts";
 import { currentEngineCatalog } from "../../model-manifest/manifest.ts";
 import { ENGINE_MODEL_ID } from "../../model-manifest/schema.ts";

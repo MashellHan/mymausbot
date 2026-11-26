@@ -909,17 +909,6 @@ function gatedPrompt(msg: any) {
   }, 50);
 }
 
-/** OpenCode's `_session/steering`: promptRequired when no turn runs; FAKE_ACP_STEER_FAIL=rpc answers a JSON-RPC error. */
-function sessionSteering(msg: any) {
-  if (process.env.FAKE_ACP_STEER_FAIL === "rpc") {
-    out({ jsonrpc: "2.0", id: msg.id, error: { code: -32603, message: "unsupported_control" } });
-    return;
-  }
-  if (!gatedTurn) return result(msg.id, { outcome: "promptRequired" });
-  const prompt = Array.isArray(msg.params?.prompt) ? msg.params.prompt : [];
-  gatedTurn.steers.push(prompt.map((block: any) => block?.text ?? "").join(""));
-  result(msg.id, { outcome: "steered" });
-}
 let hermesTurn: { steers: string[] } | null = null;
 /** hermes-agent's prompt, `/steer` included, as acp_adapter/server.py and commands.py answer them. */
 function hermesPrompt(msg: any) {
