@@ -29,6 +29,7 @@ function subscribe(watch: () => void) {
 /** The Apps pop-up, opened from inside a bot: an app connected there goes to that bot even if its apps were off. */
 export function connectAppFromBot(dispatch: (action: Action) => void, botId: string) {
   connectingFromBot = botId;
+  tell();
   dispatch({ type: "toggleSettings", open: false });
   dispatch({ type: "togglePlugins", open: true, surface: "apps" });
 }
@@ -83,12 +84,19 @@ function connectedAppSlugs(status: Record<string, ConnectorStatus>, emailConnect
 export function useAppGrants({ status, emailConnected, inventoryReady }: { status: Record<string, ConnectorStatus>; emailConnected: boolean | null; inventoryReady: boolean }) {
   const { state, dispatch } = useStore();
   const admin = useOwnerOrAdmin();
-  const [startingBot] = useState(takeConnectingBot);
+  const [startingBot, setStartingBot] = useState(takeConnectingBot);
+  const handedBot = useSyncExternalStore(subscribe, () => connectingFromBot, () => null);
   const [changing, setChanging] = useState<string | null>(null);
   const requested = useSyncExternalStore(subscribe, () => changeRequested, () => null);
   const bots = botsForApps(state.bots, state.instances);
   const canChange = admin === true && inventoryReady && bots.length > 0;
   const allowed = state.config?.managedPolicy?.apps;
+
+  useEffect(() => {
+    if (!handedBot) return;
+    setStartingBot(takeConnectingBot());
+    tell();
+  }, [handedBot]);
 
   useEffect(() => {
     if (!requested) return;
@@ -106,12 +114,15 @@ export function useAppGrants({ status, emailConnected, inventoryReady }: { statu
 
   const appConnected = useCallback((slug: string, app: string) => {
     const now = latest.current;
+    const fromBot = now.startingBot;
+    now.startingBot = null;
+    setStartingBot(null);
     if (now.admin !== true || !now.bots.length) return;
     if (now.allowed && !now.allowed.allowAll && !now.allowed.allowlist.includes(slug)) return;
     let using = 0;
     for (const bot of now.bots) {
       if (botAppScope(bot, slug) !== null) using += 1;
-      else if (bot.composio !== false || bot.id === now.startingBot) {
+      else if (bot.composio !== false || bot.id === fromBot) {
         now.write(bot, slug, true);
         using += 1;
       }

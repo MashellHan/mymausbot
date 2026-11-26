@@ -3242,7 +3242,7 @@
   "people.today": "Bugün",
   "people.turns": "Bu ay {turns} tur",
   "permissions.approval.draftHanded": "Yeni botun konuları, rutinleri ve ona aktarılan işler için varsayılan.",
-  "permissions.approval.helpHanded": "Yeni konular, rutinler ve ona aktarılan işler için varsayılan. Tam erişim ayrıca mevcut tüm konulara hemen uygulanır. Geçerli düzeyi o konuşmaya uygulamak için bir konuda İzinleri yenile'yi kullanın.",
+  "permissions.approval.helpHanded": "Yeni konular, rutinler ve ona aktarılan işler için varsayılan. Onay iste ve Tam erişim ayrıca mevcut tüm konulara hemen uygulanır.",
   "permissions.peers.everyone": "Her botla konuşmasına izin ver",
   "permissions.peers.limited": "Yalnızca {names} ile konuşacak şekilde ayarlı.",
   "permissions.peers.none": "Başka botlarla konuşmayacak şekilde ayarlı.",
