@@ -4745,7 +4745,7 @@
   "people.turns": "今月 {turns} ターン",
   "permissions.approval.applyFull": "すべてのスレッドにフルアクセスを適用",
   "permissions.approval.draftHanded": "新しいボットのスレッド、ルーティン、このボットに任された作業の既定値です。",
-  "permissions.approval.helpHanded": "新しいスレッド、ルーティン、このボットに任された作業の既定値です。フルアクセスは、既存のすべてのスレッドにも即座に適用されます。現在のレベルを特定の会話に適用するには、そのスレッドで「権限を更新」を使用してください。",
+  "permissions.approval.helpHanded": "新しいスレッド、ルーティン、このボットに任された作業の既定値です。「承認を求める」と「フルアクセス」は、既存のすべてのスレッドにも即座に適用されます。",
   "permissions.approval.title": "承認レベル",
   "permissions.cannotCoordinate": "このモデルは他のボットに連絡できません",
   "permissions.chief.active": "このボットは{section}の主な窓口です。この部署内でスペシャリストを作成・調整し、その成果をまとめて1つの回答にします。",

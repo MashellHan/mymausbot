@@ -3242,7 +3242,7 @@
   "people.today": "Hôm nay",
   "people.turns": "{turns} lượt trong tháng này",
   "permissions.approval.draftHanded": "Mặc định cho các luồng, tác vụ định kỳ của bot mới và việc được giao cho bot.",
-  "permissions.approval.helpHanded": "Mặc định cho các luồng mới, tác vụ định kỳ và việc được giao cho bot. Toàn quyền truy cập cũng áp dụng ngay cho mọi luồng hiện có. Dùng Làm mới quyền trên một luồng để áp dụng mức hiện tại cho cuộc trò chuyện đó.",
+  "permissions.approval.helpHanded": "Mặc định cho các luồng mới, tác vụ định kỳ và việc được giao cho bot. Hỏi trước khi phê duyệt và Toàn quyền truy cập cũng áp dụng ngay cho mọi luồng hiện có.",
   "permissions.peers.everyone": "Cho phép nói chuyện với mọi bot",
   "permissions.peers.limited": "Được thiết lập để chỉ nói chuyện với {names}.",
   "permissions.peers.none": "Được thiết lập để không nói chuyện với bot khác.",

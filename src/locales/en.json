@@ -7156,7 +7156,7 @@
   "people.turns": "{turns} turns this month",
   "permissions.approval.applyFull": "Apply Full access to all threads",
   "permissions.approval.draftHanded": "Default for the new bot's threads, routines and work handed to it.",
-  "permissions.approval.helpHanded": "Default for new threads, routines and work handed to it. Full access also applies at once to every existing thread. Use Refresh permissions on a thread to apply the current level to that conversation.",
+  "permissions.approval.helpHanded": "Default for new threads, routines and work handed to it. Ask for approval and Full access also apply at once to every existing thread.",
   "permissions.approval.title": "Approval level",
   "permissions.cannotCoordinate": "This model cannot contact other bots",
   "permissions.chief.active": "This is the primary contact for {section}. It can create and coordinate specialists in this department, then combine their work into one answer.",
