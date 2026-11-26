@@ -962,4 +962,138 @@ describe("inline overview model settings", () => {
     expect([...models.options].find((option) => option.textContent === "Local")!.disabled).toBe(false);
     expect(fixture.dispatch).not.toHaveBeenCalled();
   });
+
+  it("groups Codex, pi, OpenCode and Antigravity under one loopback provider with stable label, variants and context windows", async () => {
+    const group = "loopback:fedcba9876543210";
+    const piModel: Option = {
+      id: "raven/gpt-6.1-sol", label: "GPT 6.1 Sol", custom: true, contextWindow: 1_050_000,
+      effortLevels: ["high"],
+      providerRoute: { id: "local:raven", connectionGroup: group, label: "raven", provenance: "local" },
+    };
+    const agyModel: Option = {
+      id: "gemini-4-neon", label: "Gemini 4 Neon", custom: true, contextWindow: 1_048_576,
+      variants: [
+        { id: "low", label: "Low" },
+        { id: "medium", label: "Medium" },
+        { id: "high", label: "High" },
+        { id: "extra", label: "Extra" },
+      ],
+      providerRoute: { id: "local:antigravity", connectionGroup: group, label: "Antigravity (Local)", provenance: "local" },
+    };
+    const openCodeModel: Option = {
+      id: "raven/gemini-4-neon", label: "Gemini 4 Neon", custom: true, contextWindow: 1_048_576,
+      variants: [{ id: "low", label: "Low" }, { id: "high", label: "High" }],
+      providerRoute: { id: "configured:raven", connectionGroup: group, label: "Raven", provenance: "configured" },
+    };
+    const codexModel: Option = {
+      id: "raven::gpt-6.1-sol", label: "GPT 6.1 Sol", custom: true, contextWindow: 1_050_000,
+      effortLevels: ["high", "xhigh"],
+      providerRoute: { id: "local:raven", connectionGroup: group, label: "Raven (Local)", provenance: "local" },
+    };
+    fixture.instances = [
+      { ...claude([piModel]), instanceId: "pi", driverKind: "piAgent", displayName: "pi", capabilities: { effortLevels: ["low", "high"] } },
+      { ...claude([agyModel]), instanceId: "antigravity", driverKind: "antigravityAgent", displayName: "Antigravity", capabilities: { modelVariants: true } },
+      { ...claude([openCodeModel]), instanceId: "opencode", driverKind: "opencodeGo", displayName: "OpenCode", capabilities: { modelVariants: true, configurableContextWindow: true } },
+      { ...claude([codexModel]), instanceId: "codex", driverKind: "codex", displayName: "Codex", capabilities: { effortLevels: ["low", "high", "xhigh"], configurableContextWindow: true } },
+    ];
+    let bot: Bot = { ...scout(), modelSelection: { instanceId: "codex", model: codexModel.id, effort: "xhigh", contextWindowTokens: 256_000 } };
+    render(bot, options);
+    await settle();
+
+    expect([...select("Provider").options].map((option) => option.textContent)).toEqual(["Raven (Local)"]);
+    expect(select("Model type").disabled).toBe(false);
+    expect([...select("Model type").options].map((option) => [option.value, option.textContent])).toEqual([
+      ["piAgent", "pi"],
+      ["antigravityAgent", "Antigravity"],
+      ["opencodeGo", "OpenCode"],
+      ["codex", "Codex"],
+    ]);
+    expect(select("Model type").value).toBe("codex");
+    expect([...select("Context window").options][0]!.textContent).toBe("Auto (1,050,000)");
+    expect(select("Context window").value).toBe("256000");
+
+    choose(select("Model type"), "opencodeGo");
+    expect(fixture.dispatch).not.toHaveBeenCalled();
+    expect([...select("Choose model").options].map((option) => option.textContent)).toEqual(["Choose model", "Gemini 4 Neon"]);
+    choose(select("Choose model"), JSON.stringify(["opencode", openCodeModel.id]));
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({
+      type: "setModel",
+      selection: { instanceId: "opencode", model: openCodeModel.id },
+    }));
+
+    bot = { ...bot, modelSelection: { instanceId: "opencode", model: openCodeModel.id } };
+    render(bot, options);
+    await settle();
+    expect(select("Model type").value).toBe("opencodeGo");
+    expect([...select("Reasoning variant").options].map((option) => option.textContent)).toEqual(["Use session setting", "Low", "High"]);
+    expect(host.querySelector("[data-model-context-window]")).not.toBeNull();
+    expect(host.querySelector("[data-context-window-readonly]")).toBeNull();
+    expect([...select("Context window").options].map((option) => option.textContent)).toEqual([
+      "Auto (1,048,576)", "32,000", "64,000", "128,000", "256,000", "512,000", "1,000,000",
+    ]);
+    choose(select("Reasoning variant"), "1");
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({
+      type: "setModel",
+      selection: { instanceId: "opencode", model: openCodeModel.id, variant: "high" },
+    }));
+    bot = { ...bot, modelSelection: { instanceId: "opencode", model: openCodeModel.id, variant: "high" } };
+    render(bot, options);
+    choose(select("Context window"), "256000");
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({
+      type: "setModel",
+      selection: { instanceId: "opencode", model: openCodeModel.id, variant: "high", contextWindowTokens: 256_000 },
+    }));
+    bot = { ...bot, modelSelection: { instanceId: "opencode", model: openCodeModel.id, variant: "high", contextWindowTokens: 256_000 } };
+    render(bot, options);
+    fixture.dispatch.mockClear();
+
+    choose(select("Model type"), "antigravityAgent");
+    expect(fixture.dispatch).not.toHaveBeenCalled();
+    expect([...select("Choose model").options].map((option) => option.textContent)).toEqual(["Choose model", "Gemini 4 Neon"]);
+    choose(select("Choose model"), JSON.stringify(["antigravity", agyModel.id]));
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({
+      type: "setModel",
+      selection: { instanceId: "antigravity", model: agyModel.id },
+    }));
+
+    bot = { ...bot, modelSelection: { instanceId: "antigravity", model: agyModel.id } };
+    render(bot, options);
+    await settle();
+    expect(select("Model type").value).toBe("antigravityAgent");
+    expect([...select("Reasoning variant").options].map((option) => option.textContent)).toEqual([
+      "Use session setting", "Low", "Medium", "High", "Extra",
+    ]);
+    expect(host.querySelector("[data-model-context-window]")).toBeNull();
+    expect(select("Context window")).toBeNull();
+    const readOnlyContext = host.querySelector("[data-context-window-readonly]")!;
+    const contextOutput = readOnlyContext.querySelector("output")!;
+    const contextLabelId = contextOutput.getAttribute("aria-labelledby");
+    expect(contextLabelId).toBeTruthy();
+    expect(document.getElementById(contextLabelId!)?.textContent).toBe("Context window");
+    expect(contextOutput.textContent).toBe("1,048,576");
+
+    choose(select("Model type"), "piAgent");
+    choose(select("Choose model"), JSON.stringify(["pi", piModel.id]));
+    bot = { ...bot, modelSelection: { instanceId: "pi", model: piModel.id } };
+    render(bot, options);
+    await settle();
+    expect([...select("Reasoning effort").options].map((option) => option.value)).toEqual(["", "high"]);
+    expect(host.querySelector("[data-model-context-window]")).toBeNull();
+    expect(host.querySelector("[data-context-window-readonly] output")?.textContent).toBe("1,050,000");
+  });
+
+  it("prefers a non-Antigravity configured label over a generic Antigravity label in a shared group", async () => {
+    const group = "loopback:1111222233334444";
+    fixture.instances = [
+      { ...claude([{ id: "gemini-4-neon", label: "Gemini 4 Neon", custom: true,
+        providerRoute: { id: "local:antigravity", connectionGroup: group, label: "Antigravity (Local)", provenance: "local" } }]),
+        instanceId: "antigravity", driverKind: "antigravityAgent", displayName: "Antigravity", capabilities: { modelVariants: true } },
+      { ...claude([{ id: "raven/gemini-4-neon", label: "Gemini 4 Neon", custom: true,
+        providerRoute: { id: "configured:raven", connectionGroup: group, label: "Raven", provenance: "configured" } }]),
+        instanceId: "opencode", driverKind: "opencodeGo", displayName: "OpenCode", capabilities: { modelVariants: true } },
+    ];
+    render({ ...scout(), modelSelection: { instanceId: "antigravity", model: "gemini-4-neon" } }, options);
+    await settle();
+    expect([...select("Provider").options].map((option) => option.textContent)).toEqual(["Raven"]);
+  });
 });

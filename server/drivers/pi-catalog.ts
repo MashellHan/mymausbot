@@ -1,6 +1,6 @@
 import { EFFORT_LEVELS, type EffortLevel } from "../../shared/model-selection.ts";
 import type { ModelCatalog } from "../contracts.ts";
-import { configuredProviderRoute } from "../model-provider-routes.ts";
+import { configuredProviderRoute, loopbackOriginTag } from "../model-provider-routes.ts";
 
 export function piThinkingLevel(effort: EffortLevel): (typeof EFFORT_LEVELS)[number] | "off" {
   return effort === "none" ? "off" : effort;
@@ -11,6 +11,7 @@ interface PiModelEntry {
   id: string;
   name?: string;
   baseUrl?: string;
+  contextWindow?: number;
   reasoning?: boolean;
   thinkingLevelMap?: Partial<Record<ReturnType<typeof piThinkingLevel>, string | null>>;
 }
@@ -29,10 +30,17 @@ export function piCatalogFromFrame(frame: unknown, fallbackDefault: string): Mod
   for (const m of res.data?.models ?? []) {
     if (typeof m?.provider !== "string" || !m.provider || typeof m.id !== "string" || !m.id) continue;
     const id = `${m.provider}/${m.id}`;
+    const contextWindow = typeof m.contextWindow === "number" && Number.isFinite(m.contextWindow) && m.contextWindow > 0
+      ? Math.floor(m.contextWindow)
+      : undefined;
     const effortLevels = typeof m.reasoning === "boolean" ? piModelEffortLevels(m) : undefined;
+    const hasBaseUrl = typeof m.baseUrl === "string" && m.baseUrl.length > 0;
+    const loopbackOrigin = hasBaseUrl ? loopbackOriginTag(m.baseUrl) : undefined;
     options.push({
       id, label: typeof m.name === "string" ? m.name : m.id, custom: true, provider: m.provider,
-      ...(typeof m.baseUrl === "string" && m.baseUrl ? { providerRoute: configuredProviderRoute(m.provider, m.provider, m.baseUrl) } : {}),
+      ...(hasBaseUrl ? { providerRoute: configuredProviderRoute(m.provider, m.provider, m.baseUrl) } : {}),
+      ...(loopbackOrigin ? { loopbackOrigin } : {}),
+      ...(contextWindow ? { contextWindow } : {}),
       ...(effortLevels ? { effortLevels } : {}),
     });
   }

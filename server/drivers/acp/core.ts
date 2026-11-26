@@ -57,7 +57,7 @@ import type {
 } from "../../contracts.ts";
 import { newEventId, newId, TurnNotStartedError } from "../../contracts.ts";
 import { augmentedPath } from "../../env-path.ts";
-import { supportsApprovalMode } from "../../../shared/approval-mode.ts";
+import { supportsApprovalMode } from "../../../shared/approval-mode.ts"; import { requestedContextWindowSchema } from "../../model-selection-schema.ts";
 import { MAX_QUESTION_TEXT, parseAskQuestions, parseChoices, questionAnswersByQuestion } from "../../../shared/ask-question.ts";
 
 import { appendNative } from "../native.ts";
@@ -110,7 +110,7 @@ export interface AcpSupport extends AcpDriverHooks {
    * runs before any session exists. */
   effortLevels?: readonly EffortLevel[];
   /** Discover and select opaque model variants through ACP config options. */
-  modelVariants?: boolean;
+  modelVariants?: boolean; configurableContextWindow?: boolean;
   /** Default CLI binary name if the instance config doesn't override it. */
   defaultCli: string;
   /** Optional live model catalog; a failed lookup keeps the last usable one. `config` lets a support ask the binary it will
@@ -214,7 +214,7 @@ export interface AcpSupport extends AcpDriverHooks {
   /** Mutate the child env once the turn model is known; catalog refresh and snapshot see only `transformEnv`. */
   applyTurnEnv?(
     env: Record<string, string | undefined>,
-    ctx: { model?: string; requestedModel?: string; fullAuto: boolean; botId?: string; cwd: string; toolScope?: SendTurnInput["toolScope"]; threadId: string; mcpServers: AcpMcpServer[] },
+    ctx: { model?: string; requestedModel?: string; contextWindowTokens?: number; fullAuto: boolean; botId?: string; cwd: string; toolScope?: SendTurnInput["toolScope"]; threadId: string; mcpServers: AcpMcpServer[] },
   ): void;
   /** The authenticate methodId from initialize's authMethods; null skips authenticate. */
   pickAuthMethod(authMethods: Array<{ id?: string }>, env: Record<string, string | undefined>): string | null;
@@ -963,6 +963,10 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         if (narrowsNativeTools(turn.toolScope) && !support.toolScopeSessionParams) {
           throw new Error(`${support.displayName}: native tool selection is not supported by this engine. Keep native:* in the selection or choose a supported engine.`);
         }
+        if (turn.contextWindowTokens !== undefined) {
+          if (!requestedContextWindowSchema.safeParse(turn.contextWindowTokens).success) throw new Error("The requested context window is invalid.");
+          if (support.configurableContextWindow !== true) throw new Error(`${support.displayName} does not support setting a context window.`);
+        }
         const { threadId } = turn;
         if (active.has(threadId)) throw new Error("a turn is already running on this thread");
         const turnConfig = turn.approvalMode === undefined
@@ -975,10 +979,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         const turnId = retryOf ?? newId();
         const cwd = turn.cwd ?? turnConfig.workspace ?? homedir();
         const env = childEnv(turnConfig);
-        if (
-          support.requireAuthenticationBeforeSpawn
-          && !skipSubscriptionAuthForLocalInject(turn.model)
-        ) {
+        if (support.requireAuthenticationBeforeSpawn && !skipSubscriptionAuthForLocalInject(turn.model)) {
           const authenticated = await support.isAuthenticated(env, turnConfig, instanceId, instanceEnvNames(input.environment, env));
           requireRunning();
           if (!authenticated) {
@@ -993,13 +994,10 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         const mcpServers = acpMcpServers(turn, { http: loopbackUnproxied(env, support.ownMcpOverHttp === true || acpOwnMcpOverHttp(instanceId, support.mcpServersFromLaunch === true)), engine: support.driverKind,
           toolBudget: mcpToolBudget(learnedToolCountLimit(toolLimitKey), support.engineTools ?? 32) });
         support.applyTurnEnv?.(env, {
-          model: resolvedModel, requestedModel: turn.model, fullAuto: turnConfig.fullAuto === true, botId: turn.botId, cwd, toolScope: turn.toolScope,
+          model: resolvedModel, requestedModel: turn.model, contextWindowTokens: turn.contextWindowTokens, fullAuto: turnConfig.fullAuto === true, botId: turn.botId, cwd, toolScope: turn.toolScope,
           threadId, mcpServers,
         });
-        let cliTurn =
-          resolvedModel !== undefined && resolvedModel !== turn.model
-            ? { ...turn, model: resolvedModel }
-            : turn;
+        let cliTurn = resolvedModel !== undefined && resolvedModel !== turn.model ? { ...turn, model: resolvedModel } : turn;
         let launch: { command: string; args?: string[]; env?: Record<string, string | undefined>; ro?: readonly string[] };
         try {
           launch = support.resolveCommand
@@ -1613,7 +1611,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         snapshot,
         adapter: {
           provider: DRIVER_KIND,
-          capabilities: acpCapabilities(support),
+          capabilities: { ...acpCapabilities(support), ...(support.configurableContextWindow === true ? { configurableContextWindow: true } : {}) },
           sendTurn,
           interruptTurn: async (threadId) => active.get(threadId)?.interrupt(),
           ...(support.steer ? { steer: async (threadId: string, text: string, images?: readonly TurnImageInput[]) =>

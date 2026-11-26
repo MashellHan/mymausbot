@@ -9,6 +9,7 @@ import { TurnNotStartedError, type ProviderInstance } from "../contracts.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import * as procs from "../procs.ts";
+import { configuredLoopbackOriginRoute, loopbackOriginTag } from "../model-provider-routes.ts";
 import { botBox } from "../bot-box/box.ts";
 import { dialRelay, openBoxRelay } from "../bot-box/relay.ts";
 import * as envPath from "../env-path.ts";
@@ -1421,4 +1422,368 @@ describe("Antigravity driver over shared ACP", () => {
     });
     expect(await recorder.until((event) => event.type === "turn.completed")).toMatchObject({ ok: true });
   });
+});
+
+describe("local agy CLI support", () => {
+  let instance: ProviderInstance | null = null;
+  let recorder: EventRecorder | null = null;
+
+  afterEach(async () => {
+    recorder?.stop();
+    await instance?.dispose();
+    instance = null;
+    recorder = null;
+  });
+
+  function createFakeLocalAgy(dir: string, scriptBody: string): string {
+    if (process.platform === "win32") {
+      const target = join(dir, "agy-impl.mjs");
+      const cmd = join(dir, "agy.cmd");
+      writeFileSync(target, scriptBody);
+      writeFileSync(cmd, `@echo off\r\n"${process.execPath}" "${target}" %*\r\n`);
+      return cmd;
+    }
+    const agy = join(dir, "agy");
+    writeFileSync(agy, `#!/usr/bin/env node\n${scriptBody}`);
+    chmodSync(agy, 0o755);
+    return agy;
+  }
+
+  it("maps permission modes for both official and local agy 1.5.14 mode sets", () => {
+    const official = ["default", "auto_edit", "yolo"];
+    expect(antigravityPermissionMode(false, "ask", official)).toBe("default");
+    expect(antigravityPermissionMode(false, "edits", official)).toBe("auto_edit");
+    expect(antigravityPermissionMode(false, "full", official)).toBe("yolo");
+    expect(antigravityPermissionMode(true, undefined, official)).toBe("yolo");
+
+    const local = ["default", "accept-edits", "plan"];
+    expect(antigravityPermissionMode(false, "ask", local)).toBe("default");
+    expect(antigravityPermissionMode(false, "auto", local)).toBe("default");
+    expect(antigravityPermissionMode(false, "edits", local)).toBe("accept-edits");
+    expect(antigravityPermissionMode(false, "full", local)).toBe("accept-edits");
+    expect(antigravityPermissionMode(true, undefined, local)).toBe("accept-edits");
+  });
+
+  it("prepares local-cli profiles without overwriting GEMINI_HOME or stripping local API config", async () => {
+    const root = mkdtempSync(join(tmpdir(), "omb-agy-local-profile-"));
+    scratch.push(root);
+    const runtime = {
+      executablePath: join(root, "agy"),
+      harnessPath: "",
+      source: "local-cli" as const,
+      version: null,
+      localBaseUrl: "http://127.0.0.1:7024",
+      modelContextWindows: new Map([["gemini-4-neon", 1048576]]),
+    };
+    const profileDir = join(root, "profile");
+    const profile = await prepareAntigravityProfile({
+      instanceId: "local-agy-profile",
+      runtime,
+      profileDirectory: profileDir,
+      baseEnv: {
+        HOME: root,
+        GEMINI_API_KEY: "synthetic-local-key",
+        GOOGLE_GEMINI_BASE_URL: "http://127.0.0.1:7024",
+        AGY_RAVEN_BASE_URL: "http://127.0.0.1:7024",
+        AGY_ACP_FORCE_FILE_STORAGE: "1",
+        ELECTRON_RUN_AS_NODE: "1",
+        CHROME_CRASHPAD_PIPE_NAME: "stale-pipe",
+        OMB_LICENSE_KEY: "must-strip",
+        OMB_GEMINI_API_KEY: "must-strip",
+      },
+    });
+    expect(profile.localCli).toBe(true);
+    expect(existsSync(join(profileDir, "omb-skills"))).toBe(true);
+    expect(existsSync(join(profileDir, "antigravity-acp", "settings.json"))).toBe(false);
+    expect(profile.environment.GEMINI_HOME).toBeUndefined();
+    expect(profile.environment.GEMINI_API_KEY).toBe("synthetic-local-key");
+    expect(profile.environment.GOOGLE_GEMINI_BASE_URL).toBe("http://127.0.0.1:7024");
+    expect(profile.environment.AGY_RAVEN_BASE_URL).toBe("http://127.0.0.1:7024");
+    expect(profile.environment.AGY_ACP_FORCE_FILE_STORAGE).toBeUndefined();
+    expect(profile.environment.ELECTRON_RUN_AS_NODE).toBeUndefined();
+    expect(profile.environment.CHROME_CRASHPAD_PIPE_NAME).toBeUndefined();
+    expect(profile.environment.OMB_LICENSE_KEY).toBeUndefined();
+    expect(profile.environment.OMB_GEMINI_API_KEY).toBeUndefined();
+    expect(await antigravityProfileAuthenticated(profile)).toBe(true);
+  });
+
+  it("probes local agy models without OAuth, attaching loopback providerRoute and contextWindow", async () => {
+    const root = mkdtempSync(join(tmpdir(), "omb-agy-local-probe-"));
+    scratch.push(root);
+    const bin = join(root, "bin");
+    const home = join(root, "home");
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(join(home, ".gemini", "antigravity-cli"), { recursive: true });
+    writeFileSync(join(home, ".gemini", ".env"), 'GEMINI_API_KEY="synthetic"\nGOOGLE_GEMINI_BASE_URL="http://127.0.0.1:7024"\n');
+    writeFileSync(join(home, ".gemini", "antigravity-cli", "settings.json"), JSON.stringify({
+      customModelsConfig: {
+        customModels: {
+          "gemini-4-neon-1m": {
+            maxTokens: 1048576,
+            modelName: "gemini-api://127.0.0.1:7024/models/gemini-4-neon",
+          },
+        },
+      },
+    }));
+
+    const argvFile = join(root, "argv.json");
+    createFakeLocalAgy(bin, `
+      import { writeFileSync } from "node:fs";
+      import { createInterface } from "node:readline";
+      writeFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(2)));
+      let model = "gemini-4-neon";
+      const levels = {
+        "gemini-4-neon": [{ value: "medium", name: "Medium" }, { value: "high", name: "High" }],
+        "gemini-3.8-flash": [{ value: "low", name: "Low" }, { value: "high", name: "High" }],
+      };
+      const options = () => [
+        {
+          id: "model",
+          type: "select",
+          currentValue: model,
+          options: [
+            { value: "gemini-4-neon", name: "Gemini 4 Neon" },
+            { value: "gemini-3.8-flash", name: "Gemini 3.8 Flash" },
+          ],
+        },
+        {
+          id: "thought_level",
+          category: "thought_level",
+          type: "select",
+          currentValue: "high",
+          options: levels[model],
+        },
+      ];
+      const reply = (id, body) => console.log(JSON.stringify({ jsonrpc: "2.0", id, ...body }));
+      createInterface({ input: process.stdin }).on("line", (line) => {
+        const msg = JSON.parse(line);
+        if (msg.method === "initialize") {
+          reply(msg.id, { result: { protocolVersion: 1, agentInfo: { name: "antigravity-acp", version: "1.5.14" }, authMethods: [{ id: "oauth-personal" }] } });
+        } else if (msg.method === "authenticate") {
+          reply(msg.id, { error: { code: -32601, message: "local agy must not call authenticate" } });
+        } else if (msg.method === "session/new") {
+          reply(msg.id, { result: { sessionId: "local-probe", configOptions: options() } });
+        } else if (msg.method === "session/set_config_option" && msg.params?.configId === "model") {
+          model = msg.params.value;
+          reply(msg.id, { result: { configOptions: options() } });
+        } else {
+          reply(msg.id, { result: {} });
+        }
+      });
+    `);
+
+    const env = { PATH: `${bin}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`, HOME: home };
+    const runtime = await resolveAntigravityRuntime("agy", env, join(root, "data"));
+    expect(runtime.source).toBe("local-cli");
+    const profile = await prepareAntigravityProfile({ instanceId: "local-probe", runtime, baseEnv: env, baseDir: join(root, "data") });
+    const catalog = await probeAntigravityModels({ runtime, profile, fallbackDefault: "gemini-3.8-flash" });
+
+    expect(JSON.parse(readFileSync(argvFile, "utf8"))).toEqual(["acp"]);
+    const expectedRoute = configuredLoopbackOriginRoute("Antigravity (Local)", "http://127.0.0.1:7024");
+    const expectedOrigin = loopbackOriginTag("http://127.0.0.1:7024", true);
+    expect(expectedRoute).toBeDefined();
+    expect(expectedOrigin).toBeDefined();
+    expect(catalog).toEqual({
+      default: "gemini-3.8-flash",
+      options: [
+        {
+          id: "gemini-4-neon",
+          label: "Gemini 4 Neon",
+          variants: [{ id: "medium", label: "Medium" }, { id: "high", label: "High" }],
+          providerRoute: expectedRoute,
+          loopbackOrigin: expectedOrigin,
+          contextWindow: 1048576,
+        },
+        {
+          id: "gemini-3.8-flash",
+          label: "Gemini 3.8 Flash",
+          variants: [{ id: "low", label: "Low" }, { id: "high", label: "High" }],
+          providerRoute: expectedRoute,
+          loopbackOrigin: expectedOrigin,
+          contextWindow: 1_000_000,
+        },
+      ],
+    });
+  }, 20_000);
+
+  it("fails closed for official runtimes when oauth-personal is absent from authMethods", async () => {
+    ensureDirs();
+    const fake = fakeRuntime();
+    const rpcDump = join(fake.directory, "rpc.json");
+    const instanceId = "antigravity-missing-oauth-method";
+    const tokenDirectory = join(antigravityProfileDirectory(instanceId), "antigravity-acp");
+    mkdirSync(tokenDirectory, { recursive: true });
+    writeFileSync(join(tokenDirectory, "acp_token.json"), "{}", { mode: 0o600 });
+    instance = await AntigravityDriver.create({
+      instanceId,
+      displayName: "Antigravity Official",
+      enabled: true,
+      config: { cli: fake.executable, fullAuto: false },
+      environment: {
+        FAKE_ACP_AUTH_METHOD: "api-key",
+        FAKE_ACP_MODELS: "gemini-3.8-flash",
+        FAKE_ACP_RPC_DUMP: rpcDump,
+      },
+    });
+    await instance.startupModelRefresh;
+    recorder = recordEvents(instance.adapter);
+    const { turnId } = await instance.adapter.sendTurn({
+      threadId: "thread-missing-oauth",
+      text: "hello",
+      model: "gemini-3.8-flash",
+      cwd: fake.directory,
+    });
+    expect(await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId))
+      .toMatchObject({ ok: false });
+    expect(recorder.events).toContainEqual(expect.objectContaining({
+      type: "runtime.error",
+      message: expect.stringContaining("Antigravity needs a Google account — choose Sign in with Google in engine setup"),
+    }));
+    const rpcMethods = existsSync(rpcDump) ? JSON.parse(readFileSync(rpcDump, "utf8")) as string[] : [];
+    expect(rpcMethods).not.toContain("session/prompt");
+  });
+
+  it("rejects startAuthentication cleanly for local-cli without spawning agy", async () => {
+    ensureDirs();
+    const root = mkdtempSync(join(tmpdir(), "omb-agy-local-no-oauth-"));
+    scratch.push(root);
+    const bin = join(root, "bin");
+    const home = join(root, "home");
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(join(home, ".gemini"), { recursive: true });
+    writeFileSync(join(home, ".gemini", ".env"), 'GEMINI_API_KEY="synthetic"\nGOOGLE_GEMINI_BASE_URL="http://127.0.0.1:7024"\n');
+    createFakeLocalAgy(bin, `process.exit(1);`);
+
+    const pathSep = process.platform === "win32" ? ";" : ":";
+    vi.spyOn(envPath, "augmentedPath").mockReturnValue(`${bin}${pathSep}${process.env.PATH ?? ""}`);
+    instance = await AntigravityDriver.create({
+      instanceId: "antigravity-local-no-oauth",
+      displayName: "Antigravity Local",
+      enabled: true,
+      config: { cli: "agy", fullAuto: false },
+      environment: { HOME: home },
+    });
+    await instance.startupModelRefresh;
+
+    const spawned = vi.spyOn(procs, "spawnCli");
+    const authStart = vi.spyOn(AntigravityAuthController.prototype, "start");
+    await expect(instance.startAuthentication!()).rejects.toThrow(
+      "Local Antigravity CLI uses local Gemini API key configuration instead of Google sign-in.",
+    );
+    expect(spawned).not.toHaveBeenCalled();
+    expect(authStart).not.toHaveBeenCalled();
+  });
+
+  it("runs turns against local agy 1.5.14 skipping OAuth and using accept-edits instead of yolo", async () => {
+    ensureDirs();
+    const root = mkdtempSync(join(tmpdir(), "omb-agy-local-driver-"));
+    scratch.push(root);
+    const bin = join(root, "bin");
+    const home = join(root, "home");
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(join(home, ".gemini"), { recursive: true });
+    writeFileSync(join(home, ".gemini", ".env"), 'GEMINI_API_KEY="synthetic"\nGOOGLE_GEMINI_BASE_URL="http://127.0.0.1:7024"\n');
+
+    const logFile = join(root, "rpc-log.json");
+    createFakeLocalAgy(bin, `
+      import { writeFileSync } from "node:fs";
+      import { createInterface } from "node:readline";
+      const log = { argv: process.argv.slice(2), methods: [], modes: [] };
+      const save = () => writeFileSync(${JSON.stringify(logFile)}, JSON.stringify(log));
+      save();
+      let mode = "default";
+      const configOptions = () => [
+        {
+          id: "model",
+          type: "select",
+          currentValue: "gemini-4-neon",
+          options: [{ value: "gemini-4-neon", name: "Gemini 4 Neon" }],
+        },
+        {
+          id: "mode",
+          type: "select",
+          currentValue: mode,
+          options: [
+            { value: "default", name: "Default" },
+            { value: "accept-edits", name: "Accept Edits" },
+            { value: "plan", name: "Plan" },
+          ],
+        },
+      ];
+      const reply = (id, body) => console.log(JSON.stringify({ jsonrpc: "2.0", id, ...body }));
+      createInterface({ input: process.stdin }).on("line", (line) => {
+        const msg = JSON.parse(line);
+        log.methods.push(msg.method);
+        save();
+        if (msg.method === "initialize") {
+          reply(msg.id, { result: { protocolVersion: 1, agentInfo: { name: "antigravity-acp", version: "1.5.14" }, authMethods: [{ id: "oauth-personal" }] } });
+        } else if (msg.method === "authenticate") {
+          reply(msg.id, { error: { code: -32601, message: "unexpected authenticate" } });
+        } else if (msg.method === "session/new") {
+          reply(msg.id, { result: { sessionId: "local-session", configOptions: configOptions() } });
+        } else if (msg.method === "session/set_config_option" && msg.params?.configId === "mode") {
+          if (!["default", "accept-edits", "plan"].includes(msg.params.value)) {
+            reply(msg.id, { error: { code: -32602, message: "Unknown mode: " + msg.params.value } });
+            return;
+          }
+          mode = msg.params.value;
+          log.modes.push(mode);
+          save();
+          reply(msg.id, { result: { configOptions: configOptions() } });
+        } else if (msg.method === "session/prompt") {
+          console.log(JSON.stringify({
+            jsonrpc: "2.0",
+            method: "session/update",
+            params: { sessionId: msg.params.sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "ok:" + mode } } },
+          }));
+          reply(msg.id, { result: { stopReason: "end_turn" } });
+        } else {
+          reply(msg.id, { result: {} });
+        }
+      });
+    `);
+
+    const pathSep = process.platform === "win32" ? ";" : ":";
+    vi.spyOn(envPath, "augmentedPath").mockReturnValue(`${bin}${pathSep}${process.env.PATH ?? ""}`);
+    instance = await AntigravityDriver.create({
+      instanceId: "antigravity-local-cli",
+      displayName: "Antigravity Local",
+      enabled: true,
+      config: { cli: "agy", fullAuto: false },
+      environment: { HOME: home },
+    });
+    await instance.startupModelRefresh;
+
+    expect(await instance.snapshot()).toEqual({
+      state: "available",
+      version: null,
+      authenticated: true,
+    });
+
+    recorder = recordEvents(instance.adapter);
+    const fullTurn = await instance.adapter.sendTurn({
+      threadId: "thread-local-agy",
+      text: "hello",
+      approvalMode: "full",
+      model: "gemini-4-neon",
+      cwd: root,
+    });
+    expect(await recorder.until((event) => event.type === "turn.completed" && event.turnId === fullTurn.turnId))
+      .toMatchObject({ ok: true });
+
+    const askTurn = await instance.adapter.sendTurn({
+      threadId: "thread-local-agy",
+      text: "hello again",
+      approvalMode: "ask",
+      model: "gemini-4-neon",
+      cwd: root,
+    });
+    expect(await recorder.until((event) => event.type === "turn.completed" && event.turnId === askTurn.turnId))
+      .toMatchObject({ ok: true });
+
+    const log = JSON.parse(readFileSync(logFile, "utf8")) as { argv: string[]; methods: string[]; modes: string[] };
+    expect(log.argv).toEqual(["acp"]);
+    expect(log.methods).not.toContain("authenticate");
+    expect(log.modes).toEqual(["accept-edits", "default"]);
+  }, 20_000);
 });

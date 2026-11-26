@@ -25,6 +25,8 @@ import { delimiter, isAbsolute, join, resolve } from "node:path";
 
 import { DATA_DIR, stripWorkspaceCredentialEnv } from "../config.ts";
 import { writeFileAtomic } from "../atomic.ts";
+import { modelContextWindow } from "../model-context-window.ts";
+import { configuredLoopbackOriginRoute, configuredProviderRoute, loopbackOriginTag } from "../model-provider-routes.ts";
 import { killCliTree, spawnCli } from "../procs.ts";
 import type { BoxRelay } from "../bot-box/relay.ts";
 import type { ModelCatalog } from "../contracts.ts";
@@ -61,7 +63,14 @@ export interface AntigravityProfile {
   tokenPath: string;
   environment: NodeJS.ProcessEnv;
   tempDirectory?: string;
+  localCli?: boolean;
 }
+
+const LOCAL_CLI_REMOVED_ENVIRONMENT_KEYS = new Set([
+  "AGY_ACP_FORCE_FILE_STORAGE",
+  "ELECTRON_RUN_AS_NODE",
+  "CHROME_CRASHPAD_PIPE_NAME",
+]);
 
 const REMOVED_ENVIRONMENT_KEYS = new Set([
   "GEMINI_API_KEY",
@@ -237,10 +246,27 @@ export async function prepareAntigravityProfile(input: {
 }): Promise<AntigravityProfile> {
   const directory = resolve(input.profileDirectory ?? antigravityProfileDirectory(input.instanceId, input.baseDir));
   const acpDirectory = join(directory, "antigravity-acp");
-  await mkdir(acpDirectory, { recursive: true, mode: 0o700 });
   const skillsDirectory = join(directory, "omb-skills");
   await mkdir(skillsDirectory, { recursive: true, mode: 0o700 });
   if (!(await lstat(skillsDirectory)).isDirectory()) throw new Error("Antigravity staging path must be a real directory.");
+  if (input.runtime.source === "local-cli") {
+    if (process.platform !== "win32") {
+      const { chmod } = await import("node:fs/promises");
+      await chmod(directory, 0o700);
+    }
+    const environment: NodeJS.ProcessEnv = {};
+    for (const [key, value] of Object.entries(input.baseEnv ?? process.env)) {
+      if (!LOCAL_CLI_REMOVED_ENVIRONMENT_KEYS.has(key.toUpperCase())) environment[key] = value;
+    }
+    stripWorkspaceCredentialEnv(environment);
+    return {
+      directory,
+      tokenPath: join(acpDirectory, "acp_token.json"),
+      environment,
+      localCli: true,
+    };
+  }
+  await mkdir(acpDirectory, { recursive: true, mode: 0o700 });
   if (process.platform !== "win32") {
     const { chmod } = await import("node:fs/promises");
     await chmod(directory, 0o700);
@@ -291,6 +317,7 @@ export async function prepareAntigravityProfile(input: {
 }
 
 export async function antigravityProfileAuthenticated(profile: AntigravityProfile): Promise<boolean> {
+  if (profile.localCli === true) return true;
   try {
     const info = await stat(profile.tokenPath);
     if (!info.isFile() || info.size <= 0 || info.size > 1024 * 1024) return false;
@@ -342,7 +369,9 @@ export class AntigravityAcpClient {
     this.runtimeVersion = runtime.version;
     this.child = spawnCli(
       runtime.executablePath,
-      process.platform === "linux" ? ["--uid="] : [],
+      runtime.source === "local-cli"
+        ? ["acp"]
+        : process.platform === "linux" ? ["--uid="] : [],
       { cwd, env: profile.environment, stdio: ["pipe", "pipe", "pipe"], box: { ro: [join(profile.directory, "omb-skills")], ...(relay ? { relay: relay.socketPath } : {}) } },
       "bot",
     );
@@ -678,7 +707,9 @@ export async function probeAntigravityModels(input: {
   const client = new AntigravityAcpClient(input.runtime, input.profile, input.cwd ?? input.profile.directory);
   try {
     const initialized = await client.initialize(remaining(), deadline);
-    await client.request("authenticate", { methodId: "oauth-personal" }, remaining());
+    if (input.runtime.source !== "local-cli") {
+      await client.request("authenticate", { methodId: "oauth-personal" }, remaining());
+    }
     const session = await client.request(
       "session/new",
       { cwd: input.cwd ?? input.profile.directory, mcpServers: [], ...antigravitySessionSetup(initialized) },
@@ -686,16 +717,41 @@ export async function probeAntigravityModels(input: {
     );
     const catalog = catalogFromAntigravityConfigOptions(session?.configOptions, input.fallbackDefault);
     if (!catalog) throw new Error("Antigravity did not return a model catalog for this Google account.");
+    const enrichCatalog = (discovered: ModelCatalog): ModelCatalog => {
+      if (input.runtime.source !== "local-cli") return discovered;
+      const originRoute = input.runtime.localBaseUrl
+        ? configuredLoopbackOriginRoute("Antigravity (Local)", input.runtime.localBaseUrl)
+        : undefined;
+      const providerRoute = originRoute
+        ?? (input.runtime.localBaseUrl
+          ? configuredProviderRoute("antigravity", "Antigravity (Local)", input.runtime.localBaseUrl)
+          : undefined);
+      const loopbackOrigin = originRoute
+        ? loopbackOriginTag(input.runtime.localBaseUrl, true)
+        : undefined;
+      return {
+        ...discovered,
+        options: discovered.options.map((option) => {
+          const contextWindow = input.runtime.modelContextWindows?.get(option.id) ?? modelContextWindow(option.id);
+          return {
+            ...option,
+            ...(providerRoute ? { providerRoute } : {}),
+            ...(loopbackOrigin ? { loopbackOrigin } : {}),
+            ...(contextWindow && contextWindow > 0 ? { contextWindow } : {}),
+          };
+        }),
+      };
+    };
     const budget = Math.min(VARIANT_SURVEY_MS, deadline - Date.now());
-    if (budget <= 0) return catalog;
+    if (budget <= 0) return enrichCatalog(catalog);
     const surveyed = await surveyModelVariants((method, params) => client.request(method, params, budget), session, budget);
-    return {
+    return enrichCatalog({
       ...catalog,
       options: catalog.options.map((option) => {
         const variants = surveyed.get(option.id);
         return !option.variants?.length && variants?.length ? { ...option, variants } : option;
       }),
-    };
+    });
   } catch (error) {
     if (error instanceof AntigravitySignInRequired) noteAntigravitySignInRequired(input.profile.tokenPath);
     throw error;
