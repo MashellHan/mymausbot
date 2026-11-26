@@ -5,10 +5,9 @@ import type { Message } from "./store.ts";
 
 export interface ConversationAttachment { path: string; name: string }
 
-type Line = Pick<
+type Line = Partial<Pick<Message, "kind">> & Pick<
   Message,
   | "role"
-  | "kind"
   | "text"
   | "attachments"
   | "from"
