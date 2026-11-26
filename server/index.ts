@@ -33,6 +33,8 @@ import { BOT_PROFILE_LIMITS } from "../shared/bot-profile.ts";
 import { CLOUD_COMPUTER_BUSY_ERROR } from "../shared/computer-contention.ts";
 import { failedTurnTool } from "../shared/failed-turn.ts";
 import { assistantTranscript, errorTranscript } from "../shared/client-cancel.ts"; import { PersonStops, stoppedTurnRow } from "./person-stops.ts"; import { LiveTurns } from "./live-turns.ts";
+import { createProgressiveIntakeMeta } from "../shared/progressive-intake.ts";
+import { buildInitialIntakeMeta, classifyBusyIntake, createProgressiveIntakeTracker, extractTurnProgressSummary } from "./progressive-intake.ts";
 import { phonePairingLink } from "../shared/pairing-link.ts"; import { personTagNames, withoutPersonTags } from "../shared/person-mention.ts";
 import { canWorkOnCloud, cloudEngine } from "../shared/cloud-computer.ts";
 import {
@@ -257,6 +259,7 @@ import {
   onSteeredQueueChange,
   queuedSteerSnapshot,
   queuedSteeredMessage,
+  queuedSteerRowIds,
   queuedThreadPosition,
   queueSteeredMessage,
   restoreSteeredMessages,
@@ -4594,7 +4597,8 @@ function settleTrackedRequest(threadId: string, incoming: ReadonlySet<string> = 
   if (!owner?.messageId || owner.stopped || !bot || threadBusy(bot.id, threadId) || coordinator.parkedDirect(threadId)) return;
   const newest = coordinator.newestRoot(threadId, owner.generations);
   if (newest && newest.status !== "completed") return;
-  const path = store.activePath(threadId).filter(message => !incoming.has(message.id));
+  const queuedIds = queuedSteerRowIds(threadId);
+  const path = store.activePath(threadId).filter(message => !incoming.has(message.id) && !queuedIds.has(message.id));
   const source = path.findLast(message => message.role === "user");
   if (source?.id !== owner.messageId || source.requestCancelled || source.requestPending !== true) return;
   const messages = path.slice(path.indexOf(source) + 1);
@@ -4939,7 +4943,7 @@ function requestBehavior(value: unknown): "allow" | "deny" | "answer" | null {
 
 const lastReply = threadMaps.track(new Map<string, string>());
 const stoppedTurns = new Map<string, string | undefined>(), personStops = new PersonStops();
-// The turn each thread runs, from its start to its end, and nothing once the thread is idle: what Stop and the rescue check.
+const progressiveIntake = createProgressiveIntakeTracker(store, threadMaps);
 const liveTurns = new LiveTurns((threadId) => { const owner = store.botByThread(threadId); return owner ? threadBusy(owner.id, threadId) : groupSpeakers.has(threadId); });
 const settlingTurns = new Set<string>();
 const sessionModelByThread = threadMaps.track(new Map<string, string>());
@@ -6401,6 +6405,7 @@ bus.subscribe((event: RuntimeEvent) => {
       turnStartedAt.set(event.threadId, Date.now()); if (bot && !replayed) setupRecovery.started(event);
       // A stop that never saw its turn.completed must not pass for this turn.
       stoppedTurns.delete(event.threadId); personStops.turnStarted(event.threadId, event.turnId);
+      if (bot && event.turnId) progressiveIntake.bindTurnStarted(event.threadId, event.turnId, queuedSteerRowIds(event.threadId), requestOwner?.messageId);
       break;
     case "session.started":
       if (bot && event.sessionId && event.providerInstanceId) {
@@ -6655,6 +6660,7 @@ bus.subscribe((event: RuntimeEvent) => {
     case "runtime.notice": pushMessage({ role: "bot", kind: "activity", tool: { ...runtimeNoticeTool(event), name: `notice: ${event.message.slice(0, 400)}` } }); break;
     case "runtime.error":
       // A turn the person stopped ends quietly, whatever error the stop cut it short with.
+      if (progressiveIntake.matchesRedirectError(event.threadId, event.turnId)) { stoppedTurns.set(event.threadId, event.turnId ?? liveTurnByThread.get(event.threadId)); break; }
       if (errorTranscript(event.message).kind === "stopped" || personStops.stopped(event.threadId, event.turnId)) {
         pushStoppedTurn(event.turnId);
         break;
@@ -6675,10 +6681,11 @@ bus.subscribe((event: RuntimeEvent) => {
       clearInternalTurn(event.threadId);
       const reviewAnswer = reviewAnswerThreads.delete(event.threadId);
       const stoppedTurnId = stoppedTurns.get(event.threadId);
-      const clientStopped = personStops.stopped(event.threadId, completedTurnId) || (stoppedTurns.has(event.threadId)
+      const clientStopped = personStops.stopped(event.threadId, completedTurnId) || progressiveIntake.consumeRedirectStop(event.threadId, completedTurnId) || (stoppedTurns.has(event.threadId)
         && (stoppedTurnId === undefined || completedTurnId === undefined || stoppedTurnId === completedTurnId));
       const stopped = event.stopReason === "interrupted" || clientStopped; if (bot) setupRecovery.completed(bot.id, event, { replayed, stopped });
       landParkedFiles();
+      if (bot) progressiveIntake.settleCompletedTurn(event.threadId, completedTurnId, stopped, queuedSteerRowIds(event.threadId));
       if (completedTurnId) {
         const terminal = store.markTerminalAssistantMessage(event.threadId, completedTurnId);
         if (terminal) store.patchMessage(event.threadId, terminal.id, { turnSucceeded: event.ok });
@@ -7141,6 +7148,7 @@ function drainQueuedSendsNow() {
     // Provider completion can precede its dispatch promise: keep the queue until that exact handshake releases its claim.
     (botId, threadId, head) => threadBusy(botId, threadId) || botAtThreadCapacity(botId, head.peerAsk ? undefined : threadId, Boolean(head.peerAsk)) || roomTurnHolds(activeGroupTurnForBot(botId), threadId, !head.peerAsk)
       || directRootQueued(threadId) || (!head.peerAsk?.incident && parksBehindCoordination(botId, threadId)),
+    { formatPrompt: (input) => progressiveIntake.formatDrainedPrompt(input), onDiscard: (threadId, queueIds) => progressiveIntake.clearRedirectContext(threadId, queueIds) },
   );
 }
 
@@ -7201,16 +7209,7 @@ async function acceptDirectSend(
         if (accepted.kind === "conflict") {
           throw Object.assign(new Error("sendId already belongs to another message"), { status: 409 });
         }
-        if (accepted.kind === "match") {
-          const canonical = {
-            ok: true as const,
-            threadId,
-            message: accepted.message,
-          };
-          return accepted.message.steered
-            ? { ...canonical, steered: true as const }
-            : canonical;
-        }
+        if (accepted.kind === "match") return progressiveIntake.queuedMatchReceipt({ botId, threadId, text, replyToId: replyTo?.id, acceptedMessage: accepted.message, queued: queuedSteeredMessage(botId, threadId, sendId), waitWords: waitWords.queued });
         const queued = queuedSteeredMessage(botId, threadId, sendId);
         if (queued) {
           if (queued.text !== text || queued.replyToId !== replyTo?.id) {
@@ -7242,78 +7241,66 @@ async function acceptDirectSend(
       const planPaused = starterCaps.pausedText(botId, threadLanguage(threadId));
       if (planPaused) throw Object.assign(new Error(planPaused), { status: 409, code: BOT_PAUSED_CODE });
       if (currentAtStart.busy) {
-        const personsOwn = personPresent && !app && (trigger.kind === "user" || trigger.kind === "owner"), queuedPrompt = (app?.context ?? "") + personPrompt(threadId, sender, promptWithReply(promptWithDataContext(text, dataContext), replyTo, userNameFor(threadId))); if (runOwners.arrival(threadId, sender, personPresent && Boolean(sender?.id)) === "queue") return { ok: true as const, queued: true as const, threadId, queueId: queueSteeredMessage(currentAtStart.id, threadId, text, { replyToId: replyTo?.id, sendId, dataContext, fromApp: app?.fromApp, mentions, prompt: queuedPrompt, sender, trigger, via, callId, first: personPresent && Boolean(sender?.id) }).id };
-        const instance = runningTurnInstance(currentAtStart, threadId);
+        const personsOwn = personPresent && !app && (trigger.kind === "user" || trigger.kind === "owner");
+        const queuedPrompt = (app?.context ?? "") + personPrompt(threadId, sender, promptWithReply(promptWithDataContext(text, dataContext), replyTo, userNameFor(threadId)));
+        if (runOwners.arrival(threadId, sender, personPresent && Boolean(sender?.id)) === "queue") {
+          const queued = queueSteeredMessage(currentAtStart.id, threadId, text, { replyToId: replyTo?.id, sendId, dataContext, fromApp: app?.fromApp, mentions, prompt: queuedPrompt, sender, trigger, via, callId, first: personPresent && Boolean(sender?.id) });
+          return { ok: true as const, queued: true as const, threadId, queueId: queued.id };
+        }
+        let instance = runningTurnInstance(currentAtStart, threadId);
         let steered: SteerOutcome = "refused";
-        const steerInput = extractTurnImages(text);
-        const carriesImages = steerInput.images.length > 0;
-        const steerTarget = handoffs.current(threadId);
-        const busyAdmission = admit("direct-busy", {
-          carriesImages,
-          engineCanSteerImages: engineSteersImages(instance),
-          pendingComputerSelection: Boolean(computerSelectionTurns.get(threadId)?.selected),
-          engineCanSteer: Boolean(instance?.adapter.capabilities.queueing && instance.adapter.steer),
-          followUp,
-        });
+        const humanTrigger = trigger.kind === "user" || trigger.kind === "owner";
+        const steerInput = extractTurnImages(text), carriesImages = steerInput.images.length > 0, steerTarget = handoffs.current(threadId), delegatedTargets = !app ? coordinator.outstandingDirect(threadId) : [];
+        const intakeClass = classifyBusyIntake({ text, carriesImages, engineCanSteerImages: engineSteersImages(instance), pendingComputerSelection: Boolean(computerSelectionTurns.get(threadId)?.selected), engineCanSteer: Boolean(instance?.adapter.capabilities.queueing && instance.adapter.steer), followUp, hasActiveDelegation: delegatedTargets.length > 0, fromApp: Boolean(app), allowSoftRedirect: humanTrigger });
+        const activeTurnId = liveTurnByThread.get(threadId);
+        if (intakeClass.allowDelegationForward && delegatedTargets.length > 0 && followUp !== "restart") {
+          const sourceLevel = cloudGuestDriven(threadId) || botApiThread(threadId) ? "ask" : liveApprovalMode(currentAtStart, threadId, false);
+          const forwarded = await questionRouting.forwardDelegated({ parentThreadId: threadId, parentBotId: botId, sourceLevel, targets: delegatedTargets, text, redirect: intakeClass.redirect });
+          const afterForward = store.projectBotForTask(botId, threadId);
+          if (!afterForward) throw Object.assign(new Error("no such bot"), { status: 404 });
+          if (!store.taskByThread(botId, threadId)) throw Object.assign(new Error("the target task no longer exists"), { status: 409 });
+          instance = runningTurnInstance(afterForward, threadId);
+          if (forwarded.delivered) {
+            if (personPresent) clearUnattended(threadId);
+            const message = progressiveIntake.recordUserRow({ store, botId, threadId, text, replyToId: replyTo?.id, sendId, dataContext, app: app?.pointed ? { pointed: app.pointed } : undefined, sender, intake: createProgressiveIntakeMeta({ mode: "delegation-forward", state: "processing", targetTurnId: activeTurnId, workerTurnId: forwarded.outcomes[0]?.threadId }), steered: true, spoken: spokenLineFields(via, callId) });
+            return { ok: true as const, steered: true as const, threadId, message };
+          }
+        }
         // A chosen wait (queue, or restart's Stop) is never cut short by person-first.
-        const chose = busyAdmission.action === "queue" ? busyAdmission.chose : undefined;
-        if (busyAdmission.action === "steer" && instance?.adapter.steer) {
+        const chose = intakeClass.chose;
+        if (intakeClass.mode === "live-steer" && instance?.adapter.steer) {
           const prompt = (app?.context ?? "") + personPrompt(threadId, sender, promptWithReply(promptWithDataContext(steerInput.text, dataContext), replyTo, userNameFor(threadId)));
-          steered = await (steerInput.images.length > 0
-            ? instance.adapter.steer(threadId, prompt, steerInput.images)
-            : instance.adapter.steer(threadId, prompt))
-            .catch((): SteerOutcome => "indeterminate");
+          steered = await (steerInput.images.length > 0 ? instance.adapter.steer(threadId, prompt, steerInput.images) : instance.adapter.steer(threadId, prompt)).catch((): SteerOutcome => "indeterminate");
         }
         // steer() awaits the adapter: re-check ownership before appending, or a late acknowledgement writes into a task the bot no longer owns.
         const current = store.projectBotForTask(botId, threadId);
         if (!current) throw Object.assign(new Error("no such bot"), { status: 404 });
-        if (!store.taskByThread(botId, threadId)) {
-          throw Object.assign(new Error("the target task no longer exists"), { status: 409 });
-        }
+        if (!store.taskByThread(botId, threadId)) throw Object.assign(new Error("the target task no longer exists"), { status: 409 });
         const delivered = steered !== "refused";
         if (delivered) {
-          if (steered === "steered" && !current.busy) {
-            throw Object.assign(
-              new Error("the running turn ended before the steered message could be recorded"),
-              { status: 409 },
-            );
-          }
+          if (steered === "steered" && !current.busy) throw Object.assign(new Error("the running turn ended before the steered message could be recorded"), { status: 409 });
           // "indeterminate" is recorded too: the words may already be in a turn, and a resend could run them twice.
           if (personPresent) clearUnattended(threadId);
-          const message = store.appendMessage(threadId, {
-            role: "user",
-            kind: "text",
-            text,
-            replyToId: replyTo?.id,
-            sendId,
-            ...(dataContext ? { dataContext } : {}), ...(app?.fromApp ? { fromApp: app.fromApp } : {}),
-            steered: true,
-            sender,
-            ...spokenLineFields(via, callId),
-          });
-          store.setTaskAskedAt(botId, threadId, message.at);
+          const message = progressiveIntake.recordUserRow({ store, botId, threadId, text, replyToId: replyTo?.id, sendId, dataContext, app, sender, intake: buildInitialIntakeMeta(intakeClass, liveTurnByThread.get(threadId)), steered: true, spoken: spokenLineFields(via, callId) });
           handoffs.steered(threadId, steerTarget, instance?.instanceId, message.id);
           signInSettle.answerInChat(botId, threadId);
           if (personsOwn) personFirst.wait(threadId, { requeue: (note) => void queueSteeredMessage(current.id, threadId, text, { prompt: note ? `${queuedPrompt}\n\n${note}` : queuedPrompt, rowId: message.id, first: true, queuedAt: message.at, replyToId: replyTo?.id, dataContext, sender, trigger, via, callId, mentions, aheadOfOthers: runOwners.askerFirst(threadId) }) });
           return { ok: true as const, steered: true as const, threadId, message };
         }
-        if (!current.busy) {
-          return startOrQueueDirectMessage(botId, threadId, text, replyTo, sendId, sender, trigger, via, callId, dataContext, app, mentions);
-        }
-        const queued = queueSteeredMessage(current.id, threadId, text, {
-          replyToId: replyTo?.id,
-          sendId,
-          dataContext, fromApp: app?.fromApp, mentions,
-          prompt: queuedPrompt,
-          sender,
-          trigger,
-          via,
-          callId,
-          first: personsOwn || chose === "restart", aheadOfOthers: runOwners.askerFirst(threadId),
-        });
-        if (personsOwn && !chose) personFirst.wait(threadId, {});
+        if (!current.busy) return startOrQueueDirectMessage(botId, threadId, text, replyTo, sendId, sender, trigger, via, callId, dataContext, app, mentions);
+        const targetTurnId = liveTurnByThread.get(threadId), now = Date.now(), isSoftRedirect = humanTrigger && !app && intakeClass.mode === "soft-redirect";
+        if ((chose === "restart" || isSoftRedirect) && humanTrigger) { const refusedStop = runOwners.stopRefusal(threadId, { ...(sender?.id ? { person: sender.id } : {}), admin: admin === true }); if (refusedStop) throw Object.assign(new Error(refusedStop), { status: 403, code: "stop_not_yours" }); }
+        const progressSummary = chose === "restart" || chose === "queue" ? "" : extractTurnProgressSummary(store.activePath(threadId), targetTurnId);
+        const supersededText = isSoftRedirect && chose !== "restart" ? progressiveIntake.supersedePriorUser(threadId, directRequestOwners.get(threadId)?.messageId, targetTurnId, queuedSteerRowIds(threadId), now) : undefined;
+        const intake = chose === "restart" ? createProgressiveIntakeMeta({ mode: "progressive-continue", state: "received", updatedAt: now }) : buildInitialIntakeMeta(isSoftRedirect ? intakeClass : { ...intakeClass, mode: "progressive-continue", initialState: "received" }, targetTurnId, now);
+        const message = progressiveIntake.recordUserRow({ store, threadId, text, replyToId: replyTo?.id, sendId, dataContext, app, sender, intake, spoken: spokenLineFields(via, callId) });
+        const queued = queueSteeredMessage(current.id, threadId, text, { replyToId: replyTo?.id, sendId, dataContext, fromApp: app?.fromApp, mentions, prompt: queuedPrompt, sender, trigger, via, callId, rowId: message.id, showInSnapshot: true, first: personsOwn || isSoftRedirect, aheadOfOthers: runOwners.askerFirst(threadId) });
+        const recorded = store.patchMessage(threadId, message.id, { queueId: queued.id }) ?? { ...message, queueId: queued.id };
+        if (chose !== "queue" && chose !== "restart") progressiveIntake.saveRedirectContext(threadId, queued.id, { supersededText, progressSummary });
         if (chose === "restart") await restartForPerson(botId, threadId, trigger);
-        return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
+        else if (isSoftRedirect) { progressiveIntake.markSoftRedirect(threadId, targetTurnId, directTurnGenerationByThread.get(threadId)); await interruptDirectThread(current.id, threadId, "redirected by follow-up"); }
+        else if (personsOwn && !chose) personFirst.wait(threadId, {});
+        return { ok: true as const, queued: true as const, queueId: queued.id, threadId, message: recorded, intake };
       }
       return startOrQueueDirectMessage(botId, threadId, text, replyTo, sendId, sender, trigger, via, callId, dataContext, app, mentions);
     },
@@ -7775,6 +7762,7 @@ async function beginTurn(
         return;
       }
       const skipTranscript = new Set<string>([userMessage.id, ...(opts?.excludeMessageIds ?? [])]);
+      for (const pendingId of queuedSteerRowIds(threadId)) skipTranscript.add(pendingId);
       const activeMessages = sinceFreshStart(store.activePath(threadId));
       const coordinationChildren = opts?.coordination?.resumed
         ? new Set(coordinator.children(opts.coordination.id).map((child) => child.id)) : undefined;
@@ -12089,6 +12077,7 @@ ROUTES.push(createBotMessageRoutes({
   goals: oneOnOneGoals, inboxReply: teamMessages.replyIn, typedCardAnswer: askCards.typed, ...(CLOUD_TEAM ? { teamAiOwnerName: () => teamAiOwner(teamOwners.people?.list() ?? [], teamHost.personName)?.name ?? "" } : {}),
   relayedReaction: (threadId, messageId, person, emoji) => void store.setReaction(threadId, messageId, relayedPersonKey(person),
     { emoji, name: person.name ?? person.email, at: Date.now() }),
+  onQueueSettled: (threadId, queueIds) => progressiveIntake.clearRedirectContext(threadId, queueIds),
 }));
 const liveRoots = (threadId: string, botId: string | undefined) => { const bot = botId ? store.bot(botId) : store.botByThread(threadId); return bot ? messageFileRootsForThread(bot.id, threadId).filter((root) => root !== ATTACHMENTS_DIR) : null; };
 const miniAppRoutes = createMiniAppRouteHandlers({ store, dataDir: DATA_DIR, data: dataEngine, hongguoProvider: createHongguoProvider({ dataDir: DATA_DIR }), releaseSource: sealedFixture() && Boolean(process.env.OMB_TEST_INTERNAL_CAPABILITY_KEY) && Boolean(process.env.OMB_TEST_MINI_APP_RELEASES_FILE) && !DESKTOP_MANAGED && !CLOUD_HOME && !HOSTED_WORKSPACE && utilityParentPort === undefined ? new MiniAppReleaseSource({ reader: createFixtureFileReader(process.env.OMB_TEST_MINI_APP_RELEASES_FILE!) }) : undefined, validPublisher: (id) => Boolean(store.bot(id)), routines: () => routines, localEnabled: () => !CLOUD_HOME && !HOSTED_WORKSPACE && !sharedMembership(), bots: () => store.bots, liveRows: liveAppRows, liveRoots, paused: () => workspaceMaintenance.active || moveFreeze.frozen(), suggestionWriter: (botId) => sideJobs.text("mini-app-suggestions", botId) }); reportAppsForBot = miniAppRoutes.reportAppsForBot; const { chatApps } = miniAppRoutes; ROUTES.push(miniAppRoutes.owner);
