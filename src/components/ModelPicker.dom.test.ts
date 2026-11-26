@@ -1096,4 +1096,75 @@ describe("inline overview model settings", () => {
     await settle();
     expect([...select("Provider").options].map((option) => option.textContent)).toEqual(["Raven"]);
   });
+
+  it("caps context window choices to the model's declared window and marks oversized saved overrides unavailable", async () => {
+    const model: Option = { id: "compact-128k", label: "Compact 128k", contextWindow: 128_000 };
+    const unsupported: Option = { id: "unsupported-model", label: "Unsupported", contextWindow: 128_000, protocolUnsupported: true };
+    fixture.instances = [{
+      ...claude([model, unsupported]),
+      instanceId: "codex",
+      driverKind: "codex",
+      capabilities: { effortLevels: ["low", "high"], configurableContextWindow: true },
+    }];
+    const bot: Bot = { ...scout(), modelSelection: { instanceId: "codex", model: model.id } };
+    render(bot, options);
+    await settle();
+
+    expect([...select("Context window").options].map((option) => option.textContent)).toEqual([
+      "Auto (128,000)", "32,000", "64,000", "128,000",
+    ]);
+
+    render({ ...bot, modelSelection: { ...bot.modelSelection, contextWindowTokens: 256_000 } }, options);
+    await settle();
+    const control = select("Context window");
+    expect([...control.options].map((option) => ({ text: option.textContent, disabled: option.disabled }))).toEqual([
+      { text: "Auto (128,000)", disabled: false },
+      { text: "32,000", disabled: false },
+      { text: "64,000", disabled: false },
+      { text: "128,000", disabled: false },
+      { text: "256,000 (unavailable)", disabled: true },
+    ]);
+    expect(control.value).toBe("256000");
+    choose(control, "128000");
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({
+      type: "setModel",
+      selection: { instanceId: "codex", model: model.id, contextWindowTokens: 128_000 },
+    }));
+    choose(control, "auto");
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({
+      type: "setModel",
+      selection: { instanceId: "codex", model: model.id },
+    }));
+
+    render({ ...bot, modelSelection: { instanceId: "codex", model: unsupported.id } }, options);
+    await settle();
+    expect(host.querySelector("[data-model-context-window]")).toBeNull();
+    expect(host.querySelector("[data-context-window-readonly]")).toBeNull();
+
+    fixture.instances = [{
+      ...claude([model, unsupported]),
+      instanceId: "pi",
+      driverKind: "piAgent",
+      capabilities: { effortLevels: ["low", "high"] },
+    }];
+    render({ ...bot, modelSelection: { instanceId: "pi", model: model.id } }, options);
+    await settle();
+    expect(host.querySelector("[data-context-window-readonly] output")?.textContent).toBe("128,000");
+
+    render({ ...bot, modelSelection: { instanceId: "pi", model: unsupported.id } }, options);
+    await settle();
+    expect(host.querySelector("[data-model-context-window]")).toBeNull();
+    expect(host.querySelector("[data-context-window-readonly]")).toBeNull();
+  });
+
+  it("renders Manage AI accounts as a right-aligned link", async () => {
+    render(scout(), options);
+    await settle();
+    const manage = [...host.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.includes("Manage AI accounts"))!;
+    expect(manage).toBeDefined();
+    expect(manage.parentElement?.className).toContain("justify-end");
+    expect(manage.className).toContain("text-accent");
+    expect(manage.className).toContain("underline");
+  });
 });
