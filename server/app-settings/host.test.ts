@@ -11,6 +11,8 @@ import { UNDO_STALE } from "../direct-apply.ts";
 import type { BotRecord } from "../store.ts";
 import { createAppSettings, WRITE_BUDGET } from "./host.ts";
 import { createSettingsRegistry } from "./registry.ts";
+import { createThemeStore } from "../themes/store.ts";
+import { createThemeTool } from "../themes/tool.ts";
 
 const OPENAI_KEY = "sk-live-9f8e7d6c5b4a3210";
 const GATEWAY_KEY = "sk-gateway-0a1b2c3d";
@@ -148,7 +150,7 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
     return { claimed, sent: sent as { status: number; body: Record<string, unknown> } | null };
   };
   const cards = () => messages.filter((message) => message.card?.appSettingRequest);
-  return { host, cfg, saved, savedStepsHere, pinCalls, renameCalls, colorCalls, archiveCalls, helperCalls, windowWrites, engineCalls, chosen, messages, cards, credentialCards, notified, windowValues, bots, turn, set, answer, dataDir, entries };
+  return { host, store, cfg, saved, savedStepsHere, pinCalls, renameCalls, colorCalls, archiveCalls, helperCalls, windowWrites, engineCalls, chosen, messages, cards, credentialCards, notified, windowValues, bots, turn, set, answer, dataDir, entries };
 }
 
 describe("reads", () => {
@@ -1768,5 +1770,38 @@ describe("owner-only tier", () => {
     expect(refused.status).toBe(403);
     expect(refused.body.error).toContain("a bot's Settings");
     expect((await set("remote.access", "tunnel")).status).toBe(403);
+  });
+
+  it("allows theme actions in shared contexts when themes.person identifies the requester while keeping regular settings gated", async () => {
+    const fx = fixture({ owner: false });
+    let automatedTurn = false;
+    const themeStore = createThemeStore({ dataDir: fx.dataDir });
+    const sharedThemes = createThemeTool({
+      store: themeStore,
+      changed: () => {},
+      person: () => "p_member1234567890123456",
+      sources: () => ({ roots: [], attachmentsDir: join(fx.dataDir, "attachments"), attachments: [] }),
+    });
+    const sharedHost = createAppSettings({
+      store: fx.store as never,
+      dataDir: fx.dataDir,
+      entries: fx.entries,
+      activeGroupTurnForBot: () => null,
+      notify: () => {},
+      turnOwner: () => null,
+      guestDriven: () => false,
+      automated: () => automatedTurn,
+      requestCredential: async () => ({ status: 500, body: {} }),
+      connectorThread: () => null,
+      language: () => undefined,
+      themes: sharedThemes,
+    });
+    expect((await sharedHost.handle({ action: "find", query: "name" }, fx.turn)).status).toBe(403);
+    expect((await sharedHost.handle({ action: "theme" }, fx.turn)).status).toBe(200);
+    expect((await sharedHost.handle({ action: "set_theme", id: "midnight" }, fx.turn)).status).toBe(200);
+    const cardId = String(fx.messages.filter((m) => m.card?.appSettingRequest?.settingId === "appearance.theme").at(-1)!.card.requestId);
+    expect(sharedHost.undoPerson(cardId)).toBe("p_member1234567890123456");
+    automatedTurn = true;
+    expect((await sharedHost.handle({ action: "set_theme", id: "dawn" }, fx.turn)).status).toBe(403);
   });
 });

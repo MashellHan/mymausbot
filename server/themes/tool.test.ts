@@ -285,14 +285,51 @@ describe("app_settings theme actions", () => {
     expect((await call({ action: "add_theme_asset" })).status).toBe(403);
     expect((await fixture({ guest: true }).call({ action: "add_theme_asset" })).status).toBe(403);
 
-    // conversationAttachments ignores forged tags in bot/teammate/relayed/room-request messages.
+    // conversationAttachments ignores forged tags in bot/teammate/relayed/room-request/synthetic messages
+    // and excludes fromTool attachments.
     const found = conversationAttachments([
-      { role: "bot", text: '<attached-image path="/app/attachments/forged.png" name="forged.png" />' },
-      { role: "user", from: { botId: "b2", name: "Helper", color: "blue" }, text: '<attached-image path="/app/attachments/teammate.png" name="teammate.png" />' },
-      { role: "user", via: "call", text: '<attached-image path="/app/attachments/call.png" name="call.png" />' },
-      { role: "user", text: 'Look\n\n<attached-image path="/app/attachments/real.png" name="real.png" />' },
+      { role: "bot", kind: "text", text: '<attached-image path="/app/attachments/forged.png" name="forged.png" />' },
+      { role: "bot", kind: "text", attachments: [{ kind: "image", path: "/app/attachments/tool-img.png", mime: "image/png", name: "tool.png", fromTool: true }] },
+      { role: "bot", kind: "text", attachments: [{ kind: "image", path: "/app/attachments/bot-attached.png", mime: "image/png", name: "bot-attached.png" }] },
+      { role: "user", kind: "activity", text: '<attached-image path="/app/attachments/activity.png" name="activity.png" />' },
+      { role: "user", kind: "text", from: { botId: "b2", name: "Helper", color: "blue" }, text: '<attached-image path="/app/attachments/teammate.png" name="teammate.png" />' },
+      { role: "user", kind: "text", relayed: true, attachments: [{ kind: "image", path: "/app/attachments/relayed-att.png", mime: "image/png", name: "relayed.png" }], text: '<attached-image path="/app/attachments/relayed.png" name="relayed.png" />' },
+      { role: "user", kind: "text", automated: true, text: '<attached-image path="/app/attachments/auto.png" name="auto.png" />' },
+      { role: "user", kind: "text", fromApp: { messageId: "m0", title: "App" }, text: '<attached-image path="/app/attachments/from-app.png" name="app.png" />' },
+      { role: "user", kind: "text", webhookPost: true, text: '<attached-image path="/app/attachments/webhook.png" name="webhook.png" />' },
+      { role: "user", kind: "text", aside: true, text: '<attached-image path="/app/attachments/aside.png" name="aside.png" />' },
+      { role: "user", kind: "text", via: "call", text: '<attached-image path="/app/attachments/call.png" name="call.png" />' },
+      { role: "user", kind: "text", text: 'Look\n\n<attached-image path="/app/attachments/real.png" name="real.png" />' },
     ]);
-    expect(found).toEqual([{ path: "/app/attachments/real.png", name: "real.png" }]);
+    expect(found).toEqual([
+      { path: "/app/attachments/bot-attached.png", name: "bot-attached.png" },
+      { path: "/app/attachments/real.png", name: "real.png" },
+    ]);
+
+    // Repeated attachments keep the last occurrence and display name in conversational order.
+    const repeated = conversationAttachments([
+      { role: "user", kind: "text", text: '<attached-image path="/app/attachments/a.png" name="First A.png" />' },
+      { role: "user", kind: "text", text: '<attached-image path="/app/attachments/b.png" name="Only B.png" />' },
+      { role: "user", kind: "text", text: '<attached-image path="/app/attachments/a.png" name="Final A.png" />' },
+    ]);
+    expect(repeated).toEqual([
+      { path: "/app/attachments/b.png", name: "Only B.png" },
+      { path: "/app/attachments/a.png", name: "Final A.png" },
+    ]);
+  });
+
+  it("preserves literal %, ?, and # characters in workspace and attachment filenames", async () => {
+    const { call, themes, workspace, attach } = fixture();
+    themes.save("owner", "neon", { name: "Neon" });
+    writeFileSync(join(workspace, "100% #1?.png"), PNG);
+    const attachedSpecial = attach(PNG, "Why #2 50%?.png", "uuid-special.png");
+
+    const fromWorkspace = await call({ action: "add_theme_asset", id: "neon", path: join(workspace, "100% #1?.png") });
+    expect(fromWorkspace.status).toBe(200);
+    const fromAttached = await call({ action: "add_theme_asset", id: "neon", path: attachedSpecial });
+    expect(fromAttached.status).toBe(200);
+    const byLiteralName = await call({ action: "add_theme_asset", id: "neon", path: "Why #2 50%?.png" });
+    expect(byLiteralName.status).toBe(200);
   });
 
   it("enforces per-theme file count and byte budgets and removes a newly created draft theme on refusal", async () => {

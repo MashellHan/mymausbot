@@ -163,6 +163,8 @@ export function createThemeTool(deps: ThemeToolDeps) {
    * tag naming any other file on disk opens nothing. The latest match wins. Opened at any size: the caller reads the
    * first bytes, so a large HEIC photo is named as one, and reads the rest only within the limit.
    */
+const SOURCE_LINK = (path: string): string => /^file:/i.test(path) ? path : path.replace(/[%?#]/g, encodeURIComponent);
+
   async function openNamed(turn: Turn, path: string): Promise<Picked | { error: string; status: number }> {
     const sources = deps.sources(turn);
     const wanted = basename(path.replaceAll("\\", "/"));
@@ -173,7 +175,7 @@ export function createThemeTool(deps: ThemeToolDeps) {
     const attached = async (one: { path: string; name: string }) => picked(await openAttachment(sources.attachmentsDir, one.path), one.name);
     try {
       if (exact) return await attached(exact);
-      const file = await openMessageFile(path, sources.roots, OPEN_ANY_SIZE);
+      const file = await openMessageFile(SOURCE_LINK(path), sources.roots, OPEN_ANY_SIZE);
       return await picked(file, file.name);
     } catch (error) {
       try {
@@ -187,7 +189,7 @@ export function createThemeTool(deps: ThemeToolDeps) {
 
   async function openAttachment(storeDir: string, path: string): Promise<Opened> {
     if (resolve(dirname(path)) !== resolve(storeDir)) throw Object.assign(new Error("outside the attachment store"), { status: 403 });
-    return openMessageFile(path, [storeDir], OPEN_ANY_SIZE);
+    return openMessageFile(SOURCE_LINK(path), [storeDir], OPEN_ANY_SIZE);
   }
 
   /** The newest file attached in this conversation that is a picture (or a HEIC photo, so it is refused by name rather

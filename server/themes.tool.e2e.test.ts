@@ -138,4 +138,45 @@ it("refuses a HEIC photo by name, a tag naming a file outside the store, and ano
     step({ action: "add_theme_asset", path: "Other Thread.png" }, { expectError: true }),
   ]);
   expect(results(crossThread).map((result: any) => result.text)).toEqual([expect.stringContaining("not in your workspace"), expect.stringContaining("not in your workspace")]);
+
+  // Edited/rewound inactive branch attachments stay invisible to both named and latest selection.
+  const rewoundThread = (await api("POST", `/api/bots/${bot.id}/tasks`, { title: "Branch Test" })).body.task.threadId as string;
+  const oldUpload = await api("POST", "/api/attachments", undefined, { bytes: PNG, type: "image/png" });
+  const activeUpload = await api("POST", "/api/attachments", undefined, { bytes: PNG, type: "image/png" });
+  expect(oldUpload.status).toBe(201);
+  expect(activeUpload.status).toBe(201);
+
+  const runIn = async (key: string, threadId: string, text: string, steps: unknown[]) => {
+    plans[bot.id]!.script.push({ key, match: [key], steps, reply: `Done: ${key}`, timeoutMs: 20_000 });
+    writeFileSync(planPath, JSON.stringify(plans));
+    expect((await api("POST", `/api/bots/${bot.id}/messages`, { threadId, text: `${key}: ${text}` })).status).toBe(202);
+    let turn: any;
+    await expect.poll(() => (turn = providerTurns().find((candidate) => candidate.planKey === key)) !== undefined, { timeout: 30_000 }).toBe(true);
+    await expect.poll(async () => (await api("GET", "/api/bots")).body.bots.every((one: any) => !one.busy), { timeout: 20_000 }).toBe(true);
+    return turn;
+  };
+
+  await runIn("BG-6-OLD", rewoundThread, `old\n\n<attached-image path="${oldUpload.body.path}" name="Old Branch.png" />`, []);
+  const firstMsg = (await api("GET", `/api/threads/${rewoundThread}/messages?limit=50`)).body.messages.find((m: any) => m.role === "user");
+  plans[bot.id]!.script.push({ key: "BG-6-EDIT", match: ["BG-6-EDIT"], steps: [], reply: "Branched", timeoutMs: 20_000 });
+  writeFileSync(planPath, JSON.stringify(plans));
+  const edited = await api("POST", `/api/bots/${bot.id}/messages/${firstMsg.id}/edit`, {
+    threadId: rewoundThread,
+    text: `BG-6-EDIT: replacement\n\n<attached-image path="${activeUpload.body.path}" name="100% #1?.png" />`,
+  });
+  expect(edited.status).toBe(202);
+  await expect.poll(() => providerTurns().some((candidate) => candidate.planKey === "BG-6-EDIT"), { timeout: 30_000 }).toBe(true);
+  await expect.poll(async () => (await api("GET", "/api/bots")).body.bots.every((one: any) => !one.busy), { timeout: 20_000 }).toBe(true);
+
+  const branchCheck = await runIn("BG-6-CHECK", rewoundThread, "use the picture", [
+    step({ action: "add_theme_asset", path: oldUpload.body.path }, { expectError: true }),
+    step({ action: "add_theme_asset", path: "Old Branch.png" }, { expectError: true }),
+    step({ action: "add_theme_asset" }),
+    step({ action: "add_theme_asset", path: "100% #1?.png" }),
+  ]);
+  const branchResults = results(branchCheck);
+  expect(branchResults[0].text).toContain("not in your workspace");
+  expect(branchResults[1].text).toContain("not in your workspace");
+  expect(branchResults[2]).toMatchObject({ isError: false, text: expect.stringContaining("/background/100-1") });
+  expect(branchResults[3]).toMatchObject({ isError: false, text: expect.stringContaining("/background/100-1") });
 }, 120_000);
