@@ -1,16 +1,17 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import type { ModelCatalog, ProviderDriver, ProviderInstance, SendTurnInput } from "./contracts.ts";
 import { createAcpDriver, type AcpSupport } from "./drivers/acp/core.ts";
+import { buildStamp } from "./environment.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import * as procs from "./procs.ts";
 import { holdUntilFirstEngineRead } from "./first-engine-read.ts";
 import { CodexDriver } from "./drivers/codex.ts";
 import { loopbackOriginTag, withModelProviderRoutes } from "./model-provider-routes.ts";
-import { openStartupModelCatalog, readStartupModelCache, readStartupModelCacheEntry, STARTUP_MODEL_CACHE_FRESH_MS, unconfirmedModelCatalog, writeStartupModelCache } from "./startup-model-catalog.ts";
+import { openStartupModelCatalog, readStartupModelCache, readStartupModelCacheEntry, STARTUP_MODEL_CACHE_FRESH_MS, startupModelCachePath, unconfirmedModelCatalog, writeStartupModelCache } from "./startup-model-catalog.ts";
 
 const CACHED: ModelCatalog = {
   default: "cached-model",
@@ -256,6 +257,65 @@ describe("startup model catalogs", () => {
     await (open("timed-build", 0, "0.0.1 an older image").opened as { pending: Promise<void> }).pending;
     expect(refreshes).toBe(3);
     expect(readStartupModelCacheEntry("timed-fresh")).toMatchObject({ catalog: CACHED, checkedAt: now - STARTUP_MODEL_CACHE_FRESH_MS + 1, build: expect.any(String) });
+  });
+
+  it("drops the build stamp on schemaVersion 2 cache entries to trigger startup refresh, and retains it on schemaVersion 3", async () => {
+    seedBots();
+    const now = 1_800_000_000_000;
+    const currentBuild = buildStamp();
+
+    writeStartupModelCache("schema-v3", CACHED, { checkedAt: now, build: currentBuild });
+    const rawV3 = JSON.parse(readFileSync(startupModelCachePath("schema-v3")!, "utf8")) as { schemaVersion?: unknown; build?: unknown };
+    expect(rawV3).toMatchObject({ schemaVersion: 3, build: currentBuild });
+    expect(readStartupModelCacheEntry("schema-v3")).toEqual({
+      catalog: CACHED,
+      checkedAt: now,
+      build: currentBuild,
+    });
+
+    let v3Refreshes = 0;
+    expect(await openStartupModelCatalog({
+      instanceId: "schema-v3",
+      use: () => {},
+      current: () => CACHED,
+      refresh: async () => { v3Refreshes += 1; },
+      now,
+    })).toBeNull();
+    expect(v3Refreshes).toBe(0);
+
+    mkdirSync(join(DATA_DIR, "providers", "engine-models"), { recursive: true });
+    writeFileSync(startupModelCachePath("schema-v2")!, JSON.stringify({
+      ...CACHED,
+      schemaVersion: 2,
+      checkedAt: now,
+      build: currentBuild,
+    }));
+    expect(readStartupModelCacheEntry("schema-v2")).toEqual({
+      catalog: CACHED,
+      checkedAt: now,
+      build: null,
+    });
+
+    let v2Refreshes = 0;
+    let current = CACHED;
+    const opened = openStartupModelCatalog({
+      instanceId: "schema-v2",
+      use: (catalog) => { current = catalog; },
+      current: () => current,
+      refresh: async () => {
+        v2Refreshes += 1;
+        current = FRESH;
+      },
+      now,
+    }) as { pending: Promise<void> };
+    await opened.pending;
+    expect(v2Refreshes).toBe(1);
+    expect(readStartupModelCacheEntry("schema-v2")).toMatchObject({
+      catalog: FRESH,
+      build: currentBuild,
+    });
+    const migrated = JSON.parse(readFileSync(startupModelCachePath("schema-v2")!, "utf8")) as { schemaVersion?: unknown };
+    expect(migrated.schemaVersion).toBe(3);
   });
 
   it("reads the list again when an engine opens a second time in one run: its key or settings just changed", async () => {
