@@ -446,21 +446,41 @@ async function fetchJson(url) {
   return res.json();
 }
 
-function runningAppPids() {
-  const out = run("/bin/ps", ["-axo", "pid=,comm="]);
+export function matchTargetAppPids(psOutput, targetApp) {
+  const prefix = `${resolve(targetApp)}/Contents/MacOS/`;
   const pids = [];
-  for (const line of out.split("\n")) {
+  for (const line of String(psOutput || "").split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     const space = trimmed.search(/\s/);
     if (space < 0) continue;
     const pid = Number(trimmed.slice(0, space));
     const comm = trimmed.slice(space).trim();
-    if (comm.endsWith(".app/Contents/MacOS/mymausbot") || comm.endsWith(".app/Contents/MacOS/OpenMausBot")) {
+    if (Number.isInteger(pid) && pid > 0 && comm.startsWith(prefix)) {
       pids.push(pid);
     }
   }
   return pids;
+}
+
+function runningAppPids(targetApp) {
+  const out = run("/bin/ps", ["-axo", "pid=,comm="]);
+  return matchTargetAppPids(out, targetApp);
+}
+
+async function stopTargetAppProcesses(targetApp, timeoutMs = 40_000) {
+  for (const pid of runningAppPids(targetApp)) {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {
+      // Process may have exited between ps and kill.
+    }
+  }
+  const deadline = Date.now() + timeoutMs;
+  while (runningAppPids(targetApp).length > 0 && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return runningAppPids(targetApp);
 }
 
 async function assertLiveIdle({ targetApp }) {
@@ -511,12 +531,8 @@ async function atomicSwitchAndVerify({ worktree, stagedApp, targetApp, jobDir, e
       spawnSync("/bin/launchctl", ["bootout", `gui/${uid}/com.openmausbot.local-usage-refresh`], { encoding: "utf8" });
       bootedOut = true;
     }
-    for (const pid of runningAppPids()) process.kill(pid, "SIGTERM");
-    const quitDeadline = Date.now() + 40_000;
-    while (runningAppPids().length > 0 && Date.now() < quitDeadline) {
-      await new Promise((r) => setTimeout(r, 250));
-    }
-    if (runningAppPids().length > 0) throw new Error("Previous app process did not quit cleanly");
+    const remaining = await stopTargetAppProcesses(targetApp, 40_000);
+    if (remaining.length > 0) throw new Error("Previous app process did not quit cleanly");
 
     const wsSrc = join(homedir(), ".openmausbot");
     const wsCopy = join(evidence, "closed-workspace");
@@ -563,8 +579,12 @@ async function atomicSwitchAndVerify({ worktree, stagedApp, targetApp, jobDir, e
   } catch (error) {
     if (switched && existsSync(join(parked, "Contents")) && !existsSync(join(stagedApp, "Contents"))) {
       try {
-        renameSync(join(targetApp, "Contents"), join(stagedApp, "Contents"));
-        renameSync(join(parked, "Contents"), join(targetApp, "Contents"));
+        const failedPids = await stopTargetAppProcesses(targetApp, 20_000);
+        if (failedPids.length === 0) {
+          renameSync(join(targetApp, "Contents"), join(stagedApp, "Contents"));
+          renameSync(join(parked, "Contents"), join(targetApp, "Contents"));
+          run("/usr/bin/open", ["-n", "-a", targetApp], { env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin" }, timeout: 15_000 });
+        }
       } catch {
         // Leave original rollback intact for manual recovery if swap-back fails.
       }

@@ -10,6 +10,7 @@ import {
   canReuseResidentWorktree,
   classifyDeliveryChanges,
   isPackageJsonDependencySame,
+  matchTargetAppPids,
   parseDeliveryArgs,
   pruneOldDeliveryDirs,
   readElectronVersion,
@@ -57,9 +58,9 @@ describe("fast desktop delivery orchestration", () => {
     expect(electronChange.mode).toBe("full-build");
     expect(electronChange.reasons).toContain("packager-input:electron/main.mjs");
 
-    const localeChange = classifyDeliveryChanges(["src/locales/en.json", "server/web-push.ts"]);
+    const localeChange = classifyDeliveryChanges(["src/locales/zh.json", "server/web-push.ts"]);
     expect(localeChange.mode).toBe("full-build");
-    expect(localeChange.reasons).toContain("packager-input:src/locales/en.json");
+    expect(localeChange.reasons).toContain("packager-input:src/locales/zh.json");
 
     const lockChange = classifyDeliveryChanges(["pnpm-lock.yaml"]);
     expect(lockChange.mode).toBe("full-build");
@@ -169,6 +170,13 @@ describe("fast desktop delivery orchestration", () => {
     const siblingDefault = resolveDefaultDeliveryWorktree("/workspace/OpenMausBot", {});
     expect(siblingDefault).toBe(join(dirname("/workspace/OpenMausBot"), `${basename("/workspace/OpenMausBot")}-desktop-delivery-worktree`));
     expect(resolveDefaultDeliveryWorktree("/workspace/OpenMausBot", { OMB_DELIVERY_WORKTREE: "/custom/wt" })).toBe("/custom/wt");
+
+    const psSample = [
+      "101 /Applications/OpenMausBot.app/Contents/MacOS/OpenMausBot",
+      "202 /Users/tester/Applications/mymausbot.app/Contents/MacOS/mymausbot",
+      "303 /Users/tester/Applications/mymausbot.app/Contents/Frameworks/mymausbot Helper.app/Contents/MacOS/mymausbot Helper",
+    ].join("\n");
+    expect(matchTargetAppPids(psSample, "/Users/tester/Applications/mymausbot.app")).toEqual([202]);
 
     const fakeWt = mkdtempSync(join(tmpdir(), "omb-delivery-wt-guard-"));
     tempDirs.push(fakeWt);
