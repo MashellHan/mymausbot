@@ -80,6 +80,17 @@ export function loadBrand(options: { file?: string; isEntitled?: (feature: strin
   return { brand: parsed.data, source: "file", file };
 }
 
+export interface PublicBrandStatus {
+  brand: Brand;
+  /** "file" when brand.json is applied; "default" otherwise. */
+  source: "default" | "file";
+}
+
+/** Public/remote brand payload omits host filesystem path (`file`) and internal loader diagnostics (`notice`). */
+export function publicBrandResponse(status: BrandStatus = loadBrand()): PublicBrandStatus {
+  return { brand: status.brand, source: status.source };
+}
+
 export function describeBrand(status: BrandStatus): string {
   if (status.source === "file") return `brand: ${status.brand.name} (from ${status.file})`;
   return `brand: default${status.notice ? ` (${status.notice})` : ""}`;

@@ -13,6 +13,7 @@ import { useOwnerOrAdmin } from "@/lib/use-owner-or-admin";
 import { useInboxOrigin } from "./InboxLine";
 import { yourComputerAsk } from "@/lib/your-computer";
 import { computerAskWords } from "@/lib/computer-ask";
+import { isRemotePwaMode } from "@/lib/pwa-transport";
 import { DESKTOP_DOWNLOAD_URL } from "../../shared/computer-ask";
 
 interface ApprovalLabels {
@@ -263,12 +264,15 @@ export function PendingApprovalActions({
 }) {
   const { dispatch } = useStore();
   const ownerOrAdmin = useOwnerOrAdmin();
+  const remotePwa = isRemotePwaMode();
   const isRoutineRequest = isRoutineApproval(pending);
   const isSkillRequest = isSkillApproval(pending);
   const isProfileRequest = isProfileApproval(pending);
   const titled = titledCard(pending.message.card);
   const durableRequest = isRoutineRequest || isSkillRequest || isProfileRequest || titled;
-  const canRememberCommand = ownerOrAdmin === true && !durableRequest && !pending.allowKey && Boolean(pending.commandAllowlist);
+  const canRememberCommand = !remotePwa && ownerOrAdmin === true && !durableRequest && !pending.allowKey && Boolean(pending.commandAllowlist);
+  const permanentGrantSuppressed =
+    remotePwa && !durableRequest && (Boolean(bot && pending.allowKey) || (ownerOrAdmin === true && !pending.allowKey && Boolean(pending.commandAllowlist)));
   const reviewedSha256 = pending.message.card?.skillRequest
     ? reviewedSkillSha256(pending.message.card.skillRequest)
     : undefined;
@@ -307,11 +311,11 @@ export function PendingApprovalActions({
     );
   }
   const always = durableRequest ? null
-    : bot && pending.allowKey
+    : !remotePwa && bot && pending.allowKey
       ? { label: t("approval.action.alwaysAllow"), name: t("approval.action.alwaysAllow"), hint: t("approval.action.stopAsking", { name: bot.name, key: pending.allowKey }), run: () => decide("allow", true) }
       : canRememberCommand && pending.commandAllowlist
         ? { label: t("approval.action.alwaysAllow"), name: t("approval.action.alwaysAllowCommand"), hint: t("approval.action.alwaysAllowCommandHint", { cwd: pending.commandAllowlist.cwd }), run: () => decide("allow", false, true) }
-        : !pending.allowKey && pending.allowSession
+        : (!pending.allowKey || remotePwa) && pending.allowSession
           // Nothing is saved for this one: it lasts while the AI's session does, and the button says so.
           ? { label: t("approval.action.allowSession"), name: t("approval.action.allowSession"), hint: t("approval.action.alwaysAllowSessionHint"), run: () => decide("allow", true) }
           : null;
@@ -361,12 +365,24 @@ export function PendingApprovalActions({
           : t("approval.action.allowOnce")}
     </button>,
   ].filter(Boolean) : [];
-  if (part === "primary") return <>{primary}</>;
+  if (part === "primary") {
+    return (
+      <>
+        {primary}
+        {permanentGrantSuppressed && (
+          <p className="w-full text-end text-[12px] text-ink-tertiary">{t("approvalMode.needsDesktopApp")}</p>
+        )}
+      </>
+    );
+  }
   if (part === "more") return more.length ? <div className="flex flex-wrap items-center gap-2">{more}</div> : null;
   return (
     <div className="flex flex-wrap items-center justify-end gap-2">
       {more}
       {primary}
+      {permanentGrantSuppressed && (
+        <p className="w-full text-end text-[12px] text-ink-tertiary">{t("approvalMode.needsDesktopApp")}</p>
+      )}
     </div>
   );
 }

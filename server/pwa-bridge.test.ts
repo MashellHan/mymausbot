@@ -406,7 +406,7 @@ describe("PWA bridge unit, config, and route enforcement", () => {
     }
     expect(seenSocketProps.length).toBe(beforeCalls);
 
-    // Routine endpoints are allowed on the bridge allowlist; /api/instances stays blocked.
+    // Routine endpoints are allowed on the bridge allowlist; high-risk routes & /api/instances stay blocked.
     for (const [method, path] of [
       ["GET", "/api/routines"],
       ["POST", "/api/routines"],
@@ -416,10 +416,25 @@ describe("PWA bridge unit, config, and route enforcement", () => {
       ["POST", "/api/routine-runs/run-1/cancel"],
       ["POST", "/api/routine-runs/run-1/seen"],
       ["POST", "/api/routine-runs/seen-all"],
+      ["POST", "/api/bots/b1/secret-cards/c1/resume"],
+      ["POST", "/api/bots/b1/secret-cards/c1/dismiss"],
+      ["POST", "/api/bots/b1/sign-in-cards/c1/done"],
+      ["POST", "/api/bots/b1/sign-in-cards/c1/cancel"],
+      ["POST", "/api/threads/t1/respond"],
+      ["GET", "/.well-known/openmausbot/environment"],
     ] as const) {
       expect(isBridgeRouteAllowed(method, path), `${method} ${path}`).toBe(true);
     }
-    expect(isBridgeRouteAllowed("GET", "/api/instances")).toBe(false);
+    for (const [method, path] of [
+      ["GET", "/api/instances"],
+      ["POST", "/api/bots/b1/always-allow"],
+      ["POST", "/api/bots/b1/secret-cards/c1/save"],
+      ["GET", "/api/bots/b1/sign-in-cards/c1/save-login"],
+      ["POST", "/api/bots/b1/sign-in-cards/c1/save-login"],
+      ["GET", "/api/threads/t1/export"],
+    ] as const) {
+      expect(isBridgeRouteAllowed(method, path), `${method} ${path}`).toBe(false);
+    }
 
     // Mint a PWA invite (never includes bridgeSecret) and verify client-scoped session cannot access /api/pwa-bridge.
     const invite = await adminCall("POST", "/api/pwa-bridge/invite", { label: "Test iPhone" });
@@ -747,7 +762,14 @@ describe("PWA bridge unit, config, and route enforcement", () => {
       }
 
       const relayBase = `http://127.0.0.1:${realRelay.port}`;
-      const botsRes = await fetch(`${relayBase}/api/bots`);
+      const unauthEnv = await fetch(`${relayBase}/.well-known/openmausbot/environment`);
+      expect(unauthEnv.status).toBe(401);
+      const unauthBrand = await fetch(`${relayBase}/api/brand`);
+      expect(unauthBrand.status).toBe(401);
+
+      const botsRes = await fetch(`${relayBase}/api/bots`, {
+        headers: { authorization: "Bearer omb_sess_stage1_real_relay_token" },
+      });
       expect(botsRes.status).toBe(200);
       expect(await botsRes.json()).toEqual({ bots: [{ id: "bot-acct" }] });
 
@@ -757,7 +779,10 @@ describe("PWA bridge unit, config, and route enforcement", () => {
 
       const postRes = await fetch(`${relayBase}/api/bots/bot-acct/messages`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          authorization: "Bearer omb_sess_stage1_real_relay_token",
+          "content-type": "application/json",
+        },
         body: JSON.stringify({ text: "via real relay" }),
       });
       expect(postRes.status).toBe(201);

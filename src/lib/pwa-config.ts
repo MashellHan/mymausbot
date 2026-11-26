@@ -1,5 +1,6 @@
 // Remote PWA pairing, IndexedDB (`omb-pwa-v1`) auth store, authenticated fetch wrappers, and blob media cache.
 import type { PwaPairingPayload } from "../../shared/pwa-bridge.ts";
+import { clearPwaMemoryCaches } from "./pwa-cache.ts";
 import { randomUuid } from "./random-uuid.ts";
 import {
   getPwaAuth,
@@ -417,20 +418,24 @@ async function readStoredAuth(idbFactory?: IDBFactory): Promise<PwaAuthRecord | 
     }
   }
   if (fromIdb) {
-    if (idbFactory === undefined) writeBackupAuth(fromIdb);
+    if (idbFactory === undefined) deleteBackupAuth();
     return fromIdb;
   }
   if (idbFactory !== undefined) return null;
   const backup = readBackupAuth();
   if (backup) {
-    void writeStoredAuth(backup).catch(() => undefined);
+    void writeStoredAuth(backup)
+      .then((ok) => {
+        if (ok) deleteBackupAuth();
+      })
+      .catch(() => undefined);
   }
   return backup;
 }
 
-async function writeStoredAuth(record: PwaAuthRecord, idbFactory?: IDBFactory): Promise<void> {
+async function writeStoredAuth(record: PwaAuthRecord, idbFactory?: IDBFactory): Promise<boolean> {
   const db = await openPwaDb(idbFactory);
-  if (!db) return;
+  if (!db) return false;
   try {
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(OMB_PWA_AUTH_STORE, "readwrite");
@@ -439,21 +444,56 @@ async function writeStoredAuth(record: PwaAuthRecord, idbFactory?: IDBFactory): 
       tx.onerror = () => reject(tx.error ?? new Error("Failed to persist PWA auth"));
       tx.onabort = () => reject(tx.error ?? new Error("Failed to persist PWA auth"));
     });
+    return true;
   } finally {
     db.close();
   }
 }
 
-async function deleteStoredAuth(idbFactory?: IDBFactory): Promise<void> {
+async function clearAllStoredPwaData(idbFactory?: IDBFactory): Promise<void> {
   const db = await openPwaDb(idbFactory).catch(() => null);
   if (!db) return;
   try {
+    const storeNames = [
+      OMB_PWA_AUTH_STORE,
+      OMB_PWA_SNAPSHOT_STORE,
+      OMB_PWA_OUTBOX_STORE,
+      OMB_PWA_OUTBOX_LEASES_STORE,
+      OMB_PWA_PREFS_STORE,
+    ].filter((name) => {
+      try {
+        return db.objectStoreNames?.contains?.(name) !== false;
+      } catch {
+        return true;
+      }
+    });
+    if (storeNames.length === 0) return;
     await new Promise<void>((resolve) => {
-      const tx = db.transaction(OMB_PWA_AUTH_STORE, "readwrite");
-      tx.objectStore(OMB_PWA_AUTH_STORE).delete(OMB_PWA_AUTH_ACTIVE_KEY);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => resolve();
-      tx.onabort = () => resolve();
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      try {
+        const tx = db.transaction(storeNames, "readwrite");
+        for (const name of storeNames) {
+          try {
+            const store = tx.objectStore(name);
+            if (typeof store.clear === "function") {
+              store.clear();
+            } else if (name === OMB_PWA_AUTH_STORE) {
+              store.delete(OMB_PWA_AUTH_ACTIVE_KEY);
+            }
+          } catch {
+          }
+        }
+        tx.oncomplete = done;
+        tx.onerror = done;
+        tx.onabort = done;
+      } catch {
+        done();
+      }
     });
   } finally {
     db.close();
@@ -477,13 +517,15 @@ export async function setPwaAuth(record: PwaAuthRecord, idbFactory?: IDBFactory)
   if (getPwaAuth()?.ownerKey !== record.ownerKey) {
     revokeMediaBlobCache();
   }
-  if (idbFactory === undefined) {
-    writeBackupAuth(record);
-  }
+  let persistedInIdb = false;
   try {
-    await writeStoredAuth(record, idbFactory);
+    persistedInIdb = await writeStoredAuth(record, idbFactory);
   } catch {
-    // Restricted Safari/WebKit storage can reject writes; localStorage backup or in-memory auth still keeps pairing working.
+    // Restricted Safari/WebKit storage can reject IndexedDB writes; fall back to localStorage/in-memory auth below.
+  }
+  if (idbFactory === undefined) {
+    if (persistedInIdb) deleteBackupAuth();
+    else writeBackupAuth(record);
   }
   setActivePwaAuth(record);
   initPromise = Promise.resolve(record);
@@ -493,10 +535,11 @@ export async function clearPwaAuth(idbFactory?: IDBFactory): Promise<void> {
   setActivePwaAuth(null);
   initPromise = Promise.resolve(null);
   revokeMediaBlobCache();
+  clearPwaMemoryCaches();
   if (idbFactory === undefined) {
     deleteBackupAuth();
   }
-  await deleteStoredAuth(idbFactory);
+  await clearAllStoredPwaData(idbFactory);
 }
 
 export function initPwaAuth(idbFactory?: IDBFactory): Promise<PwaAuthRecord | null> {
