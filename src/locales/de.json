@@ -1990,7 +1990,7 @@
   "pair.useEmail": "Mit E-Mail anmelden",
   "pairing.worksOnceUntil": "Funktioniert einmal, bis {time}",
   "permissions.approval.draftHanded": "Standard für Unterhaltungen und Routinen des neuen Bots und für Arbeit, die ihm übergeben wird.",
-  "permissions.approval.helpHanded": "Standard für neue Unterhaltungen, Routinen und Arbeit, die ihm übergeben wird. Vollzugriff gilt außerdem sofort für alle bestehenden Unterhaltungen. Mit „Berechtigungen aktualisieren“ in einer Unterhaltung wendest du die aktuelle Stufe darauf an.",
+  "permissions.approval.helpHanded": "Standard für neue Unterhaltungen, Routinen und Arbeit, die ihm übergeben wird. „Nach Freigabe fragen“ und „Voller Zugriff“ gelten außerdem sofort für alle bestehenden Unterhaltungen.",
   "permissions.peers.everyone": "Mit jedem Bot sprechen lassen",
   "permissions.peers.limited": "Nur für Gespräche mit {names} eingerichtet.",
   "permissions.peers.none": "So eingerichtet, dass er mit keinem anderen Bot spricht.",
