@@ -2241,7 +2241,6 @@
   "cloudWelcome.engine.connected": "Подключено",
   "cloudWelcome.engine.credit": "У вас есть {amount} кредита Claude, поэтому боты могут начать работу прямо сейчас. Войдите, когда будете готовы.",
   "cloudWelcome.engine.creditPlain": "В пробный доступ входит кредит Claude, поэтому боты могут начать работу прямо сейчас. Войдите, когда будете готовы.",
-  "cloudWelcome.engine.sub": "Ваши боты работают на вашем тарифе Claude или ChatGPT. Войдите один раз на {name}.",
   "cloudWelcome.engine.useCredit": "Пока использовать мой кредит",
   "cloudWelcome.files.apps": "Подключить приложения",
   "cloudWelcome.files.appsAction": "Подключить приложения",

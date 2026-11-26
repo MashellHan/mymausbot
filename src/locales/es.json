@@ -1881,7 +1881,6 @@
   "cloudWelcome.engine.connected": "Conectado",
   "cloudWelcome.engine.credit": "Tienes {amount} de crédito de Claude, así que tus bots pueden empezar ahora mismo. Inicia sesión cuando quieras.",
   "cloudWelcome.engine.creditPlain": "Tu prueba incluye crédito de Claude, así que tus bots pueden empezar ahora mismo. Inicia sesión cuando quieras.",
-  "cloudWelcome.engine.sub": "Tus bots piensan con tu propio plan de Claude o ChatGPT. Inicia sesión una vez en {name}.",
   "cloudWelcome.engine.useCredit": "Usar mi crédito por ahora",
   "cloudWelcome.files.apps": "Conectar apps",
   "cloudWelcome.files.appsAction": "Conectar apps",

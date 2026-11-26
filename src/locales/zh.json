@@ -3116,7 +3116,6 @@
   "cloudWelcome.engine.connected": "已连接",
   "cloudWelcome.engine.credit": "你有 {amount} Claude 额度，所以机器人可以立即开始工作。你准备好时登录即可。",
   "cloudWelcome.engine.creditPlain": "你的试用包含 Claude 额度，所以机器人可以立即开始工作。你准备好时登录即可。",
-  "cloudWelcome.engine.sub": "你的机器人使用你自己的 Claude 或 ChatGPT 方案来思考。请在 {name} 上登录一次。",
   "cloudWelcome.engine.useCredit": "暂时使用我的额度",
   "cloudWelcome.files.apps": "连接应用",
   "cloudWelcome.files.appsAction": "连接应用",
