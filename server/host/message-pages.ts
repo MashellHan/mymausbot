@@ -23,8 +23,8 @@ function slimMessage(message: Message, lookup?: MessageLookup): Message | Record
   return { ...rest, hasImage: true };
 }
 
-/** A message as a conversation page carries it: slimmed, and a plain tool step's long output cut to a preview marked
- * `clipped`. Input stays whole (labels parse it), and so do rows whose tool output is the reply itself (a teammate's
+/** A message as a conversation page and a live `message` or `message.patch` frame carry it: slimmed, and a plain tool
+ * step's long output cut to a preview marked `clipped`. Input stays whole (labels parse it), and so do rows whose tool output is the reply itself (a teammate's
  * result, a relayed message, a handoff). */
 export function pageMessage(message: Message, lookup?: MessageLookup): Message | Record<string, unknown> {
   const slim = slimMessage(message, lookup);
@@ -37,7 +37,7 @@ export function pageMessage(message: Message, lookup?: MessageLookup): Message |
 
 /** A conversation's messages one page at a time (newest first when `before` is absent), and the page around one message. */
 export function messagePages(store: Pick<Store, "messagesFor" | "messagesTail" | "activeLeaf">, readMessage: (threadId: string, id: string) => Message | null) {
-  const wireMessage = (threadId: string, message: Message) => slimMessage(message, (id) => readMessage(threadId, id));
+  const wireMessage = (threadId: string, message: Message) => pageMessage(message, (id) => readMessage(threadId, id));
   const paged = (threadId: string, messages: Message[]) =>
     messages.map((message) => pageMessage(message, (id) => readMessage(threadId, id)));
 
