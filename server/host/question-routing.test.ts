@@ -562,5 +562,22 @@ describe("busy parent-thread forwarding into delegated sub-workers", () => {
         text: "Switch format",
       }),
     ).toEqual({ delivered: false, outcomes: [] });
+
+    // Post-await task deletion prevents writing forwarded rows onto a deleted task.
+    const gone = world();
+    const goneChild = gone.node({ id: "as_gone", parentId: "root", status: "running" });
+    const origSteer = gone.routing.forwardDelegated;
+    const origSteerFn = vi.spyOn(gone.store, "taskByThread");
+    origSteerFn.mockImplementationOnce(() => ({ threadId: "work", title: "Work", createdAt: 1 })).mockImplementationOnce(() => undefined);
+    expect(
+      await origSteer({
+        parentThreadId: "inbox",
+        parentBotId: "fuchs",
+        sourceLevel: "full",
+        targets: [goneChild],
+        text: "Drop if task deleted",
+      }),
+    ).toEqual({ delivered: false, outcomes: [] });
+    expect(gone.rows("work")).toEqual([]);
   });
 });

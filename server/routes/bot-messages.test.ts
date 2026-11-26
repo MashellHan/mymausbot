@@ -561,6 +561,7 @@ describe("POST /api/bots/:id/messages with widgetAction", () => {
       adapter: { capabilities: { queueing: true }, steer: async () => "steered" as const },
     };
 
+    const settled: Array<[string, readonly string[]]> = [];
     const server = createServer(async (req, res) => {
       const url = new URL(req.url ?? "/", "http://localhost");
       const routes = [createBotMessageRoutes({
@@ -597,6 +598,7 @@ describe("POST /api/bots/:id/messages with widgetAction", () => {
         notePhoneSend: () => {},
         pressRecords: () => null,
         serverPress: () => null,
+        onQueueSettled: (tid, qids) => settled.push([tid, qids]),
       } as unknown as BotMessageRouteDeps)];
       const auth = { kind: "loopback", scopes: ["admin"] } as RequestAuth;
       const handled = await dispatchRoutes(routes, { req, res, url, path: url.pathname, method: req.method ?? "GET", auth, json, readBody });
@@ -630,6 +632,10 @@ describe("POST /api/bots/:id/messages with widgetAction", () => {
       steered: true,
       intake: { mode: "live-steer", state: "processing" },
     });
+    expect(settled).toEqual([
+      [threadId, [queuedCancel.id]],
+      [threadId, [queuedSteer.id]],
+    ]);
   });
 
   it("never reports a typed reply as a press, on the plain, guarded and edit routes, even when its words are a control's label", async () => {

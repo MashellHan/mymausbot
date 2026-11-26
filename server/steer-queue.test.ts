@@ -480,6 +480,19 @@ describe("steer-queue module", () => {
     } finally { unsubscribe(); }
   });
 
+  it("keeps stop-requeue rows hidden by default while surfacing showInSnapshot progressive rows and calling onDiscard", () => {
+    const bot = fakeBot("bot-snap", "thread-snap", true);
+    const hidden = queueSteeredMessage(bot.id, bot.threadId, "requeued steered row", { rowId: "row-hidden" });
+    const visible = queueSteeredMessage(bot.id, bot.threadId, "progressive queued row", { rowId: "row-visible", showInSnapshot: true });
+    expect(queuedSteerSnapshot((id) => id === bot.id)[bot.threadId]).toEqual([
+      { queueId: visible.id, text: "progressive queued row" },
+    ]);
+    expect(cancelSteeredMessage(bot.id, hidden.id, bot.threadId)).toBe(true);
+    const onDiscard = vi.fn();
+    drainSteeredMessages(fakeStore([]), vi.fn(), undefined, { onDiscard });
+    expect(onDiscard).toHaveBeenCalledWith(bot.threadId, [visible.id]);
+  });
+
   it("retains an idle task's queue until its runtime dispatch claim clears", () => {
     const bot = fakeBot("bot-handshake", "thread-handshake", false);
     const store = fakeStore([bot]);

@@ -305,6 +305,7 @@ export function createQuestionRouting(deps: QuestionRoutingDeps) {
           if (!personOnly(question)) {
             deps.handedInUnproven(child.threadId);
             if (await deps.answerLive(child.threadId, liveQuestion.card.requestId, input.text)) {
+              if (!store.taskByThread(target.id, child.threadId)) continue;
               const settled = store.messagesFor(child.threadId).find((one) => one.id === liveQuestion.id)?.card;
               if (settled) {
                 store.patchMessage(child.threadId, liveQuestion.id, {
@@ -327,6 +328,7 @@ export function createQuestionRouting(deps: QuestionRoutingDeps) {
         deps.handedInUnproven(child.threadId);
         const prompt = buildDelegatedForwardPrompt({ userText: input.text, redirect: input.redirect, assignmentId: child.id });
         if (!(await deps.steer(child.threadId, prompt))) continue;
+        if (!store.taskByThread(target.id, child.threadId)) continue;
         store.appendMessage(child.threadId, {
           role: "user",
           kind: "text",

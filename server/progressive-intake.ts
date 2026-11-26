@@ -4,7 +4,9 @@ import {
   type ProgressiveIntakeState,
 } from "../shared/progressive-intake.ts";
 import type { FollowUp } from "../shared/follow-up.ts";
+import type { SteerQueueReason } from "../shared/wire.ts";
 import { admit, type AdmissionSteerBlock } from "./admission.ts";
+import type { DirectSendReceipt } from "./direct-send.ts";
 import { sinceFreshStart } from "./fresh-start.ts";
 import { maskQuotedAndCode } from "./room-holds.ts";
 import type { Message } from "./store.ts";
@@ -18,6 +20,8 @@ export interface BusyIntakeClassificationInput {
   followUp?: FollowUp;
   hasActiveDelegation?: boolean;
   fromApp?: boolean;
+  /** False when the request originates from an automated/webhook/bot trigger rather than a human user or owner. */
+  allowSoftRedirect?: boolean;
 }
 
 export interface BusyIntakeClassification {
@@ -74,7 +78,7 @@ export function classifyBusyIntake(input: BusyIntakeClassificationInput): BusyIn
     };
   }
 
-  const redirect = !input.fromApp && (input.followUp === "restart" || isSoftRedirectIntent(input.text));
+  const redirect = !input.fromApp && input.allowSoftRedirect !== false && (input.followUp === "restart" || isSoftRedirectIntent(input.text));
   const allowDelegationForward = Boolean(input.hasActiveDelegation && !input.fromApp && !input.carriesImages);
 
   if (redirect) {
@@ -231,7 +235,8 @@ export interface ProgressiveIntakeTracker {
   consumeRedirectStop(threadId: string, completedTurnId?: string): boolean;
   settleCompletedTurn(threadId: string, completedTurnId: string | undefined, stopped: boolean, queuedRowIds: ReadonlySet<string>): void;
   markSoftRedirect(threadId: string, turnId?: string, generation?: string): void;
-  saveRedirectContext(queueId: string, ctx: { supersededText?: string; progressSummary?: string }): void;
+  saveRedirectContext(threadId: string, queueId: string, ctx: { supersededText?: string; progressSummary?: string }): void;
+  clearRedirectContext(threadId: string, queueIds?: readonly string[]): void;
   formatDrainedPrompt(input: {
     threadId: string;
     group: ReadonlyArray<{ messageId: string; prompt: string }>;
@@ -263,9 +268,9 @@ export interface ProgressiveIntakeTracker {
     text: string;
     replyToId?: string;
     acceptedMessage: Message;
-    queued: { id: string; text: string; replyToId?: string; reason?: string } | null;
-    waitWords: (threadId: string, reason: never) => string;
-  }): Record<string, unknown>;
+    queued: { id: string; text: string; replyToId?: string; reason?: SteerQueueReason } | null;
+    waitWords: (threadId: string, reason: SteerQueueReason | undefined) => string | undefined;
+  }): DirectSendReceipt;
 }
 
 export function createProgressiveIntakeTracker(
@@ -273,7 +278,18 @@ export function createProgressiveIntakeTracker(
   threadMaps: { track<T extends { delete(threadId: string): unknown; keys(): IterableIterator<string> }>(map: T): T },
 ): ProgressiveIntakeTracker {
   const softRedirectInterrupts = threadMaps.track(new Map<string, { turnId?: string; generation?: string }>());
-  const progressiveRedirectContexts = threadMaps.track(new Map<string, { supersededText?: string; progressSummary?: string }>());
+  const progressiveRedirectContexts = threadMaps.track(new Map<string, Map<string, { supersededText?: string; progressSummary?: string }>>());
+
+  const clearRedirect = (threadId: string, queueIds?: readonly string[]) => {
+    if (!queueIds) {
+      progressiveRedirectContexts.delete(threadId);
+      return;
+    }
+    const byThread = progressiveRedirectContexts.get(threadId);
+    if (!byThread) return;
+    for (const queueId of queueIds) byThread.delete(queueId);
+    if (byThread.size === 0) progressiveRedirectContexts.delete(threadId);
+  };
 
   return {
     bindTurnStarted(threadId, turnId, queuedRowIds, ownerMessageId) {
@@ -307,16 +323,19 @@ export function createProgressiveIntakeTracker(
     markSoftRedirect(threadId, turnId, generation) {
       softRedirectInterrupts.set(threadId, { turnId, generation });
     },
-    saveRedirectContext(queueId, ctx) {
-      if (ctx.progressSummary || ctx.supersededText) progressiveRedirectContexts.set(queueId, ctx);
+    saveRedirectContext(threadId, queueId, ctx) {
+      if (!ctx.progressSummary && !ctx.supersededText) return;
+      const byThread = progressiveRedirectContexts.get(threadId) ?? new Map<string, { supersededText?: string; progressSummary?: string }>();
+      byThread.set(queueId, ctx);
+      progressiveRedirectContexts.set(threadId, byThread);
     },
+    clearRedirectContext: clearRedirect,
     formatDrainedPrompt({ threadId, group, appended, defaultPrompt }) {
       const mode = appended.at(-1)?.intake?.mode;
+      const byThread = progressiveRedirectContexts.get(threadId);
+      const redirectCtx = byThread ? group.map((item) => byThread.get(item.messageId)).find((ctx) => ctx !== undefined) : undefined;
+      clearRedirect(threadId, group.map((item) => item.messageId));
       if (!mode) return defaultPrompt;
-      const redirectCtx = group.map((item) => progressiveRedirectContexts.get(item.messageId)).find((ctx) => ctx !== undefined)
-        ?? progressiveRedirectContexts.get(threadId);
-      for (const item of group) progressiveRedirectContexts.delete(item.messageId);
-      progressiveRedirectContexts.delete(threadId);
       if (mode === "soft-redirect") {
         return buildSoftRedirectPrompt({
           latestPrompt: defaultPrompt,
@@ -376,7 +395,7 @@ export function createProgressiveIntakeTracker(
           threadId,
           message: acceptedMessage,
           ...(acceptedMessage.intake ? { intake: acceptedMessage.intake } : {}),
-          ...(queued.reason ? { reason: queued.reason, why: waitWords(threadId, queued.reason as never) } : {}),
+          ...(queued.reason ? { reason: queued.reason, why: waitWords(threadId, queued.reason) } : {}),
         };
       }
       const canonical = { ok: true as const, threadId, message: acceptedMessage };

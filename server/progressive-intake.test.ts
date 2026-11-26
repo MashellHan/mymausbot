@@ -1,10 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
+import { createThreadMaps } from "./host/thread-maps.ts";
 import {
   buildDelegatedForwardPrompt,
   buildProgressiveContinuationPrompt,
   buildSoftRedirectPrompt,
   classifyBusyIntake,
+  createProgressiveIntakeTracker,
   extractTurnProgressSummary,
   isSoftRedirectIntent,
 } from "./progressive-intake.ts";
@@ -71,6 +73,13 @@ describe("progressive-intake classification", () => {
         followUp: "queue",
       }),
     ).toMatchObject({ mode: "progressive-continue", initialState: "received", shouldInterrupt: false, chose: "queue" });
+    expect(
+      classifyBusyIntake({
+        text: "Cancel the previous plan and write tests instead",
+        engineCanSteer: false,
+        allowSoftRedirect: false,
+      }),
+    ).toMatchObject({ mode: "progressive-continue", initialState: "received", shouldInterrupt: false, redirect: false });
   });
 
   it("allows delegation-forward eligibility only when delegated work is active and message carries no images", () => {
@@ -132,5 +141,82 @@ describe("progressive-intake context summaries & prompts", () => {
 
     expect(buildDelegatedForwardPrompt({ userText: "Include metrics", assignmentId: "as_9" })).toContain("assignment as_9");
     expect(buildDelegatedForwardPrompt({ userText: "Switch to JSON", redirect: true })).toContain("direction change");
+  });
+
+  it("tracks redirect context by threadId so clearRedirectContext, threadMaps.forget, and queuedMatchReceipt stay isolated", () => {
+    const messages = new Map<string, Message[]>();
+    const threadMaps = createThreadMaps();
+    const tracker = createProgressiveIntakeTracker(
+      {
+        activePath: (threadId) => messages.get(threadId) ?? [],
+        patchMessage: (threadId, id, patch) => {
+          const list = messages.get(threadId) ?? [];
+          const idx = list.findIndex((m) => m.id === id);
+          if (idx < 0) return null;
+          list[idx] = { ...list[idx], ...patch };
+          return list[idx];
+        },
+      },
+      threadMaps,
+    );
+
+    const softRow = {
+      id: "m1",
+      at: 1000,
+      role: "user" as const,
+      kind: "text" as const,
+      text: "Cancel old work",
+      intake: { mode: "soft-redirect" as const, state: "received" as const, updatedAt: 1000 },
+    };
+    const contRow = {
+      id: "m2",
+      at: 2000,
+      role: "user" as const,
+      kind: "text" as const,
+      text: "Continue plain",
+      intake: { mode: "progressive-continue" as const, state: "received" as const, updatedAt: 2000 },
+    };
+
+    tracker.saveRedirectContext("t-forget", "q-1", { supersededText: "Old task", progressSummary: "Did step 1" });
+    threadMaps.forget("t-forget");
+    expect(
+      tracker.formatDrainedPrompt({
+        threadId: "t-forget",
+        group: [{ messageId: "q-1", prompt: "New goal" }],
+        appended: [softRow],
+        defaultPrompt: "New goal",
+      }),
+    ).not.toContain("Old task");
+
+    tracker.saveRedirectContext("t-cancel", "q-cancel", { supersededText: "Dropped task", progressSummary: "Partial work" });
+    tracker.clearRedirectContext("t-cancel", ["q-cancel"]);
+    expect(
+      tracker.formatDrainedPrompt({
+        threadId: "t-cancel",
+        group: [{ messageId: "q-next", prompt: "Fresh follow-up" }],
+        appended: [contRow],
+        defaultPrompt: "Fresh follow-up",
+      }),
+    ).toBe("Fresh follow-up");
+
+    const waitWords = vi.fn((_tid: string, reason: "capacity" | "group-turn" | undefined) => (reason === "capacity" ? "slot busy" : undefined));
+    expect(
+      tracker.queuedMatchReceipt({
+        botId: "bot-1",
+        threadId: "t-1",
+        text: "Wait here",
+        acceptedMessage: contRow,
+        queued: { id: "q-cap", text: "Wait here", reason: "capacity" },
+        waitWords,
+      }),
+    ).toMatchObject({
+      ok: true,
+      queued: true,
+      queueId: "q-cap",
+      threadId: "t-1",
+      reason: "capacity",
+      why: "slot busy",
+      intake: contRow.intake,
+    });
   });
 });

@@ -43,6 +43,8 @@ interface QueueEntry {
     /** The person's row already in the transcript, steered into a turn that was stopped before it read it: it runs as
      * it is, never as a second copy. */
     rowId?: string;
+    /** Opts a transcript-backed progressive intake row into the public pending-queue snapshot for existing client cancel/steer controls. */
+    showInSnapshot?: boolean;
     /** Bot ids picked from the @ list. */
     mentions?: string[];
   }>;
@@ -58,6 +60,7 @@ export interface DrainSteerOptions {
     appended: readonly Message[];
     defaultPrompt: string;
   }) => string;
+  onDiscard?: (threadId: string, queueIds: readonly string[]) => void;
 }
 
 const queues = new Map<string, QueueEntry>();
@@ -101,7 +104,7 @@ export function queuedSteerSnapshot(ownsThread: (botId: string, threadId: string
   shownSender: (threadId: string, sender: ResolvedSender) => ResolvedSender | undefined = () => undefined): BotQueuedMessages {
   return Object.fromEntries([...queues]
     .filter(([threadId, entry]) => ownsThread(entry.botId, threadId))
-    .map(([threadId, entry]) => [threadId, entry.items.filter((item) => !item.rowId).map((item) => ({
+    .map(([threadId, entry]) => [threadId, entry.items.filter((item) => !item.rowId || item.showInSnapshot).map((item) => ({
       queueId: item.messageId, text: item.text, ...(item.reason ? { reason: item.reason, why: whyHeld(threadId, item.reason) } : {}),
       ...(item.sender && shownSender(threadId, item.sender) ? { sender: shownSender(threadId, item.sender) } : {}),
     }))]));
@@ -120,7 +123,7 @@ export function queueSteeredMessage(
   botId: string,
   threadId: string,
   text: string,
-  options: { prompt?: string; replyToId?: string; sendId?: string; dataContext?: Message["dataContext"]; reason?: SteerQueueReason; unattended?: boolean; peerAsk?: Message["peerAsk"]; origin?: WorkOrigin; sender?: ResolvedSender; trigger?: UsageTrigger; callId?: string; via?: "call"; reaction?: string; fromApp?: Message["fromApp"]; relay?: Message["relay"]; rowId?: string; first?: boolean; queuedAt?: number; mentions?: string[]; aheadOfOthers?: string } = {},
+  options: { prompt?: string; replyToId?: string; sendId?: string; dataContext?: Message["dataContext"]; reason?: SteerQueueReason; unattended?: boolean; peerAsk?: Message["peerAsk"]; origin?: WorkOrigin; sender?: ResolvedSender; trigger?: UsageTrigger; callId?: string; via?: "call"; reaction?: string; fromApp?: Message["fromApp"]; relay?: Message["relay"]; rowId?: string; showInSnapshot?: boolean; first?: boolean; queuedAt?: number; mentions?: string[]; aheadOfOthers?: string } = {},
 ): QueuedSteer {
   const id = newId();
   const entry = queues.get(threadId) ?? { botId, items: [] };
@@ -144,6 +147,7 @@ export function queueSteeredMessage(
     ...(options.reaction ? { reaction: options.reaction } : {}),
     ...(options.relay ? { relay: options.relay } : {}),
     ...(options.rowId ? { rowId: options.rowId } : {}),
+    ...(options.showInSnapshot ? { showInSnapshot: true } : {}),
     ...(options.mentions?.length ? { mentions: options.mentions } : {}),
   };
   saveChatFollowup({ id, kind: "bot", ownerId: botId, threadId, payload: item });
@@ -205,8 +209,10 @@ export function drainSteeredMessages(
       ? store.projectBotForTask(entry.botId, threadId)
       : store.bot(entry.botId);
     if (!bot) {
-      settleChatFollowups(entry.items.map((item) => item.messageId), "cancelled");
+      const discardedIds = entry.items.map((item) => item.messageId);
+      settleChatFollowups(discardedIds, "cancelled");
       queues.delete(threadId);
+      options?.onDiscard?.(threadId, discardedIds);
       changed();
       continue;
     }

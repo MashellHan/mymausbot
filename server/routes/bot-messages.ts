@@ -148,6 +148,8 @@ export interface BotMessageRouteDeps {
   relayRefusal?(bot: BotRecord, email: string | undefined): string | null;
   /** The answer to someone's ask to chat with a team bot; null for any other card. */
   resolveAccessRequest?(threadId: string, requestId: string, behavior: string, message: unknown): { status: number; body: unknown } | null;
+  /** Clears progressive intake redirect metadata when queued items are cancelled or settled outside normal drain. */
+  onQueueSettled?(threadId: string, queueIds: readonly string[]): void;
 }
 
 /** External interfaces (the Slack worker) opt in. `onBehalfOf`, advertised by /api/health as
@@ -387,6 +389,7 @@ export function createBotMessageRoutes(deps: BotMessageRouteDeps): RouteHandler 
         }
       }
       reopenCancelledPress(store, bot.threadId, queueId);
+      deps.onQueueSettled?.(bot.threadId, [queueId]);
       return json(res, 200, { ok: true });
     }
 
@@ -467,11 +470,13 @@ export function createBotMessageRoutes(deps: BotMessageRouteDeps): RouteHandler 
         for (const message of messages) handoffs.steered(bot.threadId, steerTarget, instance?.instanceId, message.id);
         const queueIds = held.items.map((item) => item.messageId);
         settleHeldSteeredQueue(held);
+        deps.onQueueSettled?.(bot.threadId, queueIds);
         return json(res, 200, { ok: true, steered: true, threadId: bot.threadId, messages, queueIds });
       }
       if (steered === "indeterminate") {
         // No destination left: settle, so a restart cannot replay words a dead turn may have run.
         settleHeldSteeredQueue(held);
+        deps.onQueueSettled?.(bot.threadId, held.items.map((item) => item.messageId));
         if (!store.taskByThread(bot.id, bot.threadId)) {
           throw Object.assign(new Error("the target task no longer exists"), { status: 409 });
         }
