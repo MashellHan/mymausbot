@@ -11,6 +11,7 @@ import { createProcessHealth, type ProcessHealthRecorder } from "./process-healt
 import { createProcessSampler, linuxProcessList, LINUX_SAMPLE_MS, nodeUtilization, OTHER_SAMPLE_MS, psProcessList, type ProcessSampler } from "./process-sampler.ts";
 import type { FailoverWhy } from "./turn-record.ts";
 import { createTurnTimings, type Refusal, type SlowNote, type TurnTimings } from "./turn-timings.ts";
+import { startStallWatch, stallReportLines, type StallWatch } from "./stall-watch.ts";
 
 export const PERF_FILE = "perf-timings.json";
 /** One line per kind of slow event at most this often; the ones held back are counted on the next. */
@@ -36,6 +37,9 @@ export interface PerfHostDeps {
   processes?: ProcessHealthRecorder;
   /** The engine processes the server tracks, with the threads each runs (engine-memory, where turns wait for room). */
   engines?: () => ReadonlyArray<{ pid: number; threads: readonly string[] }>;
+  /** Watch for main-thread stalls (stall-watch.ts): on a Cloud home and a self-hosted server, not in the desktop app. Never
+   * without the sampler timer. */
+  watchStalls?: boolean;
 }
 
 /** What a report shows when the recorder failed: diagnostics never fail because of it. */
@@ -89,11 +93,17 @@ export function createPerfHost(deps: PerfHostDeps) {
     list: linux ? () => linuxProcessList() : psProcessList, intervalMs: linux ? LINUX_SAMPLE_MS : OTHER_SAMPLE_MS,
     scope: deps.wholeMachine && linux ? "all" : "tree", utilization: nodeUtilization(), now, engines: enginePids,
     stalled: (ms) => say("loop", `event loop stalled: the ${linux ? 60 : 300}s sampler fired ${duration(ms)} late`), afterSample: watchHolds,
+    resumed: (ms) => say("sleep", `the computer slept or the server was paused: the ${linux ? 60 : 300}s sampler fired ${duration(ms)} late, not counted as a stall`),
     seen: (rows, buckets) => processes.sample(rows, buckets),
   });
   if (deps.timer !== false && !windows) sampler.start();
   const stalls = deps.stalls ?? createLoopStalls({ resumed: (ms) => say("sleep", `the computer slept or the server was paused: the event loop waited through a ${duration(ms)} gap, not counted as a stall`) });
   if (deps.timer !== false) stalls.start();
+  const watch: StallWatch | null = deps.timer !== false && deps.watchStalls === true
+    ? guarded("stall-watch", () => startStallWatch({ dataDir: deps.dataDir, ...(deps.log ? { log: deps.log } : {}) }), null) : null;
+  const caught = () => guarded("stall-watch", () => stallReportLines(watch?.recent() ?? []), []);
+  /** Stall records right under the heading: a @devs report keeps only the first lines of this part. */
+  const stallsFirst = (lines: string[]) => { const stalls = caught(); return lines[0]?.startsWith("## ") ? [lines[0], ...stalls, ...lines.slice(1)] : [...stalls, ...lines]; };
   if (deps.timer !== false && linux) guarded("limits", () => (deps.log ?? ((line: string) => console.warn(line)))(processes.startLine()), undefined);
 
   const sources = () => ({ hour: timings.window(), day: timings.day(), live: timings.live(), limits: limits(), process: windows ? null : sampler.report(), stalls: guarded("stalls", () => stalls.report(), null), processes: processes.report() });
@@ -108,14 +118,14 @@ export function createPerfHost(deps: PerfHostDeps) {
     health: (): PerfHealth | null => guarded("health", () => perfHealth(sources()), null),
     /** For a @devs report: these conversations' and bots' latest turns, then everything else. */
     lines(filter: { threadIds: readonly string[]; botIds: readonly string[] }): string[] {
-      return guarded("lines", () => perfLines(sources(), timings.recent({ ...filter, limit: RECENT_IN_REPORT }), "Latest turns in this conversation or of its bots, newest last:"), PERF_UNAVAILABLE);
+      return stallsFirst(guarded("lines", () => perfLines(sources(), timings.recent({ ...filter, limit: RECENT_IN_REPORT }), "Latest turns in this conversation or of its bots, newest last:"), PERF_UNAVAILABLE));
     },
     /** For the desktop's diagnostics export: every bot's latest turns. */
     text(): string {
-      return guarded("text", () => perfLines(sources(), timings.recent({ limit: RECENT_IN_REPORT }), "Latest turns, newest last:"), PERF_UNAVAILABLE).join("\n");
+      return stallsFirst(guarded("text", () => perfLines(sources(), timings.recent({ limit: RECENT_IN_REPORT }), "Latest turns, newest last:"), PERF_UNAVAILABLE)).join("\n");
     },
     /** The graceful shutdown: no more samples, and the turns since the last save written now. */
-    stop() { sampler.stop(); stalls.stop(); guarded("save", () => timings.flush(), undefined); },
+    stop() { sampler.stop(); stalls.stop(); watch?.stop(); guarded("save", () => timings.flush(), undefined); },
   };
 }
 export type PerfHost = ReturnType<typeof createPerfHost>;

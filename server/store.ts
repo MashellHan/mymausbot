@@ -45,6 +45,7 @@ import { titleFromMessage, UNTITLED_TASK } from "./thread-title.ts";
 import { buildTask, threadTitleFrom, UNTITLED_THREAD, type NewThreadLevel } from "./task-record.ts";
 import { repairLegacyWorkThreads } from "./legacy-work-threads.ts";
 import { createBotFork, createGroupFork } from "./store-forks.ts";
+import { createThreadBotIndex } from "./thread-bot-index.ts";
 import { activeGroupTask, groupTaskByThread, groupTasks, migrateGroupTaskRead, mirrorActiveGroupTask, refreshGroupUnread, setGroupTaskRead, syncGroupReadPatch } from "./group-task-state.ts";
 export { titleFromMessage, UNTITLED_TASK } from "./thread-title.ts";
 export { threadTitleFrom, UNTITLED_THREAD } from "./task-record.ts";
@@ -481,8 +482,8 @@ export class Store {
   /** In memory only: message writes must not rewrite bots.json. */
   private noteThreadActivity(threadId: string, at: number, forOrder = false, orderAt = at): void {
     if (!Number.isFinite(at)) return;
-    for (const task of [...this.bots, ...this.groups].map((owner) => owner.tasks?.find((candidate) => candidate.threadId === threadId))) {
-      if (!task) continue;
+    for (const [kind, owner] of [...this.bots.map((bot) => ["bot", bot] as const), ...this.groups.map((group) => ["group", group] as const)]) {
+      const task = owner.tasks?.find((candidate) => candidate.threadId === threadId); if (!task) continue; this.registry.changedInPlace({ kind, id: owner.id });
       task.updatedAt = Math.max(task.updatedAt ?? 0, at);
       if (forOrder) task.lastThreadOrderAt = Math.max(task.lastThreadOrderAt ?? 0, orderAt);
     }
@@ -1185,9 +1186,8 @@ export class Store {
     return this.bots.find((b) => b.id === id) ?? this.standIns.get(id) ?? null; } /** One of this place's own bots. Every method that changes a bot looks here and never among the stand-ins: a record with `home` is read-only on this place. */ private own(id: string) { return this.bots.find((b) => b.id === id) ?? null;
   }
 
-  botByThread(threadId: string) {
-    return this.bots.find((b) => b.threadId === threadId || b.tasks?.some((t) => t.threadId === threadId)) ?? null;
-  }
+  private readonly threadBots = createThreadBotIndex<BotRecord>();
+  botByThread(threadId: string): BotRecord | null { return this.threadBots.find(this.bots, threadId); }
 
   private newBotSelection(requested?: ModelSelection): ModelSelection {
     return this.completeNewBotSelection(requested ?? this.defaultSelection());
@@ -1431,7 +1431,7 @@ export class Store {
       // New authority goes live only after its durable save succeeds.
       this.saveBots(this.bots.map((candidate) => candidate === bot ? { ...bot, toolScope: nextToolScope } : candidate));
       bot.toolScope = nextToolScope;
-    } else this.saveBots();
+    } else this.saveBotThread(id, undefined, "now");
     this.emit({ type: "bot", botId: id });
     return bot;
   }

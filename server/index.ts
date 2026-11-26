@@ -13,9 +13,9 @@ import { ToolResults, TOOL_RESULT_MAX_CHARS } from "./tool-results.ts";
 import { basename, join } from "node:path";
 import { authorizeExternalRuntime, externalRuntimeIsActive, type ExternalRuntimeGrant } from "./external-runtime.ts";
 import { z } from "zod";
-import { selectReplay, replayToolCalls, DEFAULT_REBUILD_BYTES, MAX_SUMMARY_BYTES } from "./context-rebuild.ts";
-import { draftSummary, foldPoint } from "./compaction-summary.ts";
-import { compactBudget, compactionReading, contextWindowFor, shouldCompact } from "./context-budget.ts";
+import { selectReplay, replayToolCalls, DEFAULT_REBUILD_BYTES } from "./context-rebuild.ts";
+import { claudeCompactionDisabled, createConversationCompaction } from "./host/conversation-compaction.ts";
+import { compactionReading } from "./context-budget.ts";
 import { autoCompactWindow } from "./drivers/claude.ts";
 import { RoomContextTracker, roomResetNote } from "./room-context.ts";
 import { createRoomTranscript, GROUP_CONTEXT_MESSAGES } from "./host/room-transcript.ts";
@@ -2804,7 +2804,7 @@ const { stopThreadForPerson, stopOnTypedCommand, restartForPerson } = createPers
 const imageTools = createImageToolRoutes({ config: () => cfg, dataDir: DATA_DIR, liveTurn: (threadId) => liveTurnByThread.get(threadId), key: turnAttachmentKey, images: (key) => (turnAttachmentsByTurn.get(key) ?? []).filter((item) => item.kind === "image").length, park: (key, image) => { const saved = saveImage(image.bytes, image.mime); turnAttachmentsByTurn.set(key, [...turnAttachmentsByTurn.get(key) ?? [], { kind: "image", path: saved.path, mime: saved.mime }]); } });
 const noAiNotice = createNoAiNotice({ team: CLOUD_TEAM, dataDir: DATA_DIR, people: () => teamOwners.people?.list() ?? [], personName: teamHost.personName, inbox: () => teamMessages.inbox, language: personLanguages.forLine, threadLanguage: conversationLanguage });
 const botNameClash = createBotNameClash({ store, people: () => teamMessages.people(), profileName: () => cfg.profile?.name });
-const refusedHandoffs = createRefusedHandoffs({ bots: () => store.bots, hides: (from, target) => personalReach.hides(from, target), runOf: (threadId) => (routines?.isActiveThread(threadId) ? routines.runForThread(threadId) ?? undefined : undefined), writerOf: (routineId) => cloudRoutineAuthors?.writer(routineId), askedPerson: teamOwners.routing.askedPerson, theirOwn: (threadId, person) => audienceMember(teamHost.audienceOf(threadId)) === person, inbox: () => teamMessages.inbox, language: conversationLanguage }); const refusedLending = createRefusedLending({ runOf: (threadId) => (routines?.isActiveThread(threadId) ? routines.runForThread(threadId) ?? undefined : undefined), statusOf: (runId) => routines?.listRuns().find((run) => run.id === runId)?.status, lentDevice: () => { const lent = lentNow(); return lent ? deviceWord(lent.platform) : null; }, language: conversationLanguage }); const takeRefusedRun = (threadId: string) => refusedLending.ending(threadId, refusedHandoffs.take(threadId)); /** The computer the person lends My Cloud now, newest first: one source for the word every refusal names it by. */ function lentNow() { return sharedComputers.known(CLOUD_HOME_LENDER).find((one) => one.lent); } const perf = createPerfHost({ dataDir: DATA_DIR, bus, store, limits: () => limitClock.report(), engines: () => engineMemory.enginePids(), wholeMachine: Boolean(CLOUD_HOME) }); const settingNudges = createSettingNudges({ dataDir: DATA_DIR, store }); const devsReports = createDevsReports({ dataDir: DATA_DIR, store, installId: ENVIRONMENT_ID, performance: perf.lines, appVersion: serverVersion(), runsOn: CLOUD_TEAM ? "Team Cloud" : CLOUD_HOME ? "My Cloud" : DESKTOP_MANAGED ? "desktop app" : HOSTED_WORKSPACE ? "hosted server" : "self-hosted server", recentLog: captureRecentLog(), send: devsReportSender(bugReportEndpoint(process.env, CLOUD_HOME?.adminOrigin)), askStatus: devsStatusAsker(bugReportEndpoint(process.env, CLOUD_HOME?.adminOrigin), CLOUD_HOME), statusEveryMs: Number(process.env.OMB_DEVS_STATUS_MS) || undefined, tell: (threadId, text, person) => { const group = store.groupByThread(threadId), bot = group ? store.bot(group.memberIds[0] ?? "") : store.botByThread(threadId); if (bot) notify({ ...buildNoticeNotification(bot, threadId, text), ...(group ? { groupId: group.id } : {}), ...(CLOUD_TEAM && person ? { forPerson: person } : {}) }); }, working: (threadId) => { const group = store.groupByThread(threadId), bot = group ? null : store.botByThread(threadId); return group ? Boolean(group.busyBotId) || groupThreadIsWorking(group.id, threadId) : Boolean(bot && threadBusy(bot.id, threadId)); }, automated: (threadId) => Boolean(routines?.isActiveThread(threadId)), engine: (instanceId) => (registry.get(instanceId) ? { name: engineName(instanceId), snapshot: registry.lastSnapshot(instanceId) } : null), appsReady: () => composio.configured(cfg), sessions: () => sessions.list(), ownerKey: CLOUD_OWNER_KEY, team: Boolean(CLOUD_TEAM), profileEmail: () => cfg.profile?.email, language: appLanguage, lineLanguage: personLanguages.forLine });
+const refusedHandoffs = createRefusedHandoffs({ bots: () => store.bots, hides: (from, target) => personalReach.hides(from, target), runOf: (threadId) => (routines?.isActiveThread(threadId) ? routines.runForThread(threadId) ?? undefined : undefined), writerOf: (routineId) => cloudRoutineAuthors?.writer(routineId), askedPerson: teamOwners.routing.askedPerson, theirOwn: (threadId, person) => audienceMember(teamHost.audienceOf(threadId)) === person, inbox: () => teamMessages.inbox, language: conversationLanguage }); const refusedLending = createRefusedLending({ runOf: (threadId) => (routines?.isActiveThread(threadId) ? routines.runForThread(threadId) ?? undefined : undefined), statusOf: (runId) => routines?.listRuns().find((run) => run.id === runId)?.status, lentDevice: () => { const lent = lentNow(); return lent ? deviceWord(lent.platform) : null; }, language: conversationLanguage }); const takeRefusedRun = (threadId: string) => refusedLending.ending(threadId, refusedHandoffs.take(threadId)); /** The computer the person lends My Cloud now, newest first: one source for the word every refusal names it by. */ function lentNow() { return sharedComputers.known(CLOUD_HOME_LENDER).find((one) => one.lent); } const perf = createPerfHost({ dataDir: DATA_DIR, bus, store, watchStalls: !DESKTOP_MANAGED, limits: () => limitClock.report(), engines: () => engineMemory.enginePids(), wholeMachine: Boolean(CLOUD_HOME) }); const settingNudges = createSettingNudges({ dataDir: DATA_DIR, store }); const devsReports = createDevsReports({ dataDir: DATA_DIR, store, installId: ENVIRONMENT_ID, performance: perf.lines, appVersion: serverVersion(), runsOn: CLOUD_TEAM ? "Team Cloud" : CLOUD_HOME ? "My Cloud" : DESKTOP_MANAGED ? "desktop app" : HOSTED_WORKSPACE ? "hosted server" : "self-hosted server", recentLog: captureRecentLog(), send: devsReportSender(bugReportEndpoint(process.env, CLOUD_HOME?.adminOrigin)), askStatus: devsStatusAsker(bugReportEndpoint(process.env, CLOUD_HOME?.adminOrigin), CLOUD_HOME), statusEveryMs: Number(process.env.OMB_DEVS_STATUS_MS) || undefined, tell: (threadId, text, person) => { const group = store.groupByThread(threadId), bot = group ? store.bot(group.memberIds[0] ?? "") : store.botByThread(threadId); if (bot) notify({ ...buildNoticeNotification(bot, threadId, text), ...(group ? { groupId: group.id } : {}), ...(CLOUD_TEAM && person ? { forPerson: person } : {}) }); }, working: (threadId) => { const group = store.groupByThread(threadId), bot = group ? null : store.botByThread(threadId); return group ? Boolean(group.busyBotId) || groupThreadIsWorking(group.id, threadId) : Boolean(bot && threadBusy(bot.id, threadId)); }, automated: (threadId) => Boolean(routines?.isActiveThread(threadId)), engine: (instanceId) => (registry.get(instanceId) ? { name: engineName(instanceId), snapshot: registry.lastSnapshot(instanceId) } : null), appsReady: () => composio.configured(cfg), sessions: () => sessions.list(), ownerKey: CLOUD_OWNER_KEY, team: Boolean(CLOUD_TEAM), profileEmail: () => cfg.profile?.email, language: appLanguage, lineLanguage: personLanguages.forLine });
 const creditMoves = cloudCredit && createCreditMoves({ credit: cloudCredit, store, context: selectionContext, threadBusy, saveDefault: saveNewBotModel,
   defaults: () => [cfg.defaultModelSelection, cfg.newBotDefaults?.profile.modelSelection], engineName: id => registry.get(id)?.displayName ?? id,
   log: line => console.warn(line) });
@@ -7008,63 +7008,15 @@ function peerReplayText(m: Message, name: string, text: string): string {
 }
 const { lineLabels, personPrompt, routineRunNote } = createLineLabels({ sharedChat: (threadId) => sharedMembership() && !store.groupByThread(threadId) && audienceMember(teamHost.audienceOf(threadId)) === null, userName: userNameFor, teamRole: (key) => (teamOwners.people?.list() ?? []).find((one) => personKey({ id: "", email: one.email }) === key)?.role, routineName: (threadId) => { const run = routines?.runForThread(threadId); return routines?.listRoutines().find((one) => one.id === run?.routineId)?.name; } });
 
-async function compactConversation(input: {
-  bot: BotRecord; threadId: string; generation: string;
-  instance: NonNullable<ReturnType<typeof registry.get>>; model: string;
-  excludedIds: ReadonlySet<string>; manual: boolean; idle?: AbortSignal;
-}): Promise<void> {
-  const { bot, threadId, generation, instance, model, excludedIds, manual, idle } = input;
-  const task = store.taskByThread(bot.id, threadId);
-  if (!task || (!manual && cfg.context?.autoCompact === false)) return;
-  const messages = sinceFreshStart(store.activePath(threadId));
-  const context = directContext(bot, threadId, messages);
-  const record = latestCompaction(messages);
-  // A retry must apply the existing record before considering another fold.
-  if (!manual && record && record.id !== task.appliedCompactionId) return;
-  if (manual && record?.id === messages.at(-1)?.id && !record?.firstKeptId) return;
-  const selected = selectReplay(context, {
-    budgetBytes: Math.max(1_024, context.reduce((n, entry) => n + Buffer.byteLength(entry.text) + 16, 0) + 4 * MAX_SUMMARY_BYTES + 1_024),
-    maxMessages: Number.MAX_SAFE_INTEGER, excludedIds, compaction: record,
-  });
-  const history = selected.transcript.filter(entry => entry.id);
-  if (!history.length) return;
-  const measurement = compactionReading(instance.adapter.capabilities, task.lastContextModel === `${instance.instanceId}:${model}` && !task.rewound ? task.usage?.context : undefined);
-  const window = contextWindowFor(model, instance.models, measurement?.window);
-  const bytes = history.reduce((n, entry) => n + Buffer.byteLength(entry.text), 0);
-  let floor = task.contextFloor;
-  if (record && record.id === task.appliedCompactionId && floor === undefined && measurement?.tokens) {
-    floor = measurement.tokens;
-    store.patchTask(bot.id, threadId, { contextFloor: floor });
-  }
-  const nativeCompactAt = nativeCompactTokens(instance);
-  if (!manual && !shouldCompact({ contextTokens: measurement?.tokens, estimatedBytes: bytes,
-    budget: compactBudget(window, cfg.context?.compactAt, nativeCompactAt) * (idle ? HARNESS_IDLE_FRACTION : 1), floor, window, nativeCompactAt })) return;
-  const fold = manual ? { folded: history, firstKeptId: "" } : foldPoint(history);
-  if (!fold) return;
-  const foldedThroughId = manual
-    ? context.findLast(entry => !excludedIds.has(entry.id))?.id
-    : fold.folded.at(-1)?.id;
-  if (!foldedThroughId) return;
-  const prefix = JSON.stringify(messages);
-  const controller = new AbortController(); idle?.addEventListener("abort", () => controller.abort(), { once: true }); if (idle?.aborted) controller.abort();
-  compactionControllers.set(threadId, { generation, controller });
-  try {
-    const summary = await draftSummary(fold.folded, { signal: controller.signal, generateText: sideJobs.text("compaction", bot.id, { instance })?.generateText });
-    if (!idle && !directTurnClaimIsCurrent(bot.id, generation, threadId)) throw new DirectTurnSetupCancelled("context summarization stopped");
-    controller.signal.throwIfAborted();
-    if (prefix !== JSON.stringify(sinceFreshStart(store.activePath(threadId)).slice(0, messages.length))) {
-      if (manual) throw new Error("the conversation changed during summarization — please retry");
-      return;
-    }
-    store.appendMessage(threadId, {
-      role: "bot", kind: "compaction",
-      compaction: { summary, firstKeptId: fold.firstKeptId, foldedThroughId,
-        tokensBefore: measurement?.tokens ?? Math.ceil(bytes / 4), by: manual ? "person" : "harness" },
-    }, { kind: "compaction.append", key: `${threadId}:${messages.at(-1)?.id}:${fold.firstKeptId}` });
-  } finally {
-    if (compactionControllers.get(threadId)?.generation === generation) compactionControllers.delete(threadId);
-  }
-}
+const compactConversation = createConversationCompaction({
+  store, context: () => cfg.context, directContext, latestCompaction,
+  nativeCompactTokens: (instance) => nativeCompactTokens(instance),
+  engineCompactionOn: (instance) => instance.driverKind !== "claudeAgent" || !claudeCompactionDisabled({ ...process.env, ...cfg.instances?.[instance.instanceId]?.environment }),
+  engineCompact: (target, signal) => warmSummaries.compactNow(target, signal),
+  generateText: (botId, instance) => sideJobs.text("compaction", botId, { instance: instance as NonNullable<ReturnType<typeof registry.get>> })?.generateText,
+  claimIsCurrent: (botId, generation, threadId) => directTurnClaimIsCurrent(botId, generation, threadId),
+  controllers: compactionControllers, cancelled: (reason) => new DirectTurnSetupCancelled(reason), idleFraction: HARNESS_IDLE_FRACTION,
+});
 
 const handoffs = new Handoffs({
   order: (threadId) => sinceFreshStart(store.activePath(threadId)).filter(isContextMessage).map((m) => m.id),
