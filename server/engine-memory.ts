@@ -842,6 +842,7 @@ export function withEngineMemory(instance: ProviderInstance, memory: EngineMemor
   };
   (instance as { adapter: ProviderAdapter }).adapter = {
     ...adapter,
+    prestart: undefined, // admission counts the engines turns start: none starts ahead of one here
     onEvent: (listener) => {
       listeners.add(listener);
       const off = adapter.onEvent((item) => { for (const shown of present(item)) listener(shown); });
