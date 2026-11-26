@@ -652,7 +652,7 @@ import { clearInternalTurn, isInternalTurn, markInternalTurn } from "./internal-
 import { createReactionRoutes } from "./routes/reactions.ts";
 import { createReactions, withReactionNotes, type Reactor } from "./reactions.ts";
 import { createPersonReplies } from "./person-replies.ts";
-import { lendingPerson, lendingPersonKey, personKey, relayedPersonKey } from "./person-key.ts";
+import { handedOwnServerLender, lendingPerson, lendingPersonKey, OWN_SERVER_LENDER, ownWindowLender, personKey, relayedPersonKey } from "./person-key.ts"; import { ownWindowLine } from "./own-window-sends.ts";
 import { createOutsideLineage, OUTSIDE_STAYS_HERE } from "./host/outside-lineage.ts"; import { OUTSIDE_REFUSAL, outsideRouteRefused } from "./host/outside-fence.ts"; import { createOutsideWrites } from "./host/outside-writes.ts";
 import { teamAiOwner } from "./host/team-ai-owner.ts"; import { createTeamOwners, type AskViewer } from "./host/team-owners.ts"; import { createTeamMessages } from "./host/team-messages.ts"; import { botsElsewhere } from "./host/message-person-bots.ts"; import { createTeamAwayHost } from "./host/team-away-host.ts"; import { createPlaceInbox, guestNameIn, placeInboxViewer } from "./host/place-inbox.ts"; import { relayedTurn } from "./host/relayed-turn.ts"; import { createPersonCalendar } from "./host/person-calendar.ts";
 import { createDevsReports } from "./host/devs-reports.ts"; import { createSettingNudges } from "./host/setting-nudges.ts"; import { createPerfHost } from "./perf/perf-host.ts"; import { createPerfDiagnosticsRoutes } from "./routes/perf-diagnostics.ts"; import { bugReportEndpoint, devsReportSender, devsStatusAsker } from "./devs-report-send.ts"; import { captureRecentLog } from "./recent-log.ts"; import { createShareAnswer } from "./host/share-answer.ts";
@@ -905,8 +905,9 @@ function turnOrigin(capability: Pick<InternalCapability, "threadId" | "generatio
 /** Fail closed: only the person whose own message provably started this exact turn generation. Deliberately not the usage ledger's trigger, which defaults to the owner. */
 function sharedComputerPrincipal(capability: Pick<InternalCapability, "botId" | "threadId" | "generation">): string | null {
   if (CLOUD_HOME) { const lends = cloudLendingRefusal(capability) === null; if (lends) refusedLending.allowed(capability.threadId); return lends ? CLOUD_HOME_LENDER : null; }
-  return lendingPerson(provenRequestPerson(directRequestOwners.get(capability.threadId), capability.generation,
-    (messageId) => linePersonKey(store.messagesFor(capability.threadId).find((message) => message.id === messageId))), ownHome.ownServer(), () => sessions.list());
+  const own = ownHome.ownServer(), request = directRequestOwners.get(capability.threadId);
+  const person = provenRequestPerson(request, capability.generation, (messageId) => { const line = store.messagesFor(capability.threadId).find((message) => message.id === messageId); return linePersonKey(line) ?? ownWindowLender(own, ownWindowLine(capability.threadId, line)); });
+  return person ? lendingPerson(person, own, () => sessions.list()) : request?.origin?.kind === "user" ? handedOwnServerLender(own, request.origin, actingPeople.requester(capability.threadId, capability.generation), () => sessions.list()) : null;
 }
 
 /** The only conversations that may feed a bot's memory, daily log, recall or brief; dropped whenever a session is revoked. */
@@ -13717,7 +13718,7 @@ if (await miniAppRoutes.internal({ method, path, res, json, botId: internalSende
               mode, reply, thread: lane || fresh || steersOwn || postsOwn ? "new" : "standing", approvalGranted, rework: call.rework, ...(lane ? {} : { requestBatchKey }), ...(fanOut ? { fanOut } : {}), ...(call.ownThread || steersOwn || postsOwn ? { ownThread: true } : {}),
               ...(call.doneWhen ? { doneWhen: call.doneWhen } : {}),
             });
-            usageTrace.link(node.id, node.parentId, { threadId: internalCapability.threadId, turnId: liveTurnByThread.get(internalCapability.threadId) ?? "" }); if (!duplicate) { actingPeople.handOn(internalCapability, node, lends); if (!lends && !room && !lane) handedInUnproven(routed.threadId); }
+            usageTrace.link(node.id, node.parentId, { threadId: internalCapability.threadId, turnId: liveTurnByThread.get(internalCapability.threadId) ?? "" }); if (!duplicate) { actingPeople.handOn(internalCapability, node, lends, CLOUD_HOME ? undefined : OWN_SERVER_LENDER); if (!lends && !room && !lane) handedInUnproven(routed.threadId); }
             if (!duplicate && call.files?.length) handoffFiles.sent(node.id, { botId: sender.id, name: sender.name }, call.files);
             if (duplicate && createdThread) store.deleteTask(target.botId, createdThread);
             else if (createdThread) {
