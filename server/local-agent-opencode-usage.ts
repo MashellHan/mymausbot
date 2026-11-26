@@ -79,6 +79,8 @@ function sample(row: Record<string, unknown>, now: number): Sample | null {
   return { startedAt, at: completed, tokens, observation: { ...amounts, models } };
 }
 
+const MAX_ACTIVE_TURN_MS = 10 * 60 * 1000;
+
 function usage(samples: Sample[], cutoff: number, verifiedSince: number, sessionStartedAt: number | null,
   truncated: boolean, project: ReturnType<typeof createLocalTokenProjector>): LocalAgentMemberTokenUsageWindow {
   const observed = samples.filter(({ at, startedAt }) => at > cutoff && startedAt >= verifiedSince);
@@ -90,11 +92,15 @@ function usage(samples: Sample[], cutoff: number, verifiedSince: number, session
     return {
       coverage: "ready",
       knownTokens: 0,
+      activeSeconds: 0,
       estimatedCost: project([{ input: 0, output: 0, cacheRead: 0, models: [] }], "ready").estimatedCost,
     };
   }
+  const activeMs = observed.reduce((sum, row) => sum + Math.min(Math.max(row.at - row.startedAt, 1000), MAX_ACTIVE_TURN_MS), 0);
+  const activeSeconds = activeMs > 0 ? Math.max(1, Math.round(activeMs / 1000)) : null;
   return {
     coverage: "partial", knownTokens,
+    ...(activeSeconds !== null ? { activeSeconds } : {}),
     estimatedCost: project(observed.map(({ observation }) => observation), "partial").estimatedCost,
   };
 }
