@@ -2363,6 +2363,7 @@
   "chat.newMessagesAria": "Novas mensagens",
   "chat.nextVersion": "Próxima versão",
   "chat.notice.acpEmpty": "{provider} terminou sem responder.",
+  "chat.notice.acpEndedAfterTools": "{provider} ficou pensando após a última ferramenta e terminou a sessão sem dar a resposta final. Peça para continuar ou resumir o que fez.",
   "chat.notice.acpMcpAppsFailed": "Não foi possível configurar os apps conectados, então {provider} não conseguiu começar esta resposta. Tente de novo ou troque a IA deste bot.",
   "chat.notice.acpMcpServerFailed": "Não foi possível configurar o servidor MCP \"{server}\", então {provider} não conseguiu começar esta resposta. Tente de novo ou troque a IA deste bot.",
   "chat.notice.acpModelFallback": "{displayName} não oferece mais {wanted}, então esta conversa está usando {fallback}. Para não ver mais este aviso, escolha outro modelo para este bot.",

@@ -2430,6 +2430,7 @@
   "chat.newMessagesAria": "New messages",
   "chat.nextVersion": "Next version",
   "chat.notice.acpEmpty": "{provider} finished without replying.",
+  "chat.notice.acpEndedAfterTools": "{provider} thought right past the last tool, then finished the turn without a last reply. Ask it to continue or summarize what it did.",
   "chat.notice.acpMcpAppsFailed": "Connected apps couldn't be set up, so {provider} couldn't start this reply. Try again, or switch this bot to another AI.",
   "chat.notice.acpMcpServerFailed": "The \"{server}\" MCP server couldn't be set up, so {provider} couldn't start this reply. Try again, or switch this bot to another AI.",
   "chat.notice.acpModelFallback": "{displayName} no longer offers {wanted}, so this conversation uses {fallback}. Choose another model for this bot to stop seeing this.",
