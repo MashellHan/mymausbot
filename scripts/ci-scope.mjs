@@ -216,6 +216,7 @@ export const SRC_OUTSIDE_RENDERER = [
   "src/lib/composer-attachments.ts",
   "src/lib/pwa-dpop.ts",
   "src/lib/pwa-transport.ts",
+  "src/lib/peer-message.ts",
   "src/lib/random-uuid.ts",
   "src/lib/receipts.ts",
 ];
