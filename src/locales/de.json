@@ -4187,5 +4187,6 @@
   "server.checkWork.cannotCheck": "{checker} konnte nicht prüfen: {reason}",
   "server.checkWork.stopped": "du hast die Prüfung gestoppt",
   "server.checkWork.turnedOff": "Vor dem Abschluss prüfen wurde ausgeschaltet",
-  "server.checkWork.restarted": "die App wurde neu gestartet"
+  "server.checkWork.restarted": "die App wurde neu gestartet",
+  "botPanel.library.showAll": "Alle anzeigen"
 }

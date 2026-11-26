@@ -1104,7 +1104,7 @@
   "botPanel.library.memoryError": "メモリーファイルを読み取れませんでした。",
   "botPanel.library.memoryOff": "{name}のメモリーはオフです。",
   "botPanel.library.pages": "ページ",
-  "botPanel.library.scope": "この会話から",
+  "botPanel.library.showAll": "すべて表示",
   "botPanel.memory.addPlaceholder": "{name} に覚えてほしいことを伝える",
   "botPanel.memory.empty": "記憶していることはまだありません。",
   "botPanel.memory.forget": "忘れさせる",
