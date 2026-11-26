@@ -147,6 +147,9 @@ function HtmlFileContent({ path, name, message }: { path: string; name: string; 
   </div>;
 }
 
+/** A dialog's file view has a fixed height; the pane beside the chat gives its view the room under the toolbar. */
+export const previewHeight = (fill = false) => fill ? "min-h-0 flex-1" : "h-[72dvh]";
+
 export function HtmlPreviewFrame({ source, name }: { source: string; name: string }) {
   return <iframe sandbox="" referrerPolicy="no-referrer" srcDoc={htmlPreviewDocument(source)} title={t("html.frameTitle", { name })} className="h-[72dvh] w-full rounded-lg border border-hairline/40 bg-white" />;
 }
