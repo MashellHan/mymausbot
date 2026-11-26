@@ -13835,7 +13835,7 @@ if (await miniAppRoutes.internal({ method, path, res, json, botId: internalSende
         const parsed = z.object({
           groupId: z.string().min(1).max(128).optional(),
           botIds: z.array(z.string().min(1).max(128)).min(1).max(4).refine(ids => new Set(ids).size === ids.length),
-          message: z.string().trim().min(1).max(4000),
+          message: z.string().trim().min(1).max(coordinateMessageMax),
           reason: z.string().trim().max(200).optional(),
           rework: z.boolean().default(false),
           thread: z.string().trim().min(1).max(128).default("standing"), title: z.string().trim().max(80).refine(fitsOnOneLine).optional(),

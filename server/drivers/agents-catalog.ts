@@ -154,6 +154,9 @@ const TRIGGER_FIELDS_SCHEMA = {
 } as const;
 
 const CHIEF_PROFILE_TARGET = " A Chief of Staff may pass for_bot_id (from list_bots) for a requested change to another bot in its section.";
+
+/** What the engine keeps of a brief: it clips a longer one instead of refusing the call. */
+const MESSAGE_MAX = 12_000;
 const APPLIES_AT_ONCE = " It applies at once, with an Undo where possible: read the result before saying it did.";
 const APPLIES_OUTCOME = APPLIES_AT_ONCE + " It never raises another bot's execution permissions.";
 
@@ -218,7 +221,7 @@ const TOOL_DEFINITIONS = [
     inputSchema: { type: "object", additionalProperties: false, properties: {
       group_id: { type: "string", description: "Another room, from list_room_targets." },
       bot_ids: { type: "array", items: { type: "string", description: "A teammate's id as list_bots prints it, or its unique name." }, minItems: 1, maxItems: 4, uniqueItems: true },
-      message: { type: "string", minLength: 1, maxLength: 4000, description: "The question or task; separate calls for different responsibilities." },
+      message: { type: "string", minLength: 1, maxLength: MESSAGE_MAX, description: "The question or task; separate calls for different responsibilities." },
       reason: { type: "string", maxLength: 200, description: "Optional one line for the person on why (shown as a chip)." },
       rework: { type: "boolean", description: "True only to resend finished or failed work: a fix, a re-check or a retry." },
       thread: { type: "string", description: "standing (default), new (its own history and run), or a threadId from your receipts or list_threads." },
