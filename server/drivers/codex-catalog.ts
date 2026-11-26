@@ -12,7 +12,7 @@ import { codexHome } from "./codex-identity.ts";
 import { MODEL_ID, SEP, TIERED_ID, codexTierOf } from "./codex-tier.ts";
 import { unconfirmedModelCatalog } from "../startup-model-catalog.ts";
 import { codexInjectHost, codexLocalProviderArgs, localProviderRoute, mergeLocalInject } from "./local-inject.ts";
-import { configuredProviderRoute, providerLabel } from "../model-provider-routes.ts";
+import { configuredProviderRoute, loopbackOriginTag, providerLabel } from "../model-provider-routes.ts";
 
 export const STATIC_CODEX_MODELS: ModelCatalog = {
   default: "gpt-5.6-sol",
@@ -457,12 +457,15 @@ async function catalogAround(
     seen.add(id);
     const facts = metadata.get(id);
     const provider = known.get(extra.provider);
+    const injectHost = codexInjectHost(extra.provider);
+    const loopbackOrigin = injectHost ? undefined : loopbackOriginTag(provider?.baseUrl);
     options.push({
       id,
       label: facts?.label ?? niceLabel(extra.model, extra.provider, known),
       custom: true,
-      providerRoute: (codexInjectHost(extra.provider) ? localProviderRoute(extra.provider) : undefined)
+      providerRoute: (injectHost ? localProviderRoute(extra.provider) : undefined)
         ?? configuredProviderRoute(extra.provider, provider?.name, provider?.baseUrl),
+      ...(loopbackOrigin ? { loopbackOrigin } : {}),
       ...(facts?.effortLevels ? { effortLevels: facts.effortLevels } : {}),
     });
   }
@@ -490,6 +493,8 @@ async function catalogAround(
     const declared = provider ? known.get(provider) : undefined;
     if (provider && declared?.baseUrl && !codexInjectHost(provider)) {
       option.providerRoute = configuredProviderRoute(provider, declared.name, declared.baseUrl);
+      const loopbackOrigin = loopbackOriginTag(declared.baseUrl);
+      if (loopbackOrigin) option.loopbackOrigin = loopbackOrigin;
     }
   }
   return catalog;
