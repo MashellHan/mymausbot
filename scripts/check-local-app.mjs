@@ -5,6 +5,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { assertClosedSqliteCopy } from "./closed-sqlite-snapshot.mjs";
+import { acquireDesktopBuildLock, releaseDesktopBuildLock } from "./local-concurrency.mjs";
 import { inspectPrivateCredentialStorage } from "./private-credential-storage.mjs";
 
 const requireValue = (condition, message) => { if (!condition) throw new Error(message); };
@@ -125,10 +126,41 @@ function checkRequestSource(request) {
   checkPackageManager(request.sourceCheckout);
 }
 
+function runBuildLockCommand(action, args) {
+  let label = "desktop-build";
+  let explicitPid;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--label" && args[i + 1]) label = args[++i];
+    else if (args[i] === "--pid" && args[i + 1]) explicitPid = Number(args[++i]);
+  }
+  const pid = Number.isInteger(explicitPid) && explicitPid > 0
+    ? explicitPid
+    : (process.ppid > 1 ? process.ppid : process.pid);
+  if (action === "build-lock:acquire") {
+    return acquireDesktopBuildLock({ label, pid });
+  }
+  if (action === "build-lock:release") {
+    return releaseDesktopBuildLock();
+  }
+  return null;
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const [check, ...files] = process.argv.slice(2);
-    if (check === "request" && files.length === 1) checkRequestSource(read(files[0]));
+    const acquireFlag = files.includes("--acquire-build-lock");
+    const requestFiles = files.filter((item) => item !== "--acquire-build-lock");
+    if (check === "request" && requestFiles.length === 1) {
+      const request = read(requestFiles[0]);
+      checkRequestSource(request);
+      if (acquireFlag) {
+        const pid = process.ppid > 1 ? process.ppid : process.pid;
+        acquireDesktopBuildLock({ label: `delivery:${request.appVersion}`, cwd: request.sourceCheckout, pid });
+      }
+    }
+    else if (check === "build-lock:acquire" || check === "build-lock:release") {
+      console.log(JSON.stringify({ passed: true, check, ...runBuildLockCommand(check, files) }));
+    }
     else if (check === "inventory" && files.length === 2) assertInventorySame(...files.map(read));
     else if (check === "routines" && files.length === 2) assertRoutinesSame(...files.map(read));
     else if (check === "closed-sqlite" && files.length === 2) assertClosedSqliteCopy(...files);
@@ -139,8 +171,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     else if (check === "private-storage" && files.length >= 2 && files.length <= 3) {
       requireValue(!["prelaunch", "postquit"].includes(files[1]) || files.length === 3, "Closed storage check needs an expected snapshot");
       inspectPrivateCredentialStorage(files[0], { phase: files[1], ...(files[2] ? { expected: read(files[2]) } : {}) });
-    } else throw new Error("Use check:delivery request <request.json> | inventory <before.json> <after.json> | routines <before.json> <after.json> | closed-sqlite <source-dir> <copy-dir> | installed-helpers|signed-helpers <directory> <hashes.json> | private-storage <fixture-root> <prelaunch|postlaunch|postquit> [expected.json]");
-    console.log(JSON.stringify({ passed: true, check, readOnly: true }));
+    } else throw new Error("Use check:delivery request <request.json> | build-lock:acquire [--label name] | build-lock:release | inventory <before.json> <after.json> | routines <before.json> <after.json> | closed-sqlite <source-dir> <copy-dir> | installed-helpers|signed-helpers <directory> <hashes.json> | private-storage <fixture-root> <prelaunch|postlaunch|postquit> [expected.json]");
+    if (check !== "build-lock:acquire" && check !== "build-lock:release") console.log(JSON.stringify({ passed: true, check, readOnly: true }));
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

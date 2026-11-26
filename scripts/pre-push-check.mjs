@@ -6,6 +6,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { acquireLocalTestSlot } from "./local-concurrency.mjs";
 
 const BUDGET_MS = 30_000;
 const CODE = /\.[cm]?[jt]sx?$/;
@@ -40,6 +41,11 @@ const git = (...args) => execFileSync("git", args, { encoding: "utf8", stdio: ["
 /** Vitest's own verdict from its report, since a dependency out of step fails before any test runs. A guard reads the
  * whole tree, so a failure that names none of the push's files is main's own, and that is CI's to report. */
 function runGuards(guards, files, timeout) {
+  const slot = acquireLocalTestSlot({
+    label: "pre-push:guards",
+    waitTimeoutMs: Math.min(timeout, 5_000),
+    detectBuildProcess: process.env.OMB_LOCAL_LOCK_DIR ? () => false : undefined,
+  });
   const dir = mkdtempSync(join(tmpdir(), "omb-pre-push-"));
   const report = join(dir, "report.json");
   try {
@@ -57,6 +63,7 @@ function runGuards(guards, files, timeout) {
   } catch (error) {
     return { unknown: error.message };
   } finally {
+    slot.release();
     rmSync(dir, { recursive: true, force: true });
   }
 }
