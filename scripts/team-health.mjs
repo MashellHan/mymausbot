@@ -72,7 +72,7 @@ export function analyzeTranscriptRows(rows, cutoffMs) {
           else if (name === "run_command") {
             const cmd = String(tc?.args?.CommandLine || "");
             if (/\b(?:tsc|typecheck)\b/.test(cmd)) tscRuns += 1;
-            if (/\b(?:pnpm\s+build|build\.py|electron-builder|package:mac)\b/.test(cmd)) buildRuns += 1;
+            if (/\b(?:pnpm\s+build(?::|\s|$)|build\.py|desktop-delivery\.mjs|electron-builder|package:mac)\b/.test(cmd)) buildRuns += 1;
             if (/\bcheck:ready\b/.test(cmd)) checkReadyRuns += 1;
             if (/\bvitest\b/.test(cmd)) vitestRuns += 1;
           }

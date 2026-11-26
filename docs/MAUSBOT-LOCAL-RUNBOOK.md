@@ -20,6 +20,35 @@ package/update owner. The historical initial local arm64 bundle was
 
 ## Current delivery entry points
 
+For batched `origin/main` local builds after GitHub CI `typecheck + lint` passes,
+use the automated delivery runner:
+
+```sh
+pnpm delivery:desktop --worktree /Users/mengxionghan/workspace/OpenMausBot-desktop-delivery-worktree
+# Build and verify only (skip idle-guarded switch and restart):
+pnpm delivery:desktop --no-switch
+```
+
+- **Resident delivery worktree**: Keep `/Users/mengxionghan/workspace/OpenMausBot-desktop-delivery-worktree`
+  with persistent `node_modules/`, `dist-native/`, and `electron/resources/OpenMausBot Speech.app`.
+  When `pnpm-lock.yaml` SHA-256 matches, reuse `node_modules` via detached checkout instead of cloning.
+- **Desktop build lock**: `scripts/desktop-delivery.mjs` acquires `acquireDesktopBuildLock`
+  (`scripts/local-concurrency.mjs`, controlled by `OMB_BUILD_LOCK`) for the duration of the build
+  so tests in sibling worktrees yield to one slot and release automatically on exit.
+- **CI-green fast compile default**: On CI-passed `origin/main` commits, default to
+  `pnpm build:ui:fast` (`vite build`) and `pnpm build:server:fast` (`node scripts/bundle-server.mjs`)
+  plus `pnpm build:companion`, skipping duplicate local `check:electron` and `tsc` unless
+  `--full-tsc` is explicitly passed.
+- **Fast-Path hot-patch vs full build**: Comparing `lastLiveCommit..targetCommit`, when changes
+  stay inside `server/`, `src/`, `shared/`, `companion/`, `skills/`, docs, or safe `scripts/`
+  without altering `electron/`, `package.json` dependencies, `pnpm-lock.yaml`, native resources,
+  `electron-builder.yml`, or `build/`, rebuild only the changed layers, APFS-clone (`cp -cRp`) the
+  signed live app, replace changed `Contents/Resources/*` trees, re-sign only the outer `.app`
+  wrapper with `build/entitlements.mac.plist`, verify via `codesign --verify --deep --strict`,
+  and execute the idle-guarded switch + `/api/health` check in one chained command. Changes to
+  packaging, native binaries, dependencies, or Electron main/preload fall back automatically to
+  full `electron-builder` packaging and `@electron/osx-sign`.
+
 Use the current private job and its existing guarded switch/rollback workflow.
 Before compilation, run `pnpm check:delivery request <job>/rebuild-request.json`.
 This read-only preflight requires the source checkout/commit/tree/ref, lockfile
