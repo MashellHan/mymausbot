@@ -78,7 +78,7 @@ import { DataResultChip } from "./DataResultChip"; import { PublishedPageCard } 
 import { ThreadRefText } from "./ThreadRefs"; import { WatchScreenButton } from "./WatchScreenButton";
 import { optionsCardRow } from "./OptionsCardRow";
 import { MessageBoundary } from "./MessageBoundary";
-import { RichMessageRow, UserLineNote, richRowKind } from "./RichMessageRow"; import { SetupOffer } from "./SetupOffer"; import { SavedStepsChip } from "./SavedStepsChip";
+import { RichMessageRow, UserLineNote, richRowKind } from "./RichMessageRow"; import { ConcurrentWorkerNote } from "./ProgressiveIntakeNote"; import { SetupOffer } from "./SetupOffer"; import { SavedStepsChip } from "./SavedStepsChip";
 import { Composer } from "./Composer";
 import { ChatErrorBanner, ChatNotice } from "./ChatErrorBanner";
 import { ThreadContextWarning } from "./ContextWarning";
@@ -425,6 +425,7 @@ const Bubble = memo(function Bubble({
 
   return (
     <div {...{ [MESSAGE_ROW]: "" }} data-look={user ? "message-user" : "message-bot"} className={cn("group flex w-full flex-col", user ? "animate-msg-in items-end" : "items-start", simple && join?.above && SIMPLE_STACKED)}>
+      {!user && message.concurrentWorker && <ConcurrentWorkerNote worker={message.concurrentWorker} />}
       {message.relay ? <RelayLabel message={message} /> : peer && <PeerLabel peer={peer} />}
       {speaker && <div className="mb-0.5 px-1 text-right text-[13px] [overflow-wrap:anywhere] font-semibold text-ink-secondary">{speaker}</div>}
       <div className={cn("flex w-full items-center gap-1.5", user ? "justify-end" : "justify-start")}>
@@ -515,11 +516,7 @@ const Bubble = memo(function Bubble({
                   return highlightCitationSource(citation);
                 }}
               />}
-              {message.steered && (
-                <div className="mt-1 text-[11px] text-ink-tertiary">
-                  {t("chat.sentMidTurn")}
-                </div>
-              )}
+              {!message.intake && message.steered && (<div className="mt-1 text-[11px] text-ink-tertiary">{t("chat.sentMidTurn")}</div>)}
               {message.quickModel && <QuickModelNote model={message.quickModel} />}
               <UserLineNote message={message} />
               {collapsible && (

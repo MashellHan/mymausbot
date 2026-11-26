@@ -320,3 +320,48 @@ describe("a thread nobody has on screen", () => {
     expect(liveReplies("t").at(-1)!.text).toBe("Item 99.");
   });
 });
+
+describe("concurrent primary and read-only worker streams in one thread", () => {
+  it("streams a concurrent worker reply alongside an active main turn without either clobbering the other", () => {
+    note({ type: "turn.started", turnId: "main-1" });
+    delta("Working through step one. ", "t", { turnId: "main-1", itemId: "m-item", replyToId: "u1" } as Partial<RuntimeEvent>);
+
+    note({
+      type: "turn.started",
+      turnId: "worker-1",
+      replyToId: "u2",
+      concurrentWorker: { workerId: "cw-1", readOnly: true, parentTurnId: "main-1" },
+    } as Partial<RuntimeEvent>);
+    delta("Quick check from ", "t", {
+      turnId: "worker-1",
+      itemId: "w-item",
+      replyToId: "u2",
+      concurrentWorker: { workerId: "cw-1", readOnly: true, parentTurnId: "main-1" },
+    } as Partial<RuntimeEvent>);
+
+    delta("Continuing main ", "t", { turnId: "main-1", itemId: "m-item" } as Partial<RuntimeEvent>);
+    delta("notes. ", "t", { turnId: "worker-1", itemId: "w-item" } as Partial<RuntimeEvent>);
+
+    const rows = liveReplyRows(liveReplies("t"), []).rows;
+    expect(rows.map((r) => [r.turnId, r.replyToId, r.concurrentWorker?.workerId, r.text])).toEqual([
+      ["main-1", "u1", undefined, "Working through step one. Continuing main "],
+      ["worker-1", "u2", "cw-1", "Quick check from notes. "],
+    ]);
+
+    note({
+      type: "item.completed",
+      itemType: "assistant_text",
+      turnId: "worker-1",
+      itemId: "w-item",
+      text: "Quick check from notes.",
+      replyToId: "u2",
+      concurrentWorker: { workerId: "cw-1", readOnly: true, parentTurnId: "main-1" },
+    } as Partial<RuntimeEvent>);
+    note({ type: "turn.completed", ok: true, turnId: "worker-1" } as Partial<RuntimeEvent>);
+
+    expect(shown()).toEqual(["Working through step one. Continuing main "]);
+
+    note({ type: "turn.started", turnId: "main-2" });
+    expect(shown(), "still-open main-1 stays until its own turn ends").toEqual(["Working through step one. Continuing main "]);
+  });
+});

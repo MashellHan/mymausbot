@@ -152,17 +152,16 @@ describe("QueuedComposerMessages", () => {
     expect(withoutEdit).not.toContain("Edit queued message");
   });
 
-  it("shows Stop and send on the button when the engine cannot steer live", () => {
+  it("omits interrupting Stop and send buttons when the engine cannot steer live", () => {
     const base = { items: oneItem, onSteer: () => undefined, onCancel: () => undefined } as const;
     const liveMarkup = renderToStaticMarkup(createElement(QueuedComposerMessages, base));
     expect(liveMarkup).toContain("aria-label=\"Steer queued message now\"");
     const interruptMarkup = renderToStaticMarkup(
       createElement(QueuedComposerMessages, { ...base, steerInterrupts: true }),
     );
-    expect(interruptMarkup).toContain(">Stop and send</button>");
-    expect(interruptMarkup).toContain('aria-label="Stop and send"');
-    expect(interruptMarkup).toContain('title="Stop the running turn and any work it handed to other bots, then send this message now"');
+    expect(interruptMarkup).not.toContain("Stop and send");
     expect(interruptMarkup).not.toContain("aria-label=\"Steer queued message now\"");
+    expect(interruptMarkup).toContain("actually stop at 10");
   });
 
   it("capable room chips offer the live head steer, one message at a time", () => {
@@ -181,7 +180,7 @@ describe("QueuedComposerMessages", () => {
     expect(markup).not.toContain("Stop the running turn");
   });
 
-  it("room chips whose engine cannot steer live say the interrupt truth", () => {
+  it("room chips whose engine cannot steer live do not render Stop and send next", () => {
     const markup = renderToStaticMarkup(
       createElement(QueuedComposerMessages, {
         items: [
@@ -194,22 +193,21 @@ describe("QueuedComposerMessages", () => {
         onCancel: () => undefined,
       }),
     );
-    expect(markup).toContain(">Stop and send next</button>");
-    expect(markup).toContain('aria-label="Stop and send next"');
-    expect(markup).toContain('title="Stop the running turn and any work it handed to other bots, then send the next queued message now"');
+    expect(markup).not.toContain("Stop and send");
     expect(markup).not.toContain("aria-label=\"Steer the next queued message now\"");
+    expect(markup).toContain("first queued in the room");
   });
 
-  it("shows Stop and send all when the action will stop the turn and drain the direct queue", () => {
+  it("omits Stop and send all when steerInterrupts is set on a direct queue", () => {
     const markup = renderToStaticMarkup(createElement(QueuedComposerMessages, {
       items: [{ queueId: "q1", text: "first" }, { queueId: "q2", text: "second" }],
       onSteer: () => undefined,
       onCancel: () => undefined,
       steerInterrupts: true,
     }));
-    expect(markup).toContain(">Stop and send all</button>");
-    expect(markup).toContain('aria-label="Stop and send all"');
-    expect(markup).toContain('title="Stop the running turn and any work it handed to other bots, then send all 2 queued messages now"');
+    expect(markup).not.toContain("Stop and send");
+    expect(markup).toContain("first");
+    expect(markup).toContain("second");
   });
 
   it("puts the queue-level Steer action on the head only and keeps every delete distinct", () => {
