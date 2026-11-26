@@ -155,12 +155,20 @@ describe("scopes", () => {
       ["GET", "/api/notifications"],
       ["POST", "/api/notifications/read-all"],
       ["POST", "/api/notifications/n-1/read"],
+      ["GET", "/api/bots/b1/activity"],
+      ["GET", "/api/push/web/vapid-key"],
+      ["GET", "/api/push/web/subscription"],
+      ["PUT", "/api/push/web/subscription"],
+      ["DELETE", "/api/push/web/subscription"],
+      ["POST", "/api/push/web/test"],
     ] as const) expect(requiredScope(method, path), `${method} ${path}`).toBe("client");
     for (const [method, path] of [
       ["POST", "/api/notifications"], ["DELETE", "/api/notifications"],
       ["GET", "/api/notifications/read-all"], ["PUT", "/api/notifications/read-all"],
       ["GET", "/api/notifications/n-1/read"], ["DELETE", "/api/notifications/n-1/read"],
       ["POST", "/api/notifications/n-1/read/extra"], ["GET", "/api/notifications/extra"],
+      ["POST", "/api/bots/b1/activity"],
+      ["POST", "/api/push/web/vapid-key"], ["POST", "/api/push/web/subscription"], ["GET", "/api/push/web/test"],
     ] as const) expect(requiredScope(method, path), `${method} ${path}`).toBe("admin");
   });
 

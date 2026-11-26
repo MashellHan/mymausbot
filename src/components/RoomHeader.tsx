@@ -8,7 +8,8 @@ import { effectiveDefaultResponder, jevRoomRoutingOn } from "@/lib/group-routing
 import { t } from "@/lib/i18n";
 import { normalizeState } from "@/lib/mascot";
 import { effectivePlace, isComputerPlace, placeLabelKey } from "@/lib/place";
-import { isRemoteClientSession } from "@/lib/pwa-transport";
+import { isRemoteClientSession, isRemotePwaMode } from "@/lib/pwa-transport";
+import { NotificationBell } from "./NotificationsPanel";
 import { closeRoomPanel, openRoomPanel } from "@/lib/room-panel";
 import { chosenResponder, responderChoice, responderTitle } from "@/lib/room-responder";
 import { busyPlaceOf, roomSpeakerIds } from "@/lib/room-threads";
@@ -242,6 +243,15 @@ export function RoomHeader({
                 )}
               </span>
             </button>
+            {isRemotePwaMode() && (
+              <div className="hidden max-md:flex">
+                <NotificationBell
+                  bar="flex size-9 shrink-0 items-center justify-center rounded-full border border-hairline bg-card text-ink hover:bg-raised active:scale-95"
+                  iconSize={16}
+                  badgeClassName="-right-1 -top-1 min-w-4 h-4 px-1 text-[10px] font-semibold tabular-nums ring-2 ring-app"
+                />
+              </div>
+            )}
             {computerButton}
           </div>
         </div>
@@ -312,6 +322,15 @@ export function RoomHeader({
                 <Plus size={11} />
               </span>
             </button>
+          )}
+          {isRemotePwaMode() && (
+            <div className="hidden max-md:flex">
+              <NotificationBell
+                bar="flex size-9 shrink-0 items-center justify-center rounded-full border border-hairline bg-card text-ink hover:bg-raised active:scale-95"
+                iconSize={16}
+                badgeClassName="-right-1 -top-1 min-w-4 h-4 px-1 text-[10px] font-semibold tabular-nums ring-2 ring-app"
+              />
+            </div>
           )}
           {computerButton}
         </div>

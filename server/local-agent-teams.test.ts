@@ -1157,7 +1157,7 @@ describe("local Agent Team provider", () => {
 
     // With fastRosterTimeoutMs > 0, a warm SWR refresh whose Herdr read fails transitions the cached snapshot to stale.
     agentListCalls = 10;
-    const swrProvider = createLocalAgentTeamsProvider({ codexHome, fastRosterTimeoutMs: 20, now: () => time, run });
+    const swrProvider = createLocalAgentTeamsProvider({ codexHome, fastRosterTimeoutMs: 5_000, now: () => time, run });
     const ready = await swrProvider.get();
     expect(ready.status).toBe("ready");
     expect(ready.enriching).toBeUndefined();
@@ -1211,7 +1211,7 @@ describe("local Agent Team provider", () => {
     let currentWindow = 1_000_000;
     const provider = createLocalAgentTeamsProvider({
       home,
-      fastRosterTimeoutMs: 20,
+      fastRosterTimeoutMs: 5_000,
       now: () => time,
       readProcessStart: async (pid) => pid === 4242 ? "1700000000:123456" : null,
       run: async (args) => {
@@ -1226,7 +1226,8 @@ describe("local Agent Team provider", () => {
       },
     });
 
-    const first = await provider.get();
+    // Seed an enriched snapshot before verifying that non-fresh reads bypass SWR when a Pi member has contextWindow.
+    const first = await provider.get(true);
     expect(first.teams[0]?.agents[0]?.contextWindow).toBe(1_000_000);
     const callsAfterFirst = listCalls;
 

@@ -413,7 +413,7 @@ describe("PWA bridge unit, config, and route enforcement", () => {
     }
     expect(seenSocketProps.length).toBe(beforeCalls);
 
-    // Routine endpoints are allowed on the bridge allowlist; high-risk routes & /api/instances stay blocked.
+    // Routine, notification, activity, and Web Push endpoints are allowed on the bridge allowlist; high-risk routes & /api/instances stay blocked.
     for (const [method, path] of [
       ["GET", "/api/routines"],
       ["POST", "/api/routines"],
@@ -429,6 +429,15 @@ describe("PWA bridge unit, config, and route enforcement", () => {
       ["POST", "/api/bots/b1/sign-in-cards/c1/cancel"],
       ["POST", "/api/threads/t1/respond"],
       ["GET", "/.well-known/openmausbot/environment"],
+      ["GET", "/api/notifications"],
+      ["POST", "/api/notifications/read-all"],
+      ["POST", "/api/notifications/n-1/read"],
+      ["GET", "/api/bots/b1/activity"],
+      ["GET", "/api/push/web/vapid-key"],
+      ["GET", "/api/push/web/subscription"],
+      ["PUT", "/api/push/web/subscription"],
+      ["DELETE", "/api/push/web/subscription"],
+      ["POST", "/api/push/web/test"],
     ] as const) {
       expect(isBridgeRouteAllowed(method, path), `${method} ${path}`).toBe(true);
     }
@@ -439,6 +448,10 @@ describe("PWA bridge unit, config, and route enforcement", () => {
       ["GET", "/api/bots/b1/sign-in-cards/c1/save-login"],
       ["POST", "/api/bots/b1/sign-in-cards/c1/save-login"],
       ["GET", "/api/threads/t1/export"],
+      ["POST", "/api/push/web/vapid-key"],
+      ["POST", "/api/push/web/subscription"],
+      ["GET", "/api/push/web/test"],
+      ["POST", "/api/bots/b1/activity"],
     ] as const) {
       expect(isBridgeRouteAllowed(method, path), `${method} ${path}`).toBe(false);
     }
