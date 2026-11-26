@@ -7,10 +7,14 @@ import {
   acquireLocalTestSlot,
   cleanupStaleLocks,
   effectiveLocalTestMaxSlots,
+  findBlockedHeavyVitestArgs,
   inspectLocalConcurrency,
+  parseConcurrencyCliArgs,
   releaseDesktopBuildLock,
   resolveLocalLockDir,
+  runWithLocalTestSlot,
 } from "./local-concurrency.mjs";
+import { parseRunVitestArgs, runVitestWithGuard } from "./run-vitest.mjs";
 import { collectTeamHealth } from "./team-health.mjs";
 
 const tempDirs: string[] = [];
@@ -210,5 +214,98 @@ describe("cross-worktree local concurrency lock & desktop build priority", () =>
     expect(buildHandle.bypassed).toBe(true);
     expect(existsSync(join(lockDir, "slot-1.lock"))).toBe(false);
     expect(existsSync(join(lockDir, "build.lock"))).toBe(false);
+  });
+
+  it("blocks heavy e2e and server/index.test.ts targets during desktop build unless --allow-heavy is passed", () => {
+    const lockDir = isolatedLockDir();
+    const buildLock = acquireDesktopBuildLock({ label: "front-pack", lockDir, env: {} });
+    try {
+      expect(findBlockedHeavyVitestArgs(["server/foo.e2e.test.ts", "server/bar.test.ts"], { buildActive: true, allowHeavy: false }))
+        .toEqual(["server/foo.e2e.test.ts"]);
+      expect(findBlockedHeavyVitestArgs(["server/index.test.ts"], { buildActive: true, allowHeavy: true })).toEqual([]);
+
+      expect(() =>
+        runVitestWithGuard(["server/index.test.ts"], {
+          lockDir,
+          env: {},
+          detectBuildProcess: () => false,
+          spawn: () => {
+            throw new Error("should not spawn blocked heavy suite");
+          },
+        }),
+      ).toThrow(/HEAVY_TEST_BLOCKED_BY_BUILD|Refusing heavy Vitest/);
+
+      let spawnedArgs: string[] = [];
+      let spawnedEnv: Record<string, string | undefined> = {};
+      const allowed = runVitestWithGuard(["--allow-heavy", "--label=heavy-e2e", "server/chat.e2e.test.ts"], {
+        lockDir,
+        env: {},
+        detectBuildProcess: () => false,
+        log: () => {},
+        spawn: (_cmd, args, opts) => {
+          spawnedArgs = args;
+          spawnedEnv = (opts?.env ?? {}) as Record<string, string | undefined>;
+          return { status: 0 } as never;
+        },
+      });
+      expect(allowed.status).toBe(0);
+      expect(allowed.slot.maxSlots).toBe(1);
+      expect(spawnedArgs).toContain("run");
+      expect(spawnedArgs).toContain("server/chat.e2e.test.ts");
+      expect(spawnedEnv.OMB_VITEST_WORKERS).toBe("1");
+      expect(existsSync(join(lockDir, "slot-1.lock"))).toBe(false);
+    } finally {
+      buildLock.release();
+    }
+  });
+
+  it("supports CLI `run --label vitest -- <cmd>` slot wrapper with build lock yielding", () => {
+    const lockDir = isolatedLockDir();
+    expect(parseRunVitestArgs(["scripts/team-health.test.ts"])).toEqual({
+      label: "vitest",
+      allowHeavy: false,
+      vitestArgs: ["run", "scripts/team-health.test.ts"],
+    });
+    expect(parseConcurrencyCliArgs(["run", "--label", "vitest", "--allow-heavy", "--", "vitest", "run", "a.test.ts"])).toEqual({
+      command: "run",
+      label: "vitest",
+      explicitPid: undefined,
+      cwd: process.cwd(),
+      allowHeavy: true,
+      trailingArgs: ["vitest", "run", "a.test.ts"],
+    });
+
+    const buildLock = acquireDesktopBuildLock({ label: "front-pack", lockDir, env: {} });
+    try {
+      expect(() =>
+        runWithLocalTestSlot({
+          commandArgs: ["./node_modules/.bin/vitest", "run", "scripts/testing/local-dashboard-ui.e2e.test.ts"],
+          label: "vitest",
+          lockDir,
+          env: {},
+          detectBuildProcess: () => false,
+          spawn: () => ({ status: 0 } as never),
+        }),
+      ).toThrow(/Refusing heavy Vitest/);
+
+      let activeDuringChild = false;
+      const result = runWithLocalTestSlot({
+        commandArgs: ["./node_modules/.bin/vitest", "run", "scripts/team-health.test.ts"],
+        label: "vitest",
+        lockDir,
+        env: {},
+        detectBuildProcess: () => false,
+        log: () => {},
+        spawn: () => {
+          activeDuringChild = existsSync(join(lockDir, "slot-1.lock"));
+          return { status: 0 } as never;
+        },
+      });
+      expect(result.status).toBe(0);
+      expect(activeDuringChild).toBe(true);
+      expect(existsSync(join(lockDir, "slot-1.lock"))).toBe(false);
+    } finally {
+      buildLock.release();
+    }
   });
 });
