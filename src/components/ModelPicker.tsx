@@ -391,20 +391,22 @@ export function ModelPicker({
     : levels.length > 0 && !shown.busy ? { levels, current: selection.effort && levels.includes(selection.effort) ? selection.effort : undefined, onPick: writeEffort, onReset: () => writeEffort(undefined) }
     : null;
   const declaredContextWindow = optionContextWindow(currentOption);
-  const contextWindow = (!contained || showReasoning) && active?.capabilities?.configurableContextWindow
-    ? <ModelContextWindow key={JSON.stringify([bot.id, threadId ?? bot.threadId])} selection={selection} defaultTokens={declaredContextWindow}
-      disabled={shown.busy || Boolean(active.policy)} inline={inlineSettings}
-      onChange={(next) => applySelection(active, next)} />
-    : inlineSettings && !active?.capabilities?.configurableContextWindow && declaredContextWindow !== undefined
-      ? (
-        <div data-context-window-readonly="" className="flex items-center justify-between gap-3">
-          <span id={`${menuId}-context-window-label`} className="text-[13px] text-ink-secondary">{t("model.context.label")}</span>
-          <output aria-labelledby={`${menuId}-context-window-label`} className="w-[65%] truncate rounded-md bg-control/60 px-2.5 py-1 text-[13px] text-ink-secondary tabular-nums">
-            {declaredContextWindow.toLocaleString()}
-          </output>
-        </div>
-      )
-      : null;
+  const contextWindow = currentOption?.protocolUnsupported
+    ? null
+    : (!contained || showReasoning) && active?.capabilities?.configurableContextWindow
+      ? <ModelContextWindow key={JSON.stringify([bot.id, threadId ?? bot.threadId])} selection={selection} defaultTokens={declaredContextWindow}
+        disabled={shown.busy || Boolean(active.policy)} inline={inlineSettings}
+        onChange={(next) => applySelection(active, next)} />
+      : inlineSettings && !active?.capabilities?.configurableContextWindow && declaredContextWindow !== undefined
+        ? (
+          <div data-context-window-readonly="" className="flex items-center justify-between gap-3">
+            <span id={`${menuId}-context-window-label`} className="text-[13px] text-ink-secondary">{t("model.context.label")}</span>
+            <output aria-labelledby={`${menuId}-context-window-label`} className="w-[65%] truncate rounded-md bg-control/60 px-2.5 py-1 text-[13px] text-ink-secondary tabular-nums">
+              {declaredContextWindow.toLocaleString()}
+            </output>
+          </div>
+        )
+        : null;
 
   const botModelSelection = follows !== undefined && profile.modelSelection.instanceId === railInstance?.instanceId
     ? profile.modelSelection : undefined;

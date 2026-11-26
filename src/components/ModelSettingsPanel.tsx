@@ -1,4 +1,5 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
+import { ArrowUpRight } from "lucide-react";
 import type { Bot, InstanceInfo } from "@/state/store";
 import { engineDisplayName, isCustomOnly } from "@/lib/engine-rail";
 import { modelName } from "@/lib/simple-model-menu";
@@ -170,7 +171,12 @@ export function ModelSettingsPanel({ bot, instances, disabled, attention, summar
       </legend>}
       {children}
     </fieldset>
-    {onManage && <button type="button" onClick={onManage}
-      className="rounded-sm text-[12px] text-ink-secondary hover:text-ink focus-visible:outline-2 focus-visible:outline-accent">{t("model.simple.manage")}</button>}
+    {onManage && <div className="flex justify-end pt-1">
+      <button type="button" onClick={onManage}
+        className="text-accent underline underline-offset-4 hover:opacity-80 cursor-pointer inline-flex items-center gap-1 rounded-sm text-[12px] font-medium focus-visible:outline-2 focus-visible:outline-accent">
+        {t("model.simple.manage")}
+        <ArrowUpRight size={13} aria-hidden="true" />
+      </button>
+    </div>}
   </div>;
 }
