@@ -14,6 +14,7 @@ import { redactedVisibleText, visibleToolDetail } from "./local-agent-visible-me
 const SESSION_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const RECENT_TAIL_BYTES = 512 * 1024;
+const PREVIEW_BACKSCAN_BYTES = 4 * 1024 * 1024;
 const HISTORY_TAIL_BYTES = 8 * 1024 * 1024;
 const MAX_LINE_BYTES = 1024 * 1024;
 const MAX_SETTINGS_BYTES = 256 * 1024;
@@ -416,6 +417,46 @@ export async function readAgySession(
             preview = redactedVisibleText(row.content, 400).text;
             pushEvent({ id: `e${offset.toString(36)}`, at, kind: "assistant", tool: null, text: visible.text });
           }
+        }
+      }
+    }
+
+    // Long tool-heavy Agy runs (many GENERIC tool outputs) can push the last assistant text or USER_INPUT
+    // past RECENT_TAIL_BYTES; scan a bounded earlier window once so cards retain the latest visible text.
+    if (!history && start > 0 && (preview === null || taskHint === null)) {
+      const backStart = Math.max(0, start - PREVIEW_BACKSCAN_BYTES);
+      const backEnd = Math.min(size, start + first);
+      const backLen = backEnd - backStart;
+      if (backLen > 0) {
+        const backBytes = Buffer.alloc(backLen);
+        const { bytesRead: backRead } = await handle.read(backBytes, 0, backLen, backStart);
+        if (backRead === backLen) {
+          let cursor = backStart === 0 ? 0 : backBytes.indexOf(10) + 1;
+          let fallbackPreview: string | null = null;
+          let fallbackHint: string | null = null;
+          while ((backStart === 0 || cursor > 0) && cursor < backRead) {
+            const end = backBytes.indexOf(10, cursor);
+            if (end < 0) break;
+            const len = end - cursor;
+            const sliceStart = cursor;
+            cursor = end + 1;
+            if (len <= 0 || len > MAX_LINE_BYTES) continue;
+            const line = backBytes.toString("utf8", sliceStart, end);
+            const hasPlanner = preview === null && line.includes("\"PLANNER_RESPONSE\"");
+            const hasUser = taskHint === null && line.includes("\"USER_INPUT\"");
+            if (!hasPlanner && !hasUser) continue;
+            let row: Record<string, unknown>;
+            try { row = record(JSON.parse(line)); } catch { continue; }
+            if (hasPlanner && row.type === "PLANNER_RESPONSE" && typeof row.content === "string" && row.content.trim()) {
+              const text = redactedVisibleText(row.content, 400).text;
+              if (text) fallbackPreview = text;
+            } else if (hasUser && row.type === "USER_INPUT" && typeof row.content === "string") {
+              const hint = dashboardText(stripUserEnvelope(row.content), 400);
+              if (hint) fallbackHint = hint;
+            }
+          }
+          if (preview === null && fallbackPreview !== null) preview = fallbackPreview;
+          if (taskHint === null && fallbackHint !== null) taskHint = fallbackHint;
         }
       }
     }
