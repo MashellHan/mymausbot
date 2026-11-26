@@ -8,6 +8,7 @@ import { cn } from "@/lib/cn";
 import { BotAvatar } from "./Avatar";
 import { OpenExchangeContext } from "./HandoffExchange";
 import { HandoffReply } from "./HandoffReply";
+import { HandoffStatusChip } from "./HandoffStatusChip";
 
 export function ThreadChip({ message, threadId }: { message: Message; threadId?: string }) {
   const { state, dispatch } = useStore();
@@ -28,6 +29,7 @@ export function ThreadChip({ message, threadId }: { message: Message; threadId?:
   const exchangeLabel = exchange ? t("chat.handoffExchange.open", { name: exchange.helper.name }) : undefined;
   return (
     <HandoffReply message={message} threadId={threadId}>
+      <span className="flex min-w-0 max-w-full flex-wrap items-center gap-x-2 gap-y-1">
       <button
         type="button"
         data-thread-chip={ref.threadId}
@@ -41,6 +43,8 @@ export function ThreadChip({ message, threadId }: { message: Message; threadId?:
         {exchange ? <span dir="auto" className="max-w-[240px] truncate">{exchange.helper.name}</span>
           : <><span className="max-w-[480px] truncate">{label}</span><ChevronRight size={13} aria-hidden="true" /></>}
       </button>
+      {message.handoff && <HandoffStatusChip line={message.handoff} />}
+      </span>
     </HandoffReply>
   );
 }

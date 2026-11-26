@@ -4187,5 +4187,9 @@
   "server.checkWork.cannotCheck": "{checker} konnte nicht prüfen: {reason}",
   "server.checkWork.stopped": "du hast die Prüfung gestoppt",
   "server.checkWork.turnedOff": "Vor dem Abschluss prüfen wurde ausgeschaltet",
-  "server.checkWork.restarted": "die App wurde neu gestartet"
+  "server.checkWork.restarted": "die App wurde neu gestartet",
+  "server.checkBack.pending": "Schaut {when} wieder nach",
+  "server.checkBack.started": "Hat {when} wieder nachgeschaut",
+  "server.checkBack.cancelled": "Nachschauen abgebrochen",
+  "server.checkBack.failed": "Konnte {when} nicht wieder nachschauen"
 }
