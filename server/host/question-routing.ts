@@ -5,9 +5,11 @@
 // thread that work runs in goes into that work: it answers the question the work waits on, or reaches its running turn.
 // A Chief may also answer, for the person, a question a teammate it manages puts to them in a thread the Chief did not open.
 import { levelWithin, type ApprovalMode } from "../../shared/approval-mode.ts";
+import { createProgressiveIntakeMeta } from "../../shared/progressive-intake.ts";
 import type { HandoffView } from "../coordinator.ts";
 import { peerDeliveryReceipt, type PeerDeliveryReceipt } from "../peer-delivery.ts";
 import { escapeNotes } from "../peer-provenance.ts";
+import { buildDelegatedForwardPrompt } from "../progressive-intake.ts";
 import { AUTHORITY } from "../provenance-label.ts";
 import { composeAddition } from "../runtime/envelope.ts";
 import { personOnly, withDefault } from "../runtime/questions.ts";
@@ -243,5 +245,115 @@ export function createQuestionRouting(deps: QuestionRoutingDeps) {
       detail: `answered its question "${question}" for the person; it carries on with your answer, and the person can still give their own in that thread` });
   }
 
-  return { notAsked, relay, relayProblem, personAnswer, answerForPerson, waitingForPerson };
+  /** Propagates a busy parent-thread supplement or soft redirection into active delegated sub-workers instead of cancelling and recreating them. */
+  async function forwardDelegated(input: {
+    parentThreadId: string;
+    parentBotId: string;
+    sourceLevel: ApprovalMode;
+    targets: readonly HandoffView[];
+    text: string;
+    redirect?: boolean;
+    updatedAt?: number;
+  }): Promise<{ delivered: boolean; outcomes: Array<{ nodeId: string; botId: string; threadId: string; kind: "answered" | "steered" }> }> {
+    const updatedAt = input.updatedAt ?? Date.now();
+    const outcomes: Array<{ nodeId: string; botId: string; threadId: string; kind: "answered" | "steered" }> = [];
+    const seenThreads = new Set<string>();
+    for (const child of input.targets) {
+      if (!child.parentId || child.groupId !== undefined || seenThreads.has(child.threadId)) continue;
+      if (!deps.mayReach(input.parentThreadId, child.threadId)) continue;
+      const requester = deps.node(child.parentId);
+      if (requester && deps.keptPrivate(child, requester)) continue;
+      const target = store.bot(child.botId);
+      if (!target) continue;
+      const parentName = store.bot(input.parentBotId)?.name ?? input.parentBotId;
+      const level = deps.recipientLevel(target.id, child.threadId, child.id);
+      if (level === null || !levelWithin(level, input.sourceLevel)) continue;
+      const task = store.taskByThread(target.id, child.threadId);
+      if (!task || task.archivedAt !== undefined) continue;
+      if (child.status === "waiting") {
+        if (child.cards?.length && !signInsOnly(child)) continue;
+        const question = withDefault(child.question ?? "").question;
+        if (personOnly(question)) continue;
+        // Security invariant: strip unverified computer-lending state before forwarding parent-thread input into child work.
+        deps.handedInUnproven(child.threadId);
+        if (!deps.answerNode(child.id, input.text, { kind: "bot", botId: input.parentBotId })) continue;
+        if (child.cards?.length) deps.settleSignIns(child);
+        const asked = store.messagesFor(child.threadId).find((row) => row.card?.requestId?.startsWith(`needs-input-${child.id}-`) && !row.inbox
+          && (!row.card.answered || (row.card.answeredBy?.kind === "bot" && row.card.answeredText === undefined)));
+        if (asked?.card) {
+          store.patchMessage(child.threadId, asked.id, {
+            card: { ...asked.card, answered: "answer", answeredText: input.text, answeredBy: { kind: "bot", name: parentName } },
+          });
+        }
+        seenThreads.add(child.threadId);
+        outcomes.push({ nodeId: child.id, botId: target.id, threadId: child.threadId, kind: "answered" });
+        store.appendMessage(input.parentThreadId, {
+          role: "bot",
+          kind: "activity",
+          tool: { name: serverLine(conversationLanguage(input.parentThreadId), "server.teammates.forwardedTo", { name: target.name }), ok: true, output: input.text.slice(0, 240) },
+          threadRef: { botId: target.id, threadId: child.threadId, title: task.title },
+        });
+        continue;
+      }
+      if (child.status === "running") {
+        // Live question cards on a child thread must still only be answered when safe; forward non-card running work via live steer.
+        const liveQuestion = deps.hasLive(child.threadId)
+          ? store.messagesFor(child.threadId).findLast((row) => !row.inbox && answerableInWords(row.card) && deps.live(child.threadId, row.card!.requestId!))
+          : undefined;
+        if (liveQuestion?.card?.requestId) {
+          const question = liveQuestion.card.subtitle || liveQuestion.card.title;
+          if (!personOnly(question)) {
+            deps.handedInUnproven(child.threadId);
+            if (await deps.answerLive(child.threadId, liveQuestion.card.requestId, input.text)) {
+              if (!store.taskByThread(target.id, child.threadId)) continue;
+              const settled = store.messagesFor(child.threadId).find((one) => one.id === liveQuestion.id)?.card;
+              if (settled) {
+                store.patchMessage(child.threadId, liveQuestion.id, {
+                  card: { ...settled, answered: "answer", answeredText: input.text, answeredBy: { kind: "bot", name: parentName } },
+                });
+              }
+              seenThreads.add(child.threadId);
+              outcomes.push({ nodeId: child.id, botId: target.id, threadId: child.threadId, kind: "answered" });
+              store.appendMessage(input.parentThreadId, {
+                role: "bot",
+                kind: "activity",
+                tool: { name: serverLine(conversationLanguage(input.parentThreadId), "server.teammates.forwardedTo", { name: target.name }), ok: true, output: input.text.slice(0, 240) },
+                threadRef: { botId: target.id, threadId: child.threadId, title: task.title },
+              });
+              continue;
+            }
+          }
+        }
+        // Security invariant: strip unverified computer-lending state before steering child work.
+        deps.handedInUnproven(child.threadId);
+        const prompt = buildDelegatedForwardPrompt({ userText: input.text, redirect: input.redirect, assignmentId: child.id });
+        if (!(await deps.steer(child.threadId, prompt))) continue;
+        if (!store.taskByThread(target.id, child.threadId)) continue;
+        store.appendMessage(child.threadId, {
+          role: "user",
+          kind: "text",
+          text: escapeNotes(input.text),
+          aside: true,
+          steered: true,
+          intake: createProgressiveIntakeMeta({
+            mode: "delegation-forward",
+            state: "processing",
+            targetTurnId: child.id,
+            updatedAt,
+          }),
+        });
+        seenThreads.add(child.threadId);
+        outcomes.push({ nodeId: child.id, botId: target.id, threadId: child.threadId, kind: "steered" });
+        store.appendMessage(input.parentThreadId, {
+          role: "bot",
+          kind: "activity",
+          tool: { name: serverLine(conversationLanguage(input.parentThreadId), "server.teammates.forwardedTo", { name: target.name }), ok: true, output: input.text.slice(0, 240) },
+          threadRef: { botId: target.id, threadId: child.threadId, title: task.title },
+        });
+      }
+    }
+    return { delivered: outcomes.length > 0, outcomes };
+  }
+
+  return { notAsked, relay, relayProblem, personAnswer, answerForPerson, waitingForPerson, forwardDelegated };
 }

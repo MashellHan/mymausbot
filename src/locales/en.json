@@ -8958,6 +8958,7 @@
   "server.teammates.cancelled": "{bot} — cancelled: {detail}",
   "server.teammates.closedBy": "Closed by @{bot}",
   "server.teammates.failed": "{bot} — failed: {detail}",
+  "server.teammates.forwardedTo": "Forwarded to {name}",
   "server.teammates.goal.blocked": "Goal blocked: {detail}",
   "server.teammates.goal.completed": "Goal completed: {detail}",
   "server.teammates.goal.failed": "Goal failed: {detail}",

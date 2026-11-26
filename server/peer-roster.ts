@@ -172,10 +172,20 @@ const foldedName = (value: string) => value.replace(/^@/, "").replace(/\s+/g, " 
 // Models slug names they saw ("Reviewer 2" → "reviewer-2").
 const looseName = (value: string) => foldedName(value.replace(/[-_]+/g, " "));
 
-/** Whether `raw`, as a bot wrote it, means this teammate: its id, or its name however it was typed. */
+/** The fewest characters of an id that name it: a model retyping a 36-character id drops one, and the first 8 have to agree. */
+export const ID_PREFIX_MIN = 8;
+
+/** Whether a spelling can be the start of an id at all. */
+export const isIdStart = (value: string): boolean => value.length >= ID_PREFIX_MIN && !/\s/u.test(value);
+
+/** Whether `raw` is this id in any case, or its first 8 characters or more. */
+const startsId = (id: string, raw: string): boolean => isIdStart(raw) && id.toLowerCase().startsWith(raw.toLowerCase());
+
+/** Whether `raw`, as a bot wrote it, means this teammate: its id (in any case, or its first 8 characters or more), or its
+ * name however it was typed. */
 export function namesTeammate(target: Pick<RosterMember, "id" | "name">, raw: string): boolean {
   const wanted = raw.trim();
-  return target.id === wanted || foldedName(target.name) === foldedName(wanted) || looseName(target.name) === looseName(wanted);
+  return target.id === wanted || startsId(target.id, wanted) || foldedName(target.name) === foldedName(wanted) || looseName(target.name) === looseName(wanted);
 }
 
 /** Their audiences alone would let `from` reach `target`, whatever its own list of peers says. */

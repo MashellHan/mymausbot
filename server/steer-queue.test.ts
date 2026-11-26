@@ -480,6 +480,19 @@ describe("steer-queue module", () => {
     } finally { unsubscribe(); }
   });
 
+  it("keeps stop-requeue rows hidden by default while surfacing showInSnapshot progressive rows and calling onDiscard", () => {
+    const bot = fakeBot("bot-snap", "thread-snap", true);
+    const hidden = queueSteeredMessage(bot.id, bot.threadId, "requeued steered row", { rowId: "row-hidden" });
+    const visible = queueSteeredMessage(bot.id, bot.threadId, "progressive queued row", { rowId: "row-visible", showInSnapshot: true });
+    expect(queuedSteerSnapshot((id) => id === bot.id)[bot.threadId]).toEqual([
+      { queueId: visible.id, text: "progressive queued row" },
+    ]);
+    expect(cancelSteeredMessage(bot.id, hidden.id, bot.threadId)).toBe(true);
+    const onDiscard = vi.fn();
+    drainSteeredMessages(fakeStore([]), vi.fn(), undefined, { onDiscard });
+    expect(onDiscard).toHaveBeenCalledWith(bot.threadId, [visible.id]);
+  });
+
   it("retains an idle task's queue until its runtime dispatch claim clears", () => {
     const bot = fakeBot("bot-handshake", "thread-handshake", false);
     const store = fakeStore([bot]);
@@ -890,13 +903,17 @@ describe("steer-queue e2e (fake ACP fleet)", () => {
     await until(async () => echoes(await botById(bot.id)).length === 1, "completion before acknowledgment");
     const pending = await botById(bot.id);
     expect(pending.messages.filter((message: any) => message.role === "user").map((message: any) => message.text))
-      .toEqual(["first before acknowledgment"]);
+      .toEqual(["first before acknowledgment", "queued after acknowledgment"]);
+    expect(pending.messages.find((message: any) => message.text === "queued after acknowledgment")?.intake)
+      .toMatchObject({ mode: "progressive-continue", state: "received" });
     expect(pending.messages.some((message: any) => message.tool?.name?.includes("queued message could not start"))).toBe(false);
     writeFileSync(dispatchGate, "acknowledge provider dispatch");
     await until(async () => echoes(await botById(bot.id)).length === 2, "the queued turn after acknowledgment");
     const final = await botById(bot.id);
     expect(final.messages.filter((message: any) => message.role === "user").map((message: any) => message.text))
       .toEqual(["first before acknowledgment", "queued after acknowledgment"]);
+    expect(final.messages.find((message: any) => message.text === "queued after acknowledgment")?.intake)
+      .toMatchObject({ mode: "progressive-continue", state: "answered" });
     expect(echoes(final)[1].text).toContain("queued after acknowledgment");
     expect(final.messages.some((message: any) => message.tool?.name?.includes("queued message could not start"))).toBe(false);
     evidence.push({ earlyCompletionQueue: { pending, final } });
@@ -947,7 +964,17 @@ describe("steer-queue e2e (fake ACP fleet)", () => {
       expect(snapshot.busy).toBe(true);
       expect(snapshot.messages.filter((m: any) => m.role === "user").map((m: any) => m.text)).toEqual([
         "first task please",
+        "steer two",
+        "steer three",
       ]);
+      expect(snapshot.messages.find((m: any) => m.text === "steer two")?.intake).toMatchObject({
+        mode: "progressive-continue",
+        state: "received",
+      });
+      expect(snapshot.messages.find((m: any) => m.text === "steer three")?.intake).toMatchObject({
+        mode: "progressive-continue",
+        state: "received",
+      });
       expect(echoes(snapshot)).toHaveLength(0);
 
       writeFileSync(drainGate, "open");
@@ -964,6 +991,10 @@ describe("steer-queue e2e (fake ACP fleet)", () => {
       expect(replies[1].text).not.toContain("[The user rewound");
       const userTexts = snapshot.messages.filter((m: any) => m.role === "user").map((m: any) => m.text);
       expect(userTexts).toEqual(["first task please", "steer two", "steer three"]);
+      expect(snapshot.messages.find((m: any) => m.text === "steer two")?.intake).toMatchObject({
+        mode: "progressive-continue",
+        state: "answered",
+      });
       expect(snapshot.messages.some((m: any) => m.queued)).toBe(false);
 
       const followUp = await api("POST", `/api/bots/${bot.id}/messages`, { text: "plain follow-up" });
@@ -1001,7 +1032,7 @@ describe("steer-queue e2e (fake ACP fleet)", () => {
       await until(async () => {
         const snapshot = await botById(bot.id);
         const message = snapshot.messages.find((m: any) => m.text === "after stop please");
-        return Boolean(message) && !message.queued;
+        return Boolean(message) && message.intake?.state === "processing";
       }, "the post-interrupt drain");
 
       writeFileSync(stopGate, "open");
