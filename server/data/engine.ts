@@ -30,6 +30,7 @@ import {
   type DataChanged,
   type DataEngine,
   type DataExtension,
+  type DataHeld,
   type DataHistogram,
   type DataPage,
   type DescribeResult,
@@ -40,6 +41,8 @@ import {
 } from "./types.ts";
 
 type Binding = typeof DuckDB;
+type DataShut = { closed: true } | { closed: false; why: DataHeld["why"]; detail?: string };
+const CLOSED: DataShut = { closed: true };
 type Cell = string | number | boolean | null;
 
 export { DATA_DB_FILE, DATA_TMP_DIR } from "./storage.ts";
@@ -266,7 +269,9 @@ function formatEpoch(seconds: number, dateOnly: boolean): string {
 
 class BotDb implements BotDatabase {
   private state: Promise<Open> | null = null;
-  private closing: Promise<void> | null = null;
+  private closing: Promise<DataShut> | null = null;
+  /** The instance a close could not let go of: still open on the file, so the next statement uses it, never a second one. */
+  private kept: Promise<Open> | null = null;
   private idleTimer: NodeJS.Timeout | null = null;
   private inFlight = 0;
   private readonly statsCache = new Map<string, DataColumnStats>();
@@ -289,9 +294,10 @@ class BotDb implements BotDatabase {
     this.engine.requireReady();
     if (this.revoked || this.unsafe) throw new DataFailure({ code: "engine_unavailable", message: "This Data store is closed; resolve it again." });
     if (!this.state) {
-      // The file admits one instance per process: a reopen waits for a close that may still be draining.
-      const previous = this.closing ?? Promise.resolve();
-      const opening = previous.then(() => this.openNow());
+      // The file admits one instance per process: a reopen waits for a close that may still be draining, and after a close
+      // that could not let go of the instance it goes on with that one.
+      const previous = this.closing ?? Promise.resolve(CLOSED);
+      const opening = previous.then((shut) => (shut.closed || !this.kept ? this.openNow() : this.kept));
       this.state = opening;
       opening.catch(() => {
         if (this.state === opening) this.state = null;
@@ -728,40 +734,69 @@ FROM ${from} AS omb_source, omb_range WHERE ${finite} GROUP BY bin ORDER BY bin`
   }
 
   async close(strict = false): Promise<void> {
+    const shut = await this.shut(strict);
+    if (strict && !shut.closed) {
+      if (shut.why === "running") throw new DataFailure({ code: "timeout", message: "Data store did not drain before its safety barrier." });
+      throw new DataFailure({ code: "sql_error", message: shut.detail ?? "Data store failed to close cleanly." });
+    }
+  }
+
+  /** Closed, or why the instance is still open: a statement that did not stop, or a close that failed. */
+  async shut(strict = false): Promise<DataShut> {
     if (this.idleTimer) {
       clearTimeout(this.idleTimer);
       this.idleTimer = null;
     }
     const pending = this.state;
     if (!pending) {
-      await this.closing;
-      if (strict && this.unsafe) throw new DataFailure({ code: "timeout", message: "Data store did not drain before its safety barrier." });
-      return;
+      const waited = this.closing ? await this.closing : CLOSED;
+      if (strict && this.unsafe) return { closed: false, why: "running" };
+      return waited;
     }
     this.state = null;
     this.statsCache.clear();
-    const closing = (async () => {
+    const closing = (async (): Promise<DataShut> => {
       let open: Open;
-      try { open = await pending; } catch { return; }
-      // Closing a connection with a statement in flight is undefined: interrupt first, then let the lanes drain.
-      for (const lane of Object.values(open.lanes)) lane.interrupt();
-      if (!await drainLanes(Object.values(open.lanes), CLOSE_DRAIN_MS)) {
+      try { open = await pending; } catch { return CLOSED; }
+      const shut = await this.closeOpen(open, strict);
+      if (shut.closed) this.kept = null;
+      else if (strict) {
         this.unsafe = true;
-        if (strict) throw new DataFailure({ code: "timeout", message: "Data store did not drain before its safety barrier." });
-        console.warn(`data: ${this.botId}'s database still had a statement running after ${CLOSE_DRAIN_MS} ms; its handles are left to the process`);
-        return;
+      } else {
+        this.kept = pending;
+        if (!this.state) this.state = pending;
       }
-      let checkpointError: unknown;
-      if (strict) {
-        try { await open.lanes.bot.run("CHECKPOINT", { timeoutMs: CLOSE_DRAIN_MS }, async (conn) => { await conn.run("CHECKPOINT"); }); }
-        catch (error) { checkpointError = error; this.unsafe = true; }
-      }
-      for (const lane of Object.values(open.lanes)) lane.connection.closeSync();
-      open.instance.closeSync();
-      if (checkpointError) throw checkpointError;
+      return shut;
     })();
     this.closing = closing;
-    try { await closing; } finally { if (this.closing === closing) this.closing = null; }
+    try { return await closing; } finally { if (this.closing === closing) this.closing = null; }
+  }
+
+  private async closeOpen(open: Open, strict: boolean): Promise<DataShut> {
+    // Closing a connection with a statement in flight is undefined: interrupt first, then let the lanes drain.
+    for (const lane of Object.values(open.lanes)) { try { lane.interrupt(); } catch { /* the drain below decides */ } }
+    if (!await drainLanes(Object.values(open.lanes), CLOSE_DRAIN_MS)) {
+      console.warn(`data: ${this.botId}'s database still had a statement running after ${CLOSE_DRAIN_MS} ms; its handles are left to the process`);
+      return { closed: false, why: "running" };
+    }
+    if (strict) {
+      try { await open.lanes.bot.run("CHECKPOINT", { timeoutMs: CLOSE_DRAIN_MS }, async (conn) => { await conn.run("CHECKPOINT"); }); }
+      catch (error) {
+        const detail = (error instanceof Error ? error.message : String(error)).split("\n")[0]!.slice(0, 200);
+        console.warn(`data: ${this.botId}'s database failed CHECKPOINT: ${detail}`);
+        return { closed: false, why: "failed", detail };
+      }
+    }
+    try {
+      for (const lane of Object.values(open.lanes)) lane.connection.closeSync();
+      // The last close writes the WAL into the file and removes it: the file then holds every table on its own.
+      open.instance.closeSync();
+    } catch (error) {
+      const detail = (error instanceof Error ? error.message : String(error)).split("\n")[0]!.slice(0, 200);
+      console.warn(`data: ${this.botId}'s database did not close: ${detail}`);
+      return { closed: false, why: "failed", detail };
+    }
+    return CLOSED;
   }
 
   get isOpen(): boolean { return this.state !== null; }
@@ -974,6 +1009,13 @@ class Engine implements DataEngine {
 
   async deleteBot(botId: string): Promise<void> {
     await this.withBotDeletion(botId, async () => { await removeSourceStore(this.folder(botId)); return true; });
+  }
+
+  /** Every bot's database closed and kept, to open again on its next statement; the ones still open, and why. */
+  async release(): Promise<DataHeld[]> {
+    const open = [...new Set([...this.databases.values(), ...this.storeDatabases.values()])];
+    const shut = await Promise.all(open.map((db) => db.shut()));
+    return open.flatMap((db, i) => { const one = shut[i]!; return one.closed ? [] : [{ botId: db.botId, why: one.why, ...(one.detail ? { detail: one.detail } : {}) }]; });
   }
 
   async closeAll(): Promise<void> {
