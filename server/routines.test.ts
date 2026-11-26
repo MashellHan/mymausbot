@@ -302,32 +302,36 @@ describe("bounded scheduled overlap and run health", () => {
     await h.manager.tick();
   });
 
-  it("does not fail a run whose reply came back before its last tool call went wrong: it completes partly done and shares cleanup/delegation rules", async () => {
+  it("keeps a run that failed only on a step, after its reply came back, failed but marked partly done; only a safety-floor block after the reply completes it", async () => {
     const h = harness(start);
     const routine = h.manager.create({ ...input(), enabled: false });
     const event = (threadId: string, patch: Record<string, unknown>) => h.manager.handleRuntimeEvent({ eventId: `e-${Math.random()}`, provider: "fake", threadId, createdAt: new Date().toISOString(), ...patch } as Parameters<typeof h.manager.handleRuntimeEvent>[0]);
-    const attempt = async (partial: boolean, { reply = true, cutOff = false, stopReason, setup = false }: { reply?: boolean; cutOff?: boolean; stopReason?: string; setup?: boolean } = {}) => {
+    const attempt = async (partial: boolean, { reply = true, cutOff = false, stopReason, setup = false, blocked = false }: { reply?: boolean; cutOff?: boolean; stopReason?: string; setup?: boolean; blocked?: boolean } = {}) => {
       const created = h.manager.runNow(routine.id)!; await h.manager.tick();
       const threadId = h.manager.listRuns().find((run) => run.id === created.id)!.threadId!;
       if (reply) event(threadId, { type: "item.completed", itemType: "assistant_text", itemId: "reply", text: "Here is the summary." });
-      event(threadId, { type: "runtime.error", message: "Stopped because the tool call “read_file” failed.", terminal: true, ...(partial ? { partial: true } : {}), ...(setup ? { setup: true } : {}) });
+      const message = blocked ? "Stopped because the tool call “shell_exec” wasn't allowed." : "Stopped because the tool call “read_file” failed.";
+      event(threadId, { type: "runtime.error", message, terminal: true, ...(partial ? { partial: true } : {}), ...(setup ? { setup: true } : {}), ...(blocked ? { blockedAfterReply: true } : {}) });
       if (cutOff) h.manager.failThread(threadId, "Provider settings changed");
-      else event(threadId, { type: "turn.completed", ok: false, stopReason: stopReason ?? (partial ? "tool_error" : "refusal") });
+      else event(threadId, { type: "turn.completed", ok: false, stopReason: stopReason ?? (partial ? "tool_error" : "refusal"), ...(blocked ? { denials: ["shell_exec"] } : {}) });
       return threadId;
     };
     // Seed an owner notice via a prior auth failure, then confirm the delivered-partial completion clears it.
     await attempt(false, { reply: false, stopReason: "auth_required", setup: true });
     flushLaterSaves();
     expect(JSON.parse(readFileSync(h.options.file!, "utf8")).ownerNotices).toHaveLength(1);
-    const doneThread = await attempt(true);
+    const blockedDoneThread = await attempt(true, { blocked: true });
     flushLaterSaves();
     expect(JSON.parse(readFileSync(h.options.file!, "utf8")).ownerNotices ?? []).toEqual([]);
+    const partlyThread = await attempt(true);
     const nonPartialThread = await attempt(false);
     const silentThread = await attempt(true, { reply: false });
     const cutOffThread = await attempt(true, { cutOff: true });
     const cutOffRun = h.manager.listRuns().find((run) => run.threadId === cutOffThread)!;
     expect([cutOffRun.status, cutOffRun.partial]).toEqual(["queued", undefined]);
     const refusedThread = await attempt(true, { stopReason: "refusal" });
+    const blockedSilentThread = await attempt(true, { blocked: true, reply: false });
+    const blockedOtherStopThread = await attempt(true, { blocked: true, stopReason: "refusal" });
     const timeoutThread = await attempt(true, { stopReason: "timeout" });
     const queuedTimeout = h.manager.listRuns().find((run) => run.threadId === timeoutThread)!;
     expect(queuedTimeout).toMatchObject({ status: "queued", retried: "failed" });
@@ -338,23 +342,28 @@ describe("bounded scheduled overlap and run health", () => {
     event(timeoutRetryThread, { type: "turn.completed", ok: false, stopReason: "timeout" });
     let pending = true;
     h.options.hasPendingDelegations = () => pending;
-    const waitingThread = await attempt(true);
+    const waitingThread = await attempt(true, { blocked: true });
     expect(h.manager.listRuns().find((run) => run.threadId === waitingThread)).toMatchObject({ status: "waiting" });
-    // Clear stale failureFacts: a subsequent failThread on the waiting thread must not inherit turn-1 partial.
+    // Clear stale failureFacts: a subsequent turn.completed on the waiting thread must not inherit turn-1 partial.
     pending = false;
     h.options.hasPendingDelegations = undefined;
     event(waitingThread, { type: "turn.completed", ok: false, stopReason: "refusal" });
     h.options.refusedHandoff = () => "Teammate refused the task.";
-    const refusedHandoffThread = await attempt(true);
+    const refusedHandoffThread = await attempt(true, { blocked: true });
     const byThread = Object.fromEntries(h.manager.listRuns().map((run) => [run.threadId!, run]));
-    expect(byThread[doneThread]).toMatchObject({ status: "completed", partial: true, output: "Here is the summary.", error: expect.stringContaining("read_file") });
-    expect([byThread[nonPartialThread], byThread[silentThread], byThread[refusedThread], byThread[timeoutRetryThread]].map((run) => [run.status, run.partial])).toEqual([
+    // A step that broke after the reply: the reply is no proof, so the run fails, marked partly done.
+    expect(byThread[partlyThread]).toMatchObject({ status: "failed", partial: true, output: "Here is the summary.", error: expect.stringContaining("read_file") });
+    expect([byThread[nonPartialThread], byThread[silentThread], byThread[refusedThread], byThread[timeoutRetryThread], byThread[blockedSilentThread], byThread[blockedOtherStopThread]].map((run) => [run.status, run.partial])).toEqual([
       ["failed", undefined],
       ["failed", undefined],
       ["failed", true],
+      ["failed", true],
+      ["failed", undefined],
       ["failed", true],
     ]);
-    expect(byThread[waitingThread]).toMatchObject({ status: "failed", error: expect.stringContaining("read_file") });
+    // Every failed call was blocked by the safety floor after the reply: nothing ran, the run completes partly done.
+    expect(byThread[blockedDoneThread]).toMatchObject({ status: "completed", partial: true, output: "Here is the summary.", error: expect.stringContaining("shell_exec"), denials: ["shell_exec"] });
+    expect(byThread[waitingThread]).toMatchObject({ status: "failed", error: expect.stringContaining("shell_exec") });
     expect(byThread[waitingThread].partial).toBeUndefined();
     expect(byThread[refusedHandoffThread]).toMatchObject({ status: "failed", partial: true, error: "Teammate refused the task." });
   });
