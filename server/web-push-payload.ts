@@ -219,11 +219,11 @@ function formatActivityDetail(detail: WebPushActivityDetail, zh: boolean): strin
     const summary = scrubPushPreview(detail.summary, 90);
     const combined = title && summary && summary !== title ? `${title} · ${summary}` : title || summary;
     if (!combined) return "";
-    return clipText(zh ? `正在执行：${combined}` : `Running: ${combined}`, WEB_PUSH_BODY_MAX);
+    return clipText(zh ? `正在执行：${combined}` : combined, WEB_PUSH_BODY_MAX);
   }
   const resource = scrubPushPreview(detail.resource, 60);
-  if (!resource) return zh ? "等待资源可用…" : "Waiting for resource";
-  return clipText(zh ? `等待资源：${resource}` : `Waiting for ${resource}`, WEB_PUSH_BODY_MAX);
+  if (!resource) return zh ? "等待资源可用…" : EN_ACTIVITY_PHRASES.working;
+  return clipText(zh ? `等待资源：${resource}` : resource, WEB_PUSH_BODY_MAX);
 }
 
 /**
