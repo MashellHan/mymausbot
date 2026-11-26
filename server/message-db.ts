@@ -370,16 +370,11 @@ export interface ThreadRows {
   activeLeafId: string | null;
 }
 
-export function readStoredActiveLeaf(threadId: string): string | null {
-  return (prepared(ACTIVE_LEAF).get(threadId) as { active_leaf_id: string | null } | undefined)?.active_leaf_id ?? null;
-}
+export function readStoredActiveLeaf(threadId: string): string | null { return (prepared(ACTIVE_LEAF).get(threadId) as { active_leaf_id: string | null } | undefined)?.active_leaf_id ?? null; }
 
 export function readThread(threadId: string, legacyFile: string): ThreadRows {
   const rows = prepared("SELECT json FROM messages WHERE thread_id = ? ORDER BY rowid").all(threadId) as Array<{ json: string }>;
-  if (rows.length) {
-    return { messages: rows.map(rowToMessage), activeLeafId: readStoredActiveLeaf(threadId) };
-  }
-  return importLegacy(threadId, legacyFile);
+  return rows.length ? { messages: rows.map(rowToMessage), activeLeafId: readStoredActiveLeaf(threadId) } : importLegacy(threadId, legacyFile);
 }
 
 export function readMessage(threadId: string, messageId: string): Message | null {
@@ -399,10 +394,7 @@ export function decodeMessagePage(rows: Array<{ json: string }>, limit: number):
 
 export function readThreadTail(threadId: string, legacyFile: string, limit: number): ThreadTailRows {
   const rows = prepared("SELECT json FROM messages WHERE thread_id = ? ORDER BY rowid DESC LIMIT ?").all(threadId, limit + 1) as Array<{ json: string }>;
-  if (rows.length) {
-    return { ...decodeMessagePage(rows, limit), activeLeafId: readStoredActiveLeaf(threadId) };
-  }
-  return importLegacy(threadId, legacyFile);
+  return rows.length ? { ...decodeMessagePage(rows, limit), activeLeafId: readStoredActiveLeaf(threadId) } : importLegacy(threadId, legacyFile);
 }
 
 function importLegacy(threadId: string, legacyFile: string): ThreadRows {

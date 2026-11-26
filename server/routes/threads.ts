@@ -164,7 +164,7 @@ export function createThreadRoutes(deps: ThreadRouteDeps): RouteHandler {
         if (!store.messagesFor(threadId).some((msg) => msg.id === before)) {
           return json(res, 404, { error: "no such message" });
         }
-        return json(res, 200, { ...messagePage(threadId, limit ?? DEFAULT_PAGE, before), activeLeafId: store.activeLeaf(threadId) });
+        return json(res, 200, messagePage(threadId, limit ?? DEFAULT_PAGE, before));
       }
       return json(res, 200, messagePage(threadId, limit ?? DEFAULT_PAGE));
     }
