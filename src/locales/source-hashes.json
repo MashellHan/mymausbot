@@ -59777,7 +59777,11 @@
       "botAccess.cloud.serverPickHint": "98e8f8043da8f8c8fcc0887435867473afcc491d4fddac669c462e8ef67e8ce0",
       "botAccess.cloud.serverPickDefault": "04f8c8609c5369828f915006cf06a5d95398472014945bcab2d7a2ff000c0e7d",
       "botAccess.cloud.serverPickNone": "fbc0134f1d438a0781af95743d45cede059746ae89decf3e106d458f4257717f",
-      "botAccess.cloud.serverPickOther": "15524e6a8d1c4bd7ec0549a8f3c866770872e76caa5428ff38925306276dca7b"
+      "botAccess.cloud.serverPickOther": "15524e6a8d1c4bd7ec0549a8f3c866770872e76caa5428ff38925306276dca7b",
+      "cloudAccount.savedStuck": "5efbddc0309e897b7087a02f66746c693393b24cad3dac3768c44bd3ecdeda72",
+      "cloudAccount.savedStuckKeychain": "249c72d715f2ad1758046fbf0cd6e05974494ad9fc2608b74e6a0cbf5b8a9369",
+      "cloudAccount.savedStuckKeyring": "f6d3b9e6e946fcc98ce0b64183ae840c5a8a964bf4f5e2c0056a7be48d993e30",
+      "homeScreen.offlineWait": "7de832bcc189e9fa19b386a0a67d938840772d5500985c835fa1db1afee4d49f"
     },
     "ru": {
       "about.connectedTo": "7eba311e0e3c7146cf09856dae9934abad7b60e15b5a60679db755aab63541f9",
