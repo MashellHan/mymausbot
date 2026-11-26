@@ -1,6 +1,8 @@
 export const TRANSCRIPT_WINDOW_SIZE = 120;
 /** The most rows drawn at once while the reader is away from the end: one step past it unloads rows at the far edge. */
 export const TRANSCRIPT_WINDOW_MAX = 2 * TRANSCRIPT_WINDOW_SIZE;
+/** Rows one scroll step draws at a window edge: small enough to mount without a long frame. */
+export const TRANSCRIPT_WINDOW_STEP = 20;
 /** The most rows drawn while a text selection holds rows the reader has scrolled away from; past it the selection is set aside. */
 export const SELECTION_HOLD_MAX = 2 * TRANSCRIPT_WINDOW_MAX;
 
@@ -56,19 +58,19 @@ export function capWindowEnd({ start, end }: TranscriptWindowBounds, total: numb
 }
 
 export function windowEarlier(window: TranscriptWindowBounds, total: number): TranscriptWindowBounds {
-  return capWindowEnd({ start: expandWindowStart(window.start), end: window.end }, total);
+  return capWindowEnd({ start: expandWindowStart(window.start, TRANSCRIPT_WINDOW_STEP), end: window.end }, total);
 }
 
 /** One step down: rows below join and, past the cap, rows at the top leave. */
 export function windowLater({ start, end }: TranscriptWindowBounds, total: number): TranscriptWindowBounds {
   if (end === null) return { start, end };
-  const nextEnd = Math.min(total, end + TRANSCRIPT_WINDOW_SIZE);
+  const nextEnd = Math.min(total, end + TRANSCRIPT_WINDOW_STEP);
   return { start: Math.max(start, nextEnd - TRANSCRIPT_WINDOW_MAX), end: nextEnd >= total ? null : nextEnd };
 }
 
 /** The window after `added` older rows were put in front of the transcript: a window at the top shows one step of them. */
 export function windowAfterPrepend({ start, end }: TranscriptWindowBounds, added: number, total: number): TranscriptWindowBounds {
-  const moved = { start: start === 0 ? Math.max(0, added - TRANSCRIPT_WINDOW_SIZE) : start + added, end: end === null ? null : end + added };
+  const moved = { start: start === 0 ? Math.max(0, added - TRANSCRIPT_WINDOW_STEP) : start + added, end: end === null ? null : end + added };
   return capWindowEnd(moved, total);
 }
 
