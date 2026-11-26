@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as procs from "../procs.ts";
 import { CodexConnection, codexConfigDigest, codexContractDiff, codexLoginIdentity, codexSpawnContract, codexWarmSessions, type KeptCodex } from "./codex-warm.ts";
-import { sessionIdlePolicy } from "./session-idle.ts";
+import { armedIdleCount, sessionIdlePolicy } from "./session-idle.ts";
 
 const children: ChildProcessWithoutNullStreams[] = [];
 /** Stays up, and echoes each line it is sent. */
@@ -89,29 +89,29 @@ describe("kept Codex app-servers", () => {
       return true;
     });
     const warm = codexWarmSessions<null>("instance-b");
+    const armedBefore = armedIdleCount();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const timersBefore = vi.getTimerCount();
     const taken = session(), idle = session(), dying = session();
     warm.keep("taken", taken);
     warm.keep("idle", idle);
     warm.keep("dying", dying);
-    expect(vi.getTimerCount()).toBe(timersBefore + 3);
+    expect(armedIdleCount()).toBe(armedBefore + 3);
     expect(warm.take("taken", "{}", "native-1")).toBe(taken);
     const exited = once(dying.connection.child, "exit");
     dying.connection.child.kill("SIGKILL");
     await exited;
     expect(warm.has("dying")).toBe(false);
-    expect(vi.getTimerCount()).toBe(timersBefore + 1);
+    expect(armedIdleCount()).toBe(armedBefore + 1);
 
     vi.advanceTimersByTime(sessionIdlePolicy("CODEX").idleMs - 1);
     expect(warm.has("idle")).toBe(true);
     vi.advanceTimersByTime(1);
     expect(warm.has("idle")).toBe(false);
-    expect(vi.getTimerCount()).toBe(timersBefore);
     vi.useRealTimers();
     await warm.retired();
     expect(idle.connection.alive).toBe(false);
     expect(taken.connection.alive).toBe(true);
+    expect(armedIdleCount()).toBe(armedBefore);
   });
 
   it("refuse an app-server's request while no turn is running, and keep the thread's token total", async () => {
