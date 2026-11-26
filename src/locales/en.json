@@ -12067,5 +12067,16 @@
   "chat.handoff.failed": "Failed",
   "chat.handoff.failedWhy": "Failed: {why}",
   "chat.handoff.for": "{status} · for {name}",
-  "chat.handoff.forPrivate": "{status} · for {name} (private)"
+  "chat.handoff.forPrivate": "{status} · for {name} (private)",
+  "settings.logins.source.bitwardenSecrets": "From Bitwarden Secrets Manager",
+  "settings.vault.bitwardenSecrets.title": "Bitwarden Secrets Manager",
+  "settings.vault.bitwardenSecrets.line": "Let bots use secrets and logins from a Bitwarden Secrets Manager machine account.",
+  "settings.vault.bitwardenSecrets.connected": "Connected to {server} · {count} logins and secrets",
+  "settings.vault.bitwardenSecrets.connect": "Connect Secrets Manager",
+  "settings.vault.bitwardenSecrets.disconnect": "Disconnect Bitwarden Secrets Manager",
+  "settings.vault.bitwardenSecrets.team": "For the whole team: its bots use it in shared and private chats. Give the machine account only the projects bots need.",
+  "settings.vault.bitwardenSecrets.guide": "In Bitwarden Secrets Manager, open Machine accounts, pick one that can read only the projects bots need, then Access tokens → Create access token, and paste the token here. A secret whose note has a url: line, and optionally username: and totp: lines, is that site's login, with its value as the password.",
+  "settings.vault.bitwardenSecrets.token": "Access token",
+  "settings.vault.bitwardenSecrets.note": "Kept encrypted on the computer this runs on and never shown again. Each value is read from Bitwarden when a bot uses it, and is changed in Bitwarden.",
+  "settings.vault.bitwardenSecrets.error": "Bitwarden Secrets Manager could not be connected. Try again."
 }
