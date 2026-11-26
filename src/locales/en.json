@@ -11953,5 +11953,6 @@
   "geminiServer.desc": "Use Gemini models with an API key from Google AI Studio. Models are detected after you add it.",
   "geminiServer.getKey": "Get a key in Google AI Studio",
   "geminiServer.key": "Gemini API key",
-  "geminiServer.add": "Add Google AI Studio"
+  "geminiServer.add": "Add Google AI Studio",
+  "shortcuts.dictation-toggle": "Start or stop dictation"
 }
