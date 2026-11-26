@@ -11322,6 +11322,7 @@
   "twoPlaces.failed": "Your bots didn't start moving. Try again in a moment.",
   "twoPlaces.move": "Move bots",
   "twoPlaces.title": "Bring your bots together",
+  "twoPlaces.typing": "Bots on {place} still use this computer when you type on it, unless you pause that in the {app} icon's menu.",
   "twoPlaces.undo": "To bring them back later, turn on “Keep this computer's bots on this computer” in Settings → Import & export.",
   "update.banner.copiedOpened": "Command copied — paste it in the terminal that opened.",
   "update.banner.copiedPaste": "Command copied — paste it in a terminal to finish.",

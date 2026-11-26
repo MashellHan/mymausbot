@@ -10677,6 +10677,7 @@
   "twoPlaces.failed": "Não foi possível começar a mover seus bots. Tente novamente em instantes.",
   "twoPlaces.move": "Mover bots",
   "twoPlaces.title": "Reúna seus bots",
+  "twoPlaces.typing": "Os bots em {place} ainda usam este computador quando você digita nele, a menos que você pause isso no menu do ícone do {app}.",
   "twoPlaces.undo": "Para trazê-los de volta depois, ative “Manter os bots deste computador neste computador” em Configurações → Importar e exportar.",
   "update.banner.copiedOpened": "Comando copiado — cole no terminal que abriu.",
   "update.banner.copiedPaste": "Comando copiado — cole em um terminal para concluir.",
