@@ -41,6 +41,7 @@ import { sameModelSelection } from "../shared/thread-model.ts";
 import { initialGreetingMessage } from "./initial-greeting.ts"; import { createDefaultBot, defaultBotRefusal, type DefaultBotIntro } from "./default-bot.ts";
 import { appsFromCreator } from "./inherited-apps.ts"; import { newBotOwner, sharedAsMaker, sharedUnlessRestricted, type NewBotSharingRule } from "./new-bot-sharing.ts";
 import { ThreadCache, type ThreadState } from "./thread-cache.ts";
+import { lastMessageId, messagesBefore } from "./thread-history.ts";
 import { titleFromMessage, UNTITLED_TASK } from "./thread-title.ts";
 import { buildTask, threadTitleFrom, UNTITLED_THREAD, type NewThreadLevel } from "./task-record.ts";
 import { repairLegacyWorkThreads } from "./legacy-work-threads.ts";
@@ -1007,19 +1008,18 @@ export class Store {
     if (!state) {
       const tail = mdb.readThreadTail(threadId, messagesFile(threadId), limit);
       const legacyRows = tail.hasMore !== undefined && tail.messages.some((m) => m.parentId === undefined);
-      if (tail.hasMore !== true || legacyRows) {
-        state = this.threads.load(threadId, legacyRows ? mdb.readThread(threadId, messagesFile(threadId)) : tail);
-      } else {
-        return {
-          messages: tail.messages,
-          hasMore: tail.hasMore,
-          activeLeafId: tail.activeLeafId ?? tail.messages.at(-1)?.id ?? null,
-        };
+      if (tail.hasMore === true && !legacyRows) {
+        return { messages: tail.messages, hasMore: true, activeLeafId: tail.activeLeafId || (tail.messages.at(-1)?.id ?? lastMessageId(threadId)) };
       }
+      state = this.threads.load(threadId, legacyRows ? mdb.readThread(threadId, messagesFile(threadId)) : tail);
     }
     const { messages, activeLeafId } = state;
     const start = Math.max(0, messages.length - limit);
     return { messages: messages.slice(start), hasMore: start > 0, activeLeafId };
+  }
+
+  messagesBefore(threadId: string, before: string, limit: number): { messages: Message[]; hasMore: boolean; activeLeafId: string | null } | null {
+    return messagesBefore(threadId, before, limit, this.threads.get(threadId), () => this.thread(threadId));
   }
 
   importTranscript(threadId: string, messages: Message[], activeLeafId: string | null, relinked?: ReadonlyArray<{ id: string; parentId: string | null }>): void {
