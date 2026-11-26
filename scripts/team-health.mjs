@@ -8,6 +8,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir, cpus, loadavg } from "node:os";
 import { join, resolve } from "node:path";
+import { inspectLocalConcurrency } from "./local-concurrency.mjs";
 
 const DEFAULT_WINDOW_MIN = 60;
 const STALE_WORKTREE_DAYS = 2;
@@ -221,9 +222,17 @@ function countStuckTsc() {
   }
 }
 
-export function collectTeamHealth({ workspace = "w6", windowMin = DEFAULT_WINDOW_MIN, repoRoot = process.cwd(), home = homedir(), nowMs = Date.now() } = {}) {
+export function collectTeamHealth({
+  workspace = "w6",
+  windowMin = DEFAULT_WINDOW_MIN,
+  repoRoot = process.cwd(),
+  home = homedir(),
+  nowMs = Date.now(),
+  lockDir,
+  includeProcessScan = true,
+} = {}) {
   const cutoffMs = nowMs - windowMin * 60_000;
-  const agents = listHerdrAgents(workspace);
+  const agents = includeProcessScan ? listHerdrAgents(workspace) : [];
   const seats = agents.map((agent) => {
     const cid = agent?.agent_session?.value;
     const transcriptPath = typeof cid === "string" && cid
@@ -250,9 +259,14 @@ export function collectTeamHealth({ workspace = "w6", windowMin = DEFAULT_WINDOW
 
   const cpuCount = cpus().length;
   const load1m = loadavg()[0] ?? 0;
-  const worktrees = countStaleWorktrees(repoRoot, nowMs);
+  const worktrees = includeProcessScan ? countStaleWorktrees(repoRoot, nowMs) : { total: 0, stale: 0 };
   const deliveryBackups = countDeliveryBackups(repoRoot);
-  const stuckTscCount = countStuckTsc();
+  const stuckTscCount = includeProcessScan ? countStuckTsc() : 0;
+  const concurrency = inspectLocalConcurrency({
+    ...(lockDir ? { lockDir } : {}),
+    nowMs,
+    ...(includeProcessScan ? {} : { detectBuildProcess: () => false }),
+  });
   const anomalies = detectAnomalies({
     seats,
     load1m,
@@ -266,7 +280,7 @@ export function collectTeamHealth({ workspace = "w6", windowMin = DEFAULT_WINDOW
     capturedAt: new Date(nowMs).toISOString(),
     workspace,
     windowMin,
-    host: { cpuCount, load1m: Number(load1m.toFixed(2)), worktrees, deliveryBackups, stuckTscCount },
+    host: { cpuCount, load1m: Number(load1m.toFixed(2)), worktrees, deliveryBackups, stuckTscCount, concurrency },
     seats,
     anomalies,
   };
@@ -278,7 +292,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   if (opts.json) {
     console.log(JSON.stringify(report, null, 2));
   } else {
-    console.log(`Team Health (${report.workspace}, last ${report.windowMin}m) — load1m=${report.host.load1m} / ${report.host.cpuCount} CPUs, worktrees=${report.host.worktrees.total} (${report.host.worktrees.stale} stale), backups=${report.host.deliveryBackups}, tsc=${report.host.stuckTscCount}`);
+    console.log(`Team Health (${report.workspace}, last ${report.windowMin}m) — load1m=${report.host.load1m} / ${report.host.cpuCount} CPUs, worktrees=${report.host.worktrees.total} (${report.host.worktrees.stale} stale), backups=${report.host.deliveryBackups}, tsc=${report.host.stuckTscCount}, testSlots=${report.host.concurrency.activeTestCount}/${report.host.concurrency.maxSlots}${report.host.concurrency.buildActive ? ` [BUILD ACTIVE:${report.host.concurrency.buildSource}]` : ""}`);
     console.log("SEAT                STATUS   STEPS  AVG_S  POLLS  ERR  TSC  BUILD  VITEST  EDITS  CTX");
     for (const s of report.seats) {
       console.log(
