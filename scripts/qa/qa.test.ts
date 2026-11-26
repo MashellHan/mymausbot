@@ -483,7 +483,7 @@ describe("complete CI and trusted QA health", () => {
     for (event of ["schedule", "workflow_dispatch"]) {
       const report = await reportRun(run.id, { api, readArtifact, repository });
       expect(report).toMatchObject({ executionComplete: true, testsPassed: true, missing: [], deliveryComplete: true });
-      expect(report.jobs).toHaveLength(39);
+      expect(report.jobs).toHaveLength(38);
       expect(report.platformPolicy).toBeUndefined();
       expect(report.passed).toContain(testFindings(historicalResult("legacy FOSS contract"), "linux").passed[0]);
       expect(report.passed).not.toContain(testFindings(historicalResult("legacy FOSS contract"), "darwin").passed[0]);
