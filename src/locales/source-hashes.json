@@ -4138,7 +4138,12 @@
       "sidebar.update.manual": "7ebfee1513d4da1f7f746d82e68ff63cfaf5c49f13c2380b37f14e91bfd06196",
       "sidebar.update.manualFailed": "cc8104a0c49e1311e9a030baf18c5c22b8b4fe9179b678ba88aefa8a22de17dc",
       "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd",
-      "server.teammates.noLongerWaiting": "49259fb62a6e8687efa6a6e69da294c81bd67a19c57687d0724ee4bdd5cc4645"
+      "server.teammates.noLongerWaiting": "49259fb62a6e8687efa6a6e69da294c81bd67a19c57687d0724ee4bdd5cc4645",
+      "geminiServer.title": "ad3cef61d37f5f52dd462d9e75e01ddf4842423e3a86ce2c361c9883b69f0df7",
+      "geminiServer.desc": "72009483b2a7e9d14ab7cce15d09c24f2ec59780db0a31de3978c5af9b0ba0e1",
+      "geminiServer.getKey": "7048ccda6c01174ac602ffbf3d4138802e7be597b64ba0ae687a63c8ccbb22da",
+      "geminiServer.key": "88774da5d424f1506de2317bc38d40fcefa789e724144d2211dbb9fb458161f9",
+      "geminiServer.add": "070389bd52afbe45232b87d9f18f07bad2904c0b2c227c037e3078c71522167f"
     },
     "es": {
       "about.connectedTo": "7eba311e0e3c7146cf09856dae9934abad7b60e15b5a60679db755aab63541f9",
@@ -59677,7 +59682,12 @@
       "sidebar.update.manual": "7ebfee1513d4da1f7f746d82e68ff63cfaf5c49f13c2380b37f14e91bfd06196",
       "sidebar.update.manualFailed": "cc8104a0c49e1311e9a030baf18c5c22b8b4fe9179b678ba88aefa8a22de17dc",
       "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd",
-      "server.teammates.noLongerWaiting": "49259fb62a6e8687efa6a6e69da294c81bd67a19c57687d0724ee4bdd5cc4645"
+      "server.teammates.noLongerWaiting": "49259fb62a6e8687efa6a6e69da294c81bd67a19c57687d0724ee4bdd5cc4645",
+      "geminiServer.title": "ad3cef61d37f5f52dd462d9e75e01ddf4842423e3a86ce2c361c9883b69f0df7",
+      "geminiServer.desc": "72009483b2a7e9d14ab7cce15d09c24f2ec59780db0a31de3978c5af9b0ba0e1",
+      "geminiServer.getKey": "7048ccda6c01174ac602ffbf3d4138802e7be597b64ba0ae687a63c8ccbb22da",
+      "geminiServer.key": "88774da5d424f1506de2317bc38d40fcefa789e724144d2211dbb9fb458161f9",
+      "geminiServer.add": "070389bd52afbe45232b87d9f18f07bad2904c0b2c227c037e3078c71522167f"
     },
     "ru": {
       "about.connectedTo": "7eba311e0e3c7146cf09856dae9934abad7b60e15b5a60679db755aab63541f9",

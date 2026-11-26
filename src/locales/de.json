@@ -4148,5 +4148,10 @@
   "server.reach.place.myCloud": "My Cloud",
   "server.reach.place.thisCloud": "dieser Cloud",
   "server.reach.place.cloudDesktop": "dem Cloud-Desktop",
-  "server.teammates.noLongerWaiting": "{who} wartet nicht mehr auf dich"
+  "server.teammates.noLongerWaiting": "{who} wartet nicht mehr auf dich",
+  "geminiServer.title": "Google AI Studio",
+  "geminiServer.desc": "Nutze Gemini-Modelle mit einem API-Schlüssel aus Google AI Studio. Die Modelle werden erkannt, nachdem du ihn hinzugefügt hast.",
+  "geminiServer.getKey": "Schlüssel in Google AI Studio holen",
+  "geminiServer.key": "Gemini-API-Schlüssel",
+  "geminiServer.add": "Google AI Studio hinzufügen"
 }

@@ -11302,5 +11302,10 @@
   "chat.notice.waitingPasswordElsewhere": "Esperando você em @{name}: {label}",
   "chat.notice.waitingSignInElsewhere": "Esperando você entrar em {label} em @{name}",
   "chat.notice.waitingConnectElsewhere": "Esperando você conectar {label} em @{name}",
-  "chat.notice.waitingReviewElsewhere": "Esperando sua revisão em @{name}"
+  "chat.notice.waitingReviewElsewhere": "Esperando sua revisão em @{name}",
+  "geminiServer.title": "Google AI Studio",
+  "geminiServer.desc": "Use os modelos Gemini com uma chave de API do Google AI Studio. Os modelos são detectados depois que você a adiciona.",
+  "geminiServer.getKey": "Obter uma chave no Google AI Studio",
+  "geminiServer.key": "Chave de API do Gemini",
+  "geminiServer.add": "Adicionar Google AI Studio"
 }
