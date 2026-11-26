@@ -115,6 +115,34 @@ describe("SecretRequestCard on a page reached through a desktop paired to anothe
     expect(html).toContain("must be saved on the host computer");
     expect(html).not.toContain('type="password"');
   });
+
+  it("requires saving secrets on the host computer when viewing from remote PWA mode", async () => {
+    const { setActivePwaAuth } = await import("@/lib/pwa-transport");
+    setActivePwaAuth({
+      ownerKey: "https://relay.mxhan.com::env-1::ses-1",
+      relayUrl: "https://relay.mxhan.com",
+      token: "omb_sess_test_1",
+      deviceId: "dev-1",
+      environmentId: "env-1",
+      sessionId: "ses-1",
+      serverName: "Mac",
+      scopes: ["client"],
+      pairedAt: 1700000000000,
+    });
+    try {
+      for (const secret of [
+        { target: "customSecret", label: "Mailbox password", delivery: "ref", placeholder: "", helpUrl: "" },
+        { target: "openaiApiKey", label: "OpenAI API key" },
+      ]) {
+        const html = view(secret);
+        expect(html, secret.target).toContain("must be saved on the host computer");
+        expect(html, secret.target).not.toContain('type="password"');
+        expect(html, secret.target).toContain("Not now");
+      }
+    } finally {
+      setActivePwaAuth(null);
+    }
+  });
 });
 
 describe("SecretRequestCard ask card", () => {

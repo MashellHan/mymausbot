@@ -4,6 +4,7 @@ export type BridgeLogEvent =
   | { ev: "host_reject"; code: number; reason: string }
   | { ev: "host_replaced"; hostId: string; abortedStreams: number }
   | { ev: "host_disconnect"; hostId: string; code: number; inFlight: number }
+  | { ev: "http_rate_limited"; reason: string }
   | { ev: "stream_error"; status: number; reason: string }
   | { ev: "drain"; hostConnected: boolean; inFlight: number }
   | { ev: "stop" };

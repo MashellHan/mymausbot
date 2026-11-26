@@ -180,4 +180,33 @@ describe("remembering exact command approvals", () => {
     expect(row).toMatch(/<div dir="auto"[^>]*class="[^"]*font-mono[^"]*"[^>]*>git status --short<\/div>/);
     expect(row).not.toContain("<pre");
   });
+
+  it("suppresses permanent Always allow in remote PWA mode while preserving session/single-use decisions and desktop hint", async () => {
+    const { setActivePwaAuth } = await import("@/lib/pwa-transport");
+    setActivePwaAuth({
+      ownerKey: "https://relay.mxhan.com::env-1::ses-1",
+      relayUrl: "https://relay.mxhan.com",
+      token: "omb_sess_test_1",
+      deviceId: "dev-1",
+      environmentId: "env-1",
+      sessionId: "ses-1",
+      serverName: "Mac",
+      scopes: ["client"],
+      pairedAt: 1700000000000,
+    });
+    try {
+      const cmdResult = view();
+      expect(cmdResult.html).not.toContain("Always allow this command");
+      expect(cmdResult.html).toContain("Allow for this session");
+      expect(cmdResult.html).toContain("Allow once");
+      expect(cmdResult.html).toContain("This approval change requires the packaged desktop app");
+
+      const keyResult = view({ allowKey: "peer:teammate" });
+      expect(keyResult.html).not.toContain("Always allow");
+      expect(keyResult.html).toContain("Allow for this session");
+      expect(keyResult.html).toContain("This approval change requires the packaged desktop app");
+    } finally {
+      setActivePwaAuth(null);
+    }
+  });
 });

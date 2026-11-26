@@ -581,7 +581,7 @@ import {
   type StreamSeen,
   type Viewer,
 } from "./bot-visibility.ts";
-import { describeBrand, loadBrand } from "./brand.ts";
+import { describeBrand, loadBrand, publicBrandResponse } from "./brand.ts";
 import { deliverSseFrame, openSseHeartbeat } from "./sse-fanout.ts"; import { createBotFrames, takesFrame, type BotFrameForm } from "./host/bot-frames.ts";
 import { PhoneSecretBridge, PhoneSecretSubmissionRegistry } from "./phone-secret.ts";
 // Keep these two last, so loading the route table leaves module start-up order as is.
@@ -12680,9 +12680,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (method === "GET" && path === "/api/health" && !gate.auth) {
       return json(res, 200, { app: "openmausbot" });
     }
-    // Public: the sign-in page needs the deployment's name and icon, and it holds nothing secret.
+    // Public: the sign-in page needs the deployment's name and icon, without exposing host paths or internal notices.
     if (method === "GET" && path === "/api/brand" && !gate.auth) {
-      return json(res, 200, loadBrand());
+      return json(res, 200, publicBrandResponse());
     }
     if (!gate.auth) return json(res, gate.status, { error: gate.error });
     if (cloudPower && gate.auth.kind === "session") cloudPower.request(path, req.headers, res); // someone using a Cloud home keeps it awake

@@ -1,5 +1,6 @@
 // Remote PWA pairing, IndexedDB (`omb-pwa-v1`) auth store, authenticated fetch wrappers, and blob media cache.
 import type { PwaPairingPayload } from "../../shared/pwa-bridge.ts";
+import { clearPwaMemoryCaches } from "./pwa-cache.ts";
 import {
   OMB_PWA_DPOP_STORE,
   exportDpopPublicJwk,
@@ -8,6 +9,12 @@ import {
   type GeneratedDpopKey,
 } from "./pwa-dpop.ts";
 import { randomUuid } from "./random-uuid.ts";
+import {
+  clearCachedMediaBlob,
+  downloadRemoteUrl,
+  resolveRemoteMediaUrl,
+  revokeMediaBlobCache,
+} from "./pwa-media.ts";
 import {
   getActiveDpopKey,
   getPwaAuth,
@@ -27,6 +34,8 @@ import {
 
 export {
   OMB_PWA_DPOP_STORE,
+  clearCachedMediaBlob,
+  downloadRemoteUrl,
   getActiveDpopKey,
   getPwaAuth,
   isJsonResponse,
@@ -37,6 +46,8 @@ export {
   remoteFetch,
   remoteFetchInit,
   remoteUrl,
+  resolveRemoteMediaUrl,
+  revokeMediaBlobCache,
   setActiveDpopKey,
   type PwaAuthRecord,
 };
@@ -60,7 +71,6 @@ export const DEFAULT_PWA_RELAY_ORIGIN = "https://relay.mxhan.com";
 
 const PAIR_REQUEST_PREFIX = "omb.pwa.pairRequest.";
 const OMB_PWA_AUTH_BACKUP_KEY = "omb.pwa.auth.v1";
-const MAX_CACHED_MEDIA_BLOBS = 128;
 
 export type PwaPairingBootResult =
   | { status: "none" }
@@ -83,8 +93,6 @@ export interface ActivatePairingOptions extends RelayValidationOptions {
 
 let initPromise: Promise<PwaAuthRecord | null> | null = null;
 const memoryPairRequests = new Map<string, string>();
-const mediaBlobCache = new Map<string, string>();
-const mediaInFlight = new Map<string, Promise<string>>();
 
 export function makePwaOwnerKey(relayUrl: string, environmentId: string, sessionId: string): string {
   return `${relayUrl}::${environmentId}::${sessionId}`;
@@ -433,20 +441,24 @@ async function readStoredAuth(idbFactory?: IDBFactory): Promise<PwaAuthRecord | 
     }
   }
   if (fromIdb) {
-    if (idbFactory === undefined) writeBackupAuth(fromIdb);
+    if (idbFactory === undefined) deleteBackupAuth();
     return fromIdb;
   }
   if (idbFactory !== undefined) return null;
   const backup = readBackupAuth();
   if (backup && !backup.dpopBound) {
-    void writeStoredAuth(backup).catch(() => undefined);
+    void writeStoredAuth(backup)
+      .then((ok) => {
+        if (ok) deleteBackupAuth();
+      })
+      .catch(() => undefined);
   }
   return backup;
 }
 
-async function writeStoredAuth(record: PwaAuthRecord, idbFactory?: IDBFactory): Promise<void> {
+async function writeStoredAuth(record: PwaAuthRecord, idbFactory?: IDBFactory): Promise<boolean> {
   const db = await openPwaDb(idbFactory);
-  if (!db) return;
+  if (!db) return false;
   try {
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(OMB_PWA_AUTH_STORE, "readwrite");
@@ -455,21 +467,57 @@ async function writeStoredAuth(record: PwaAuthRecord, idbFactory?: IDBFactory): 
       tx.onerror = () => reject(tx.error ?? new Error("Failed to persist PWA auth"));
       tx.onabort = () => reject(tx.error ?? new Error("Failed to persist PWA auth"));
     });
+    return true;
   } finally {
     db.close();
   }
 }
 
-async function deleteStoredAuth(idbFactory?: IDBFactory): Promise<void> {
+async function clearAllStoredPwaData(idbFactory?: IDBFactory): Promise<void> {
   const db = await openPwaDb(idbFactory).catch(() => null);
   if (!db) return;
   try {
+    const storeNames = [
+      OMB_PWA_AUTH_STORE,
+      OMB_PWA_SNAPSHOT_STORE,
+      OMB_PWA_OUTBOX_STORE,
+      OMB_PWA_OUTBOX_LEASES_STORE,
+      OMB_PWA_PREFS_STORE,
+      OMB_PWA_DPOP_STORE,
+    ].filter((name) => {
+      try {
+        return db.objectStoreNames?.contains?.(name) !== false;
+      } catch {
+        return true;
+      }
+    });
+    if (storeNames.length === 0) return;
     await new Promise<void>((resolve) => {
-      const tx = db.transaction(OMB_PWA_AUTH_STORE, "readwrite");
-      tx.objectStore(OMB_PWA_AUTH_STORE).delete(OMB_PWA_AUTH_ACTIVE_KEY);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => resolve();
-      tx.onabort = () => resolve();
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      try {
+        const tx = db.transaction(storeNames, "readwrite");
+        for (const name of storeNames) {
+          try {
+            const store = tx.objectStore(name);
+            if (typeof store.clear === "function") {
+              store.clear();
+            } else if (name === OMB_PWA_AUTH_STORE) {
+              store.delete(OMB_PWA_AUTH_ACTIVE_KEY);
+            }
+          } catch {
+          }
+        }
+        tx.oncomplete = done;
+        tx.onerror = done;
+        tx.onabort = done;
+      } catch {
+        done();
+      }
     });
   } finally {
     db.close();
@@ -564,19 +612,6 @@ function clearStoredDpopKeys(idbFactory?: IDBFactory): Promise<void> {
   });
 }
 
-export function revokeMediaBlobCache(): void {
-  if (typeof URL !== "undefined" && typeof URL.revokeObjectURL === "function") {
-    for (const blobUrl of mediaBlobCache.values()) {
-      try {
-        URL.revokeObjectURL(blobUrl);
-      } catch {
-      }
-    }
-  }
-  mediaBlobCache.clear();
-  mediaInFlight.clear();
-}
-
 export async function setPwaAuth(
   record: PwaAuthRecord,
   idbFactory?: IDBFactory,
@@ -585,13 +620,15 @@ export async function setPwaAuth(
   if (getPwaAuth()?.ownerKey !== record.ownerKey) {
     revokeMediaBlobCache();
   }
-  if (idbFactory === undefined) {
-    writeBackupAuth(record);
-  }
+  let persistedInIdb = false;
   try {
-    await writeStoredAuth(record, idbFactory);
+    persistedInIdb = await writeStoredAuth(record, idbFactory);
   } catch {
-    // Restricted Safari/WebKit storage can reject writes; localStorage backup or in-memory auth still keeps pairing working.
+    // Restricted Safari/WebKit storage can reject IndexedDB writes; fall back to localStorage/in-memory auth below.
+  }
+  if (idbFactory === undefined) {
+    if (persistedInIdb) deleteBackupAuth();
+    else writeBackupAuth(record);
   }
   setActivePwaAuth(record, dpopPrivateKey ?? null);
   initPromise = Promise.resolve(record);
@@ -603,15 +640,16 @@ export async function clearPwaAuth(idbFactory?: IDBFactory): Promise<void> {
   setActiveDpopKey(null);
   initPromise = Promise.resolve(null);
   revokeMediaBlobCache();
+  clearPwaMemoryCaches();
   if (idbFactory === undefined) {
     deleteBackupAuth();
   }
   const storedOwnerKey = activeOwnerKey ?? (await readStoredAuth(idbFactory))?.ownerKey ?? null;
-  await deleteStoredAuth(idbFactory);
   if (storedOwnerKey) {
     await deleteDpopKey(storedOwnerKey, idbFactory);
   }
   await clearStoredDpopKeys(idbFactory);
+  await clearAllStoredPwaData(idbFactory);
 }
 
 export function initPwaAuth(idbFactory?: IDBFactory): Promise<PwaAuthRecord | null> {
@@ -862,117 +900,5 @@ export async function bootstrapPwaConfig(options: ActivatePairingOptions = {}): 
     return { status: "paired", auth: activated.auth };
   } catch (error) {
     return { status: "failed", error: error instanceof Error ? error.message : String(error) };
-  }
-}
-
-function setCachedMediaBlob(cacheKey: string, blobUrl: string): void {
-  if (mediaBlobCache.has(cacheKey)) {
-    const existing = mediaBlobCache.get(cacheKey)!;
-    mediaBlobCache.delete(cacheKey);
-    if (existing !== blobUrl) {
-      try {
-        URL.revokeObjectURL(existing);
-      } catch {
-      }
-    }
-  }
-  mediaBlobCache.set(cacheKey, blobUrl);
-  while (mediaBlobCache.size > MAX_CACHED_MEDIA_BLOBS) {
-    const oldestKey = mediaBlobCache.keys().next().value;
-    if (oldestKey === undefined) break;
-    const oldestUrl = mediaBlobCache.get(oldestKey);
-    mediaBlobCache.delete(oldestKey);
-    if (oldestUrl) {
-      try {
-        URL.revokeObjectURL(oldestUrl);
-      } catch {
-      }
-    }
-  }
-}
-
-function isAllowedMediaMime(raw: string | null | undefined): boolean {
-  const mime = (raw ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
-  if (!mime || mime === "image/svg+xml") return false;
-  return mime.startsWith("image/") || mime.startsWith("audio/") || mime.startsWith("video/");
-}
-
-export function resolveRemoteMediaUrl(src: string, fetchImpl: typeof fetch = fetch): Promise<string> {
-  const auth = getPwaAuth();
-  if (!auth || !isRelayMediaPath(src)) return Promise.resolve(src);
-  const fullUrl = remoteUrl(src);
-  const cacheKey = `${auth.ownerKey}\0${fullUrl}`;
-  const cached = mediaBlobCache.get(cacheKey);
-  if (cached) {
-    mediaBlobCache.delete(cacheKey);
-    mediaBlobCache.set(cacheKey, cached);
-    return Promise.resolve(cached);
-  }
-  const existingFlight = mediaInFlight.get(cacheKey);
-  if (existingFlight) return existingFlight;
-
-  const flight = remoteFetch(src, { cache: "no-store" }, fetchImpl)
-    .then(async (res) => {
-      if (!res.ok) {
-        throw new Error(`Media load failed (${res.status})`);
-      }
-      const headerMime = res.headers.get("content-type");
-      if (headerMime !== null && !isAllowedMediaMime(headerMime)) {
-        throw new Error(`Unsupported media type (${headerMime || "unknown"})`);
-      }
-      const blob = await res.blob();
-      if (!isAllowedMediaMime(headerMime ?? blob.type)) {
-        throw new Error(`Unsupported media type (${blob.type || "unknown"})`);
-      }
-      const blobUrl = URL.createObjectURL(blob);
-      if (getPwaAuth()?.ownerKey !== auth.ownerKey) {
-        try {
-          URL.revokeObjectURL(blobUrl);
-        } catch {
-        }
-        throw new Error("PWA session changed");
-      }
-      setCachedMediaBlob(cacheKey, blobUrl);
-      return blobUrl;
-    })
-    .finally(() => {
-      if (mediaInFlight.get(cacheKey) === flight) {
-        mediaInFlight.delete(cacheKey);
-      }
-    });
-
-  mediaInFlight.set(cacheKey, flight);
-  return flight;
-}
-
-export function clearCachedMediaBlob(src: string): void {
-  const auth = getPwaAuth();
-  if (!auth) return;
-  const key = `${auth.ownerKey}\0${remoteUrl(src)}`;
-  const prev = mediaBlobCache.get(key);
-  if (prev) {
-    mediaBlobCache.delete(key);
-    try {
-      URL.revokeObjectURL(prev);
-    } catch {
-    }
-  }
-}
-
-export async function downloadRemoteUrl(url: string, filename: string, fetchImpl: typeof fetch = fetch): Promise<void> {
-  const res = await remoteFetch(url, undefined, fetchImpl);
-  if (!res.ok) throw new Error(`Download failed (${res.status})`);
-  const blob = new Blob([await res.arrayBuffer()], { type: "application/octet-stream" });
-  const objectUrl = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = objectUrl;
-  link.download = filename;
-  link.style.display = "none";
-  document.body.append(link);
-  try {
-    link.click();
-  } finally {
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
   }
 }

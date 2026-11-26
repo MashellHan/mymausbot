@@ -15,6 +15,7 @@ const SECRET = "bridge-secret-value-123456";
 const SECRET_SHA256 = createHash("sha256").update(SECRET, "utf8").digest("hex");
 const PWA_ORIGIN = "https://mausbot.mxhan.com";
 const HOST_ID = "mac-mini-test";
+const AUTH_HEADER = { Authorization: "Bearer omb_sess_test_token_12345678" };
 
 function makeConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
   const base = loadConfig({
@@ -140,21 +141,43 @@ describe("pwa-relay bridge", () => {
     assert.equal(silentClosed, CloseCode.Malformed);
   });
 
-  it("returns 503 mac_offline fast with CORS + no-store when Mac is disconnected and answers OPTIONS", async () => {
+  it("blocks unauthenticated HTTP paths with 401 before checking Mac state, removes hostConnected from /healthz, and allows POST /api/pair", async () => {
     const bridge = await startBridge(makeConfig(), { log: () => {} });
     bridges.push(bridge);
 
     const health = await fetch(`http://127.0.0.1:${bridge.port}/healthz`);
     assert.equal(health.status, 200);
     assertCorsAndNoStore(health.headers);
-    assert.deepEqual(await health.json(), { ok: true, hostConnected: false });
+    assert.deepEqual(await health.json(), { ok: true });
 
     const preflight = await fetch(`http://127.0.0.1:${bridge.port}/api/bots`, { method: "OPTIONS" });
     assert.equal(preflight.status, 204);
     assertCorsAndNoStore(preflight.headers);
 
+    for (const blockedPath of [
+      "/api/brand",
+      "/api/health",
+      "/.well-known/openmausbot/environment",
+      "/api/bots",
+      "/api/events",
+      "/api/pair",
+    ]) {
+      const unauth = await fetch(`http://127.0.0.1:${bridge.port}${blockedPath}`);
+      assert.equal(unauth.status, 401, `Expected 401 for unauthenticated GET ${blockedPath}`);
+      assertCorsAndNoStore(unauth.headers);
+      assert.deepEqual(await unauth.json(), { error: "Unauthorized", code: "unauthorized" });
+    }
+
+    const pairRes = await fetch(`http://127.0.0.1:${bridge.port}/api/pair`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential: "omb_pair_abc", deviceName: "iPhone" }),
+    });
+    assert.equal(pairRes.status, 503);
+    assert.deepEqual(await pairRes.json(), { error: "Mac host is offline", code: "mac_offline" });
+
     const start = Date.now();
-    const res = await fetch(`http://127.0.0.1:${bridge.port}/api/bots`);
+    const res = await fetch(`http://127.0.0.1:${bridge.port}/api/bots`, { headers: AUTH_HEADER });
     const elapsed = Date.now() - start;
     assert.equal(res.status, 503);
     assert.ok(elapsed < 250, `Expected <250ms fast fail, got ${elapsed}ms`);
@@ -241,7 +264,7 @@ describe("pwa-relay bridge", () => {
     const mac1 = await connectMockMac(bridge.port);
     await mac1.waitForFrame((f) => f.type === "hello");
 
-    const pendingHttp = fetch(`http://127.0.0.1:${bridge.port}/api/bots`);
+    const pendingHttp = fetch(`http://127.0.0.1:${bridge.port}/api/bots`, { headers: AUTH_HEADER });
     await mac1.waitForFrame((f) => f.type === "req.open");
 
     const sseAbort = new AbortController();
@@ -278,7 +301,7 @@ describe("pwa-relay bridge", () => {
     assert.notEqual(nextRead, "hung");
 
     // New host serves traffic cleanly
-    const okReq = fetch(`http://127.0.0.1:${bridge.port}/api/health`);
+    const okReq = fetch(`http://127.0.0.1:${bridge.port}/api/health`, { headers: AUTH_HEADER });
     const okOpen = (await mac2.waitForFrame((f) => f.type === "req.open")) as Extract<BridgeFrame, { type: "req.open" }>;
     mac2.sendFrame({ type: "res.head", streamId: okOpen.streamId, status: 200, headers: { "content-type": "application/json" } });
     mac2.sendFrame({ type: "res.body", streamId: okOpen.streamId, chunkB64: Buffer.from('{"ok":true}').toString("base64"), eof: true });
@@ -327,7 +350,7 @@ describe("pwa-relay bridge", () => {
     const mac = await connectMockMac(bridge.port);
     await mac.waitForFrame((f) => f.type === "hello");
 
-    const res = await fetch(`http://127.0.0.1:${bridge.port}/api/bots`);
+    const res = await fetch(`http://127.0.0.1:${bridge.port}/api/bots`, { headers: AUTH_HEADER });
     assert.equal(res.status, 504);
     assertCorsAndNoStore(res.headers);
     const cancel = await mac.waitForFrame((f) => f.type === "req.cancel");
@@ -348,6 +371,7 @@ describe("pwa-relay bridge", () => {
     const validBuf = Buffer.alloc(64 * 1024, 0x61);
     const okPromise = fetch(`http://127.0.0.1:${bridge.port}/api/attachments?uploadId=u1`, {
       method: "POST",
+      headers: AUTH_HEADER,
       body: validBuf,
     });
     const okOpen = (await mac.waitForFrame((f) => f.type === "req.open")) as Extract<BridgeFrame, { type: "req.open" }>;
@@ -372,6 +396,7 @@ describe("pwa-relay bridge", () => {
     const hugeBuf = Buffer.alloc(maxBodyBytes + 1024, 0x62);
     const overRes = await fetch(`http://127.0.0.1:${bridge.port}/api/attachments?uploadId=u2`, {
       method: "POST",
+      headers: AUTH_HEADER,
       body: hugeBuf,
     });
     assert.equal(overRes.status, 413);
@@ -387,6 +412,7 @@ describe("pwa-relay bridge", () => {
     });
     const streamOverRes = await fetch(`http://127.0.0.1:${bridge.port}/api/attachments?uploadId=u3`, {
       method: "POST",
+      headers: AUTH_HEADER,
       body: streamBody,
       duplex: "half",
     } as RequestInit);
@@ -406,12 +432,12 @@ describe("pwa-relay bridge", () => {
     await mac.waitForFrame((f) => f.type === "hello");
 
     const firstPromise = fetch(`http://127.0.0.1:${bridge.port}/api/bots`, {
-      headers: { "x-forwarded-for": "203.0.113.42" },
+      headers: { ...AUTH_HEADER, "x-forwarded-for": "203.0.113.42" },
     });
     const firstOpen = (await mac.waitForFrame((f) => f.type === "req.open")) as Extract<BridgeFrame, { type: "req.open" }>;
     assert.equal(firstOpen.remoteAddr, "203.0.113.42");
 
-    const secondRes = await fetch(`http://127.0.0.1:${bridge.port}/api/bots`);
+    const secondRes = await fetch(`http://127.0.0.1:${bridge.port}/api/bots`, { headers: AUTH_HEADER });
     assert.equal(secondRes.status, 503);
     assert.equal(secondRes.headers.get("retry-after"), "1");
     assertCorsAndNoStore(secondRes.headers);
@@ -445,14 +471,14 @@ describe("pwa-relay bridge", () => {
     await mac.waitForFrame((f) => f.type === "hello");
 
     const hugePath = `/api/bots?pad=${"a".repeat(5000)}`;
-    const tooBigRes = await fetch(`http://127.0.0.1:${bridge.port}${hugePath}`);
+    const tooBigRes = await fetch(`http://127.0.0.1:${bridge.port}${hugePath}`, { headers: AUTH_HEADER });
     assert.equal(tooBigRes.status, 431);
     assertCorsAndNoStore(tooBigRes.headers);
     assert.deepEqual(await tooBigRes.json(), { error: "Request headers too large", code: "headers_too_large" });
     assert.equal(mac.frames.filter((f) => f.type === "req.open").length, 0);
 
     // Subsequent valid request still succeeds on the same tunnel
-    const okPromise = fetch(`http://127.0.0.1:${bridge.port}/api/health`);
+    const okPromise = fetch(`http://127.0.0.1:${bridge.port}/api/health`, { headers: AUTH_HEADER });
     const open = (await mac.waitForFrame((f) => f.type === "req.open")) as Extract<BridgeFrame, { type: "req.open" }>;
     mac.sendFrame({ type: "res.head", streamId: open.streamId, status: 200, headers: { "content-type": "application/json" } });
     mac.sendFrame({ type: "res.body", streamId: open.streamId, chunkB64: Buffer.from('{"ok":true}').toString("base64"), eof: true });
@@ -469,13 +495,13 @@ describe("pwa-relay bridge", () => {
     const mac = await connectMockMac(bridge.port);
     await mac.waitForFrame((f) => f.type === "hello");
 
-    const healthyPromise = fetch(`http://127.0.0.1:${bridge.port}/api/health`);
+    const healthyPromise = fetch(`http://127.0.0.1:${bridge.port}/api/health`, { headers: AUTH_HEADER });
     const healthyOpen = (await mac.waitForFrame((f) => f.type === "req.open" && f.path === "/api/health")) as Extract<
       BridgeFrame,
       { type: "req.open" }
     >;
 
-    const badPromise = fetch(`http://127.0.0.1:${bridge.port}/api/bots`);
+    const badPromise = fetch(`http://127.0.0.1:${bridge.port}/api/bots`, { headers: AUTH_HEADER });
     const badOpen = (await mac.waitForFrame((f) => f.type === "req.open" && f.path === "/api/bots")) as Extract<
       BridgeFrame,
       { type: "req.open" }
@@ -494,7 +520,7 @@ describe("pwa-relay bridge", () => {
     assert.deepEqual(await badRes.json(), { error: "Upstream sent invalid response headers", code: "bad_gateway" });
     await mac.waitForFrame((f) => f.type === "req.cancel" && f.streamId === badOpen.streamId);
 
-    const badStatusPromise = fetch(`http://127.0.0.1:${bridge.port}/api/bots?case=bad-status`);
+    const badStatusPromise = fetch(`http://127.0.0.1:${bridge.port}/api/bots?case=bad-status`, { headers: AUTH_HEADER });
     const badStatusOpen = (await mac.waitForFrame((f) => f.type === "req.open" && f.path.includes("bad-status"))) as Extract<
       BridgeFrame,
       { type: "req.open" }
@@ -505,7 +531,7 @@ describe("pwa-relay bridge", () => {
     assertCorsAndNoStore(badStatusRes.headers);
     await mac.waitForFrame((f) => f.type === "req.cancel" && f.streamId === badStatusOpen.streamId);
 
-    const badShapePromise = fetch(`http://127.0.0.1:${bridge.port}/api/bots?case=bad-shape`);
+    const badShapePromise = fetch(`http://127.0.0.1:${bridge.port}/api/bots?case=bad-shape`, { headers: AUTH_HEADER });
     const badShapeOpen = (await mac.waitForFrame((f) => f.type === "req.open" && f.path.includes("bad-shape"))) as Extract<
       BridgeFrame,
       { type: "req.open" }
@@ -551,6 +577,7 @@ describe("pwa-relay bridge", () => {
     let settled = false;
     const uploadPromise = fetch(`http://127.0.0.1:${bridge.port}/api/attachments?uploadId=bp1`, {
       method: "POST",
+      headers: AUTH_HEADER,
       body: payload,
     }).then((r) => {
       settled = true;
@@ -561,7 +588,7 @@ describe("pwa-relay bridge", () => {
     let busyRes: Response | undefined;
     const deadline = Date.now() + 3000;
     while (Date.now() < deadline) {
-      const probe = await fetch(`http://127.0.0.1:${bridge.port}/api/bots`);
+      const probe = await fetch(`http://127.0.0.1:${bridge.port}/api/bots`, { headers: AUTH_HEADER });
       if (probe.status === 503) {
         const body = (await probe.json()) as { code?: string };
         if (body.code === "bridge_busy") {
@@ -612,6 +639,7 @@ describe("pwa-relay bridge", () => {
 
     const uploadRes = await fetch(`http://127.0.0.1:${bridge.port}/api/attachments?uploadId=bp-stall`, {
       method: "POST",
+      headers: AUTH_HEADER,
       body: Buffer.alloc(4 * 1024 * 1024, 0x63),
     });
     assert.equal(uploadRes.status, 504);
@@ -640,6 +668,7 @@ describe("pwa-relay bridge", () => {
 
     const uploadPromise = fetch(`http://127.0.0.1:${bridge.port}/api/attachments?uploadId=bp-401`, {
       method: "POST",
+      headers: AUTH_HEADER,
       body: Buffer.alloc(4 * 1024 * 1024, 0x64),
     });
 
@@ -647,7 +676,7 @@ describe("pwa-relay bridge", () => {
     const deadline = Date.now() + 3000;
     let engaged = false;
     while (Date.now() < deadline) {
-      const probe = await fetch(`http://127.0.0.1:${bridge.port}/api/bots`);
+      const probe = await fetch(`http://127.0.0.1:${bridge.port}/api/bots`, { headers: AUTH_HEADER });
       if (probe.status === 503) {
         engaged = true;
         break;
@@ -768,7 +797,7 @@ describe("pwa-relay bridge", () => {
 
     const longAddr = `${"a".repeat(70)}!@#`;
     const req1 = fetch(`http://127.0.0.1:${bridge.port}/api/bots`, {
-      headers: { "x-forwarded-for": `198.51.100.1, ${longAddr}, ` },
+      headers: { ...AUTH_HEADER, "x-forwarded-for": `198.51.100.1, ${longAddr}, ` },
     });
     const open1 = (await mac.waitForFrame((f) => f.type === "req.open")) as Extract<BridgeFrame, { type: "req.open" }>;
     assert.equal(open1.remoteAddr, "a".repeat(64));
@@ -777,7 +806,7 @@ describe("pwa-relay bridge", () => {
     assert.equal((await req1).status, 200);
 
     for (const badKey of ["__proto__", "constructor", "prototype"]) {
-      const reqBad = fetch(`http://127.0.0.1:${bridge.port}/api/bots?k=${badKey}`);
+      const reqBad = fetch(`http://127.0.0.1:${bridge.port}/api/bots?k=${badKey}`, { headers: AUTH_HEADER });
       const openBad = (await mac.waitForFrame((f) => f.type === "req.open" && f.path.includes(badKey))) as Extract<
         BridgeFrame,
         { type: "req.open" }
@@ -834,7 +863,7 @@ describe("pwa-relay bridge", () => {
 
     const mac = await connectMockMac(bridge.port);
     await mac.waitForFrame((f) => f.type === "hello");
-    const pendingReq = fetch(`http://127.0.0.1:${bridge.port}/api/bots`);
+    const pendingReq = fetch(`http://127.0.0.1:${bridge.port}/api/bots`, { headers: AUTH_HEADER });
     await mac.waitForFrame((f) => f.type === "req.open");
 
     // Abruptly destroy the underlying TCP socket with a RST-like error; bridge must not throw RangeError on 1006.
@@ -871,7 +900,7 @@ describe("pwa-relay bridge", () => {
           port: bridge.port,
           method: "POST",
           path: "/api/attachments?uploadId=stall-1",
-          headers: { "content-length": "1024" },
+          headers: { ...AUTH_HEADER, "content-length": "1024" },
         },
         (res) => {
           const chunks: Buffer[] = [];
@@ -902,6 +931,7 @@ describe("pwa-relay bridge", () => {
           port: bridge.port,
           method: "POST",
           path: "/api/attachments?uploadId=over-buf",
+          headers: AUTH_HEADER,
         },
         (res) => {
           const chunks: Buffer[] = [];
@@ -924,6 +954,82 @@ describe("pwa-relay bridge", () => {
     assert.equal(overflowRes.body.code, "bridge_busy");
 
     macSocket.resume();
+    mac.ws.close();
+  });
+
+  it("enforces per-IP concurrent stream cap (429 + Retry-After) and per-IP HTTP rate limiting (429)", async () => {
+    const bridge = await startBridge(
+      makeConfig({ maxConcurrentStreamsPerIp: 2, ipRateWindowMs: 10_000, ipRateMaxRequests: 5, upstreamHeaderTimeoutMs: 5_000 }),
+      { log: () => {} },
+    );
+    bridges.push(bridge);
+
+    const mac = await connectMockMac(bridge.port);
+    await mac.waitForFrame((f) => f.type === "hello");
+
+    // 1. Two concurrent streams from same IP allowed; third hits 429 too_many_streams; another IP still succeeds.
+    const ac1 = new AbortController();
+    const ac2 = new AbortController();
+    const s1 = fetch(`http://127.0.0.1:${bridge.port}/api/bots?s=1`, {
+      headers: { ...AUTH_HEADER, "x-forwarded-for": "198.51.100.10" },
+      signal: ac1.signal,
+    });
+    const s2 = fetch(`http://127.0.0.1:${bridge.port}/api/bots?s=2`, {
+      headers: { ...AUTH_HEADER, "x-forwarded-for": "198.51.100.10" },
+      signal: ac2.signal,
+    });
+    const open1 = (await mac.waitForFrame((f) => f.type === "req.open" && f.path.includes("s=1"))) as Extract<BridgeFrame, { type: "req.open" }>;
+    const open2 = (await mac.waitForFrame((f) => f.type === "req.open" && f.path.includes("s=2"))) as Extract<BridgeFrame, { type: "req.open" }>;
+
+    const capped = await fetch(`http://127.0.0.1:${bridge.port}/api/bots?s=3`, {
+      headers: { ...AUTH_HEADER, "x-forwarded-for": "198.51.100.10" },
+    });
+    assert.equal(capped.status, 429);
+    assert.equal(capped.headers.get("retry-after"), "1");
+    assert.deepEqual(await capped.json(), { error: "Too many concurrent streams from IP", code: "too_many_streams" });
+
+    const otherIp = fetch(`http://127.0.0.1:${bridge.port}/api/bots?other=1`, {
+      headers: { ...AUTH_HEADER, "x-forwarded-for": "198.51.100.20" },
+    });
+    const openOther = (await mac.waitForFrame((f) => f.type === "req.open" && f.path.includes("other=1"))) as Extract<BridgeFrame, { type: "req.open" }>;
+    mac.sendFrame({ type: "res.head", streamId: openOther.streamId, status: 200, headers: { "content-type": "application/json" } });
+    mac.sendFrame({ type: "res.body", streamId: openOther.streamId, chunkB64: Buffer.from("{}").toString("base64"), eof: true });
+    assert.equal((await otherIp).status, 200);
+
+    // Finish s1/s2 and verify slot is released and rate limit applies at 6th request for 198.51.100.10.
+    mac.sendFrame({ type: "res.head", streamId: open1.streamId, status: 200, headers: { "content-type": "application/json" } });
+    mac.sendFrame({ type: "res.body", streamId: open1.streamId, chunkB64: Buffer.from("{}").toString("base64"), eof: true });
+    mac.sendFrame({ type: "res.head", streamId: open2.streamId, status: 200, headers: { "content-type": "application/json" } });
+    mac.sendFrame({ type: "res.body", streamId: open2.streamId, chunkB64: Buffer.from("{}").toString("base64"), eof: true });
+    assert.equal((await s1).status, 200);
+    assert.equal((await s2).status, 200);
+
+    for (let i = 4; i <= 5; i++) {
+      const okP = fetch(`http://127.0.0.1:${bridge.port}/api/bots?s=${i}`, {
+        headers: { ...AUTH_HEADER, "x-forwarded-for": "198.51.100.10" },
+      });
+      const o = (await mac.waitForFrame((f) => f.type === "req.open" && f.path.includes(`s=${i}`))) as Extract<BridgeFrame, { type: "req.open" }>;
+      mac.sendFrame({ type: "res.head", streamId: o.streamId, status: 200, headers: { "content-type": "application/json" } });
+      mac.sendFrame({ type: "res.body", streamId: o.streamId, chunkB64: Buffer.from("{}").toString("base64"), eof: true });
+      assert.equal((await okP).status, 200);
+    }
+
+    const rateLimited = await fetch(`http://127.0.0.1:${bridge.port}/api/bots?s=6`, {
+      headers: { ...AUTH_HEADER, "x-forwarded-for": "198.51.100.10" },
+    });
+    assert.equal(rateLimited.status, 429);
+    assertCorsAndNoStore(rateLimited.headers);
+    assert.ok(Number(rateLimited.headers.get("retry-after")) >= 1);
+    assert.deepEqual(await rateLimited.json(), { error: "Rate limit exceeded", code: "rate_limited" });
+
+    // /healthz stays exempt from rate limiting.
+    const health = await fetch(`http://127.0.0.1:${bridge.port}/healthz`, {
+      headers: { "x-forwarded-for": "198.51.100.10" },
+    });
+    assert.equal(health.status, 200);
+
+    ac1.abort();
+    ac2.abort();
     mac.ws.close();
   });
 });
