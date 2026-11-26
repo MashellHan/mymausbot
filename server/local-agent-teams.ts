@@ -137,22 +137,66 @@ async function restoreBindingStarts(file: OwnedFile): Promise<BindingState> {
 }
 
 export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir(), codexHome = process.env.CODEX_HOME || join(home, ".codex"),
-  bindingCachePath, now = Date.now, readProcessStart = readPiProcessStart }: {
+  bindingCachePath, now = Date.now, readProcessStart = readPiProcessStart, fastRosterTimeoutMs = 0 }: {
   run?: HerdrRunner; home?: string; codexHome?: string; bindingCachePath?: string;
   now?: () => number; readProcessStart?: PiProcessStart;
+  /** When > 0 and no full snapshot is cached yet, return the fast Herdr roster if full enrichment exceeds this budget while continuing enrichment in the background. */
+  fastRosterTimeoutMs?: number;
 } = {}) {
   const observationsFor = createLocalAgentSessionReader(codexHome, now);
   const piSessionsFor = createPiSessionReader(join(home, ".local", "share", "mausbot-team", "pi-agent"));
   let lastGood: LocalAgentTeamsResponse | null = null;
   let lastResult: LocalAgentTeamsResponse | null = null;
+  let lastFastRoster: LocalAgentTeamsResponse | null = null;
   let lastAttempt = -Infinity;
   let pending: Promise<LocalAgentTeamsResponse> | null = null;
+  let pendingRoster: Promise<LocalAgentTeamsResponse | null> | null = null;
   let revision = 0;
   const bindingFile = bindingCachePath ? new OwnedFile(bindingCachePath, { mode: 0o600 }) : null;
   let restoredBindings: Promise<BindingState> | undefined;
   let bindingStarts: BindingState | undefined;
 
-  async function refresh(current: () => boolean): Promise<LocalAgentTeamsResponse> {
+  function buildFastRoster(workspaces: Record<string, unknown>[], agents: Record<string, unknown>[], sampledAt: number): LocalAgentTeamsResponse {
+    const teams = new Map<string, LocalAgentTeam>();
+    for (const workspace of workspaces) {
+      const id = workspace.workspace_id;
+      if (typeof id !== "string" || !id || teams.has(id)) throw new Error("Invalid workspace identity");
+      teams.set(id, {
+        id, name: dashboardText(workspace.label, 100) || id, agentCount: 0, activeAgentCount: 0, lastActivityAt: null,
+        tokenUsage24h: { coverage: "unavailable", knownTokens: null },
+        tokenUsage7d: { coverage: "unavailable", knownTokens: null },
+        agents: [],
+      });
+    }
+    const seen = new Set<string>();
+    for (const agent of agents) {
+      const id = agent.pane_id;
+      const team = teams.get(String(agent.workspace_id));
+      if (typeof id !== "string" || !id || seen.has(id) || !team) throw new Error("Invalid agent identity");
+      seen.add(id);
+      const occupantId = localAgentOccupantId(agent, id);
+      team.agents.push({
+        id, name: dashboardText(agent.name, 100) || id, kind: dashboardText(agent.agent, 40) || "unknown",
+        ...(occupantId ? { occupantId } : {}),
+        role: null, model: null, reasoningEffort: null, contextUsed: null, contextWindow: null,
+        state: state(agent.agent_status), taskHint: null, messagePreview: null,
+        tokenUsage24h: unavailableMemberUsage(), tokenUsage7d: unavailableMemberUsage(),
+      });
+    }
+    for (const team of teams.values()) {
+      team.agentCount = team.agents.length;
+      team.activeAgentCount = team.agents.filter((member) => member.state === "working").length;
+    }
+    return { status: "ready", updatedAt: sampledAt, teamCount: teams.size, enriching: true, teams: [...teams.values()] };
+  }
+
+  async function refresh(current: () => boolean, onRoster?: (roster: LocalAgentTeamsResponse | null) => void): Promise<LocalAgentTeamsResponse> {
+    let rosterResolved = false;
+    const emitRoster = (value: LocalAgentTeamsResponse | null) => {
+      if (rosterResolved) return;
+      rosterResolved = true;
+      onRoster?.(value);
+    };
     try {
       const responses = await Promise.allSettled([
         run(["--session", "default", "workspace", "list"]),
@@ -163,6 +207,9 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
       const workspaces = herdrRows(workspaceOutput, "workspaces");
       const agents = herdrRows(agentOutput, "agents");
       const sampledAt = now();
+      const fastRoster = buildFastRoster(workspaces, agents, sampledAt);
+      if (current()) lastFastRoster = fastRoster;
+      emitRoster(fastRoster);
       const teams = new Map<string, LocalAgentTeam>();
       for (const workspace of workspaces) {
         const id = workspace.workspace_id;
@@ -345,6 +392,7 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
       if (current()) lastGood = response;
       return response;
     } catch {
+      emitRoster(null);
       return lastGood ? { ...lastGood, status: "stale", teams: lastGood.teams.map((team) => ({ ...team,
         agents: team.agents.map((member) => ({ ...member, role: null, messagePreview: null,
           contextWindow: member.kind === "pi" ? null : member.contextWindow })),
@@ -352,20 +400,75 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
     }
   }
 
+  function startRefresh(): Promise<LocalAgentTeamsResponse> {
+    const request = ++revision;
+    lastAttempt = now();
+    let resolveRoster!: (roster: LocalAgentTeamsResponse | null) => void;
+    const rosterPromise = new Promise<LocalAgentTeamsResponse | null>((resolve) => { resolveRoster = resolve; });
+    pendingRoster = rosterPromise;
+    const next: Promise<LocalAgentTeamsResponse> = refresh(() => request === revision, resolveRoster).then((value) => {
+      if (request === revision) {
+        lastResult = value;
+        if (value.status !== "ready") lastGood = value.status === "stale" ? lastGood : null;
+      }
+      return value;
+    }).finally(() => {
+      if (pending === next) pending = null;
+      if (pendingRoster === rosterPromise) pendingRoster = null;
+    });
+    pending = next;
+    return next;
+  }
+
+  function raceWithFastRoster(full: Promise<LocalAgentTeamsResponse>, roster: Promise<LocalAgentTeamsResponse | null> | null): Promise<LocalAgentTeamsResponse> {
+    if (fastRosterTimeoutMs <= 0 || !roster) return full;
+    return new Promise<LocalAgentTeamsResponse>((resolve, reject) => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const done = (value: LocalAgentTeamsResponse) => {
+        if (settled) return;
+        settled = true;
+        if (timer !== undefined) clearTimeout(timer);
+        resolve(value);
+      };
+      full.then(done, (error) => {
+        if (settled) return;
+        settled = true;
+        if (timer !== undefined) clearTimeout(timer);
+        reject(error);
+      });
+      timer = setTimeout(() => {
+        void roster.then((fast) => {
+          if (fast && !settled) done(fast);
+        });
+      }, fastRosterTimeoutMs);
+    });
+  }
+
   return {
     get(fresh = false): Promise<LocalAgentTeamsResponse> {
-      if (!fresh && pending) return pending;
+      if (!fresh && pending) {
+        if (lastResult && lastResult.status === "ready" && fastRosterTimeoutMs > 0 &&
+            !lastResult.teams.some((team) => team.agents.some((member) => member.kind === "pi" && member.contextWindow !== null))) {
+          return Promise.resolve({ ...lastResult, enriching: true });
+        }
+        if (!lastResult && lastFastRoster) return Promise.resolve(lastFastRoster);
+        if (!lastResult) return raceWithFastRoster(pending, pendingRoster);
+        return pending;
+      }
       if (!fresh && lastResult && now() - lastAttempt < 1_000 &&
           !lastResult.teams.some((team) => team.agents.some((member) => member.kind === "pi" && member.contextWindow !== null))) {
         return Promise.resolve(lastResult);
       }
-      const request = ++revision;
-      lastAttempt = now();
-      const next: Promise<LocalAgentTeamsResponse> = refresh(() => request === revision).then((value) => {
-        if (request === revision) lastResult = value;
-        return value;
-      }).finally(() => { if (pending === next) pending = null; });
-      pending = next;
+      if (!fresh && fastRosterTimeoutMs > 0 && lastResult && lastResult.status === "ready" &&
+          !lastResult.teams.some((team) => team.agents.some((member) => member.kind === "pi" && member.contextWindow !== null))) {
+        // Stale-while-revalidate: serve the last verified ready snapshot immediately and refresh in the background
+        // so opening or returning to Agent Team never blocks on SQLite/transcript scans.
+        void startRefresh();
+        return Promise.resolve({ ...lastResult, enriching: true });
+      }
+      const next = startRefresh();
+      if (!fresh && !lastResult) return raceWithFastRoster(next, pendingRoster);
       return next;
     },
   };

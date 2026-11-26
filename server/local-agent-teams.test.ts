@@ -1023,4 +1023,51 @@ describe("local Agent Team provider", () => {
       coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null },
     });
   });
+
+  it("returns the fast Herdr roster immediately on slow cold enrichment and serves full enriched data once ready", async () => {
+    const codexHome = await codexLog(SESSION);
+    let releaseSecondList: (() => void) | null = null;
+    let agentListCalls = 0;
+    let time = 10_000;
+    const verifiedAgents = JSON.stringify({
+      result: {
+        agents: [{
+          pane_id: "w6:p1", workspace_id: "w6", name: "mausbot-front", agent: "codex", agent_status: "done",
+          cwd: "/private/workspace", terminal_id: "term_fast",
+          agent_session: { kind: "id", agent: "codex", source: "herdr:codex", value: SESSION },
+        }],
+      },
+    });
+    const provider = createLocalAgentTeamsProvider({
+      codexHome,
+      fastRosterTimeoutMs: 20,
+      now: () => time,
+      run: async (args) => {
+        if (args.at(-2) === "workspace") return workspaces;
+        agentListCalls++;
+        // Hold only the first enrichment verification pass (2nd agent list call) so cold enrichment exceeds fastRosterTimeoutMs.
+        if (agentListCalls === 2) {
+          await new Promise<void>((resolve) => { releaseSecondList = resolve; });
+        }
+        return verifiedAgents;
+      },
+    });
+
+    const first = await provider.get();
+    expect(first.status).toBe("ready");
+    expect(first.enriching).toBe(true);
+    expect(first.teamCount).toBe(1);
+    expect(first.teams[0]?.agents[0]).toMatchObject({ id: "w6:p1", name: "mausbot-front", kind: "codex", state: "done", model: null });
+
+    // A second non-fresh read while enrichment is still running returns the fast roster immediately.
+    const during = await provider.get();
+    expect(during.enriching).toBe(true);
+
+    // Release enrichment and wait for the fresh enriched snapshot.
+    expect(releaseSecondList).not.toBeNull();
+    releaseSecondList!();
+    const enriched = await provider.get(true);
+    expect(enriched.enriching).toBeUndefined();
+    expect(enriched.teams[0]?.agents[0]).toMatchObject({ model: "gpt-6-sol", reasoningEffort: "xhigh", contextUsed: 150 });
+  });
 });
