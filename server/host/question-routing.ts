@@ -290,7 +290,7 @@ export function createQuestionRouting(deps: QuestionRoutingDeps) {
         store.appendMessage(input.parentThreadId, {
           role: "bot",
           kind: "activity",
-          tool: { name: `Forwarded to ${target.name}`, ok: true, output: input.text.slice(0, 240) },
+          tool: { name: serverLine(conversationLanguage(input.parentThreadId), "server.teammates.forwardedTo", { name: target.name }), ok: true, output: input.text.slice(0, 240) },
           threadRef: { botId: target.id, threadId: child.threadId, title: task.title },
         });
         continue;
@@ -317,7 +317,7 @@ export function createQuestionRouting(deps: QuestionRoutingDeps) {
               store.appendMessage(input.parentThreadId, {
                 role: "bot",
                 kind: "activity",
-                tool: { name: `Forwarded to ${target.name}`, ok: true, output: input.text.slice(0, 240) },
+                tool: { name: serverLine(conversationLanguage(input.parentThreadId), "server.teammates.forwardedTo", { name: target.name }), ok: true, output: input.text.slice(0, 240) },
                 threadRef: { botId: target.id, threadId: child.threadId, title: task.title },
               });
               continue;
@@ -347,7 +347,7 @@ export function createQuestionRouting(deps: QuestionRoutingDeps) {
         store.appendMessage(input.parentThreadId, {
           role: "bot",
           kind: "activity",
-          tool: { name: `Forwarded to ${target.name}`, ok: true, output: input.text.slice(0, 240) },
+          tool: { name: serverLine(conversationLanguage(input.parentThreadId), "server.teammates.forwardedTo", { name: target.name }), ok: true, output: input.text.slice(0, 240) },
           threadRef: { botId: target.id, threadId: child.threadId, title: task.title },
         });
       }
