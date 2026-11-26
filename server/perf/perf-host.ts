@@ -97,7 +97,7 @@ export function createPerfHost(deps: PerfHostDeps) {
     seen: (rows, buckets) => processes.sample(rows, buckets),
   });
   if (deps.timer !== false && !windows) sampler.start();
-  const stalls = deps.stalls ?? createLoopStalls();
+  const stalls = deps.stalls ?? createLoopStalls({ resumed: (ms) => say("sleep", `the computer slept or the server was paused: the event loop waited through a ${duration(ms)} gap, not counted as a stall`) });
   if (deps.timer !== false) stalls.start();
   const watch: StallWatch | null = deps.timer !== false && deps.watchStalls === true
     ? guarded("stall-watch", () => startStallWatch({ dataDir: deps.dataDir, ...(deps.log ? { log: deps.log } : {}) }), null) : null;
