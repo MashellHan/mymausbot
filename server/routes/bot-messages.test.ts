@@ -598,7 +598,7 @@ describe("POST /api/bots/:id/messages with widgetAction", () => {
         notePhoneSend: () => {},
         pressRecords: () => null,
         serverPress: () => null,
-        onQueueSettled: (tid, qids) => settled.push([tid, qids]),
+        onQueueSettled: (tid: string, qids: readonly string[]) => settled.push([tid, qids]),
       } as unknown as BotMessageRouteDeps)];
       const auth = { kind: "loopback", scopes: ["admin"] } as RequestAuth;
       const handled = await dispatchRoutes(routes, { req, res, url, path: url.pathname, method: req.method ?? "GET", auth, json, readBody });
