@@ -5999,5 +5999,8 @@
   "workspaces.users": "Kullanıcılar",
   "workspaces.usersTitle": "{slug} alanına kimler giriş yapabilir",
   "workspaces.working": "İşleniyor…",
-  "server.teammates.noLongerWaiting": "{who} artık sizi beklemiyor"
+  "server.teammates.noLongerWaiting": "{who} artık sizi beklemiyor",
+  "decider.provider.line": "Ya da bu küçük modeller için başka bir sağlayıcının anahtarını kullanın.",
+  "computer.worksOnHintServer": "Bu botun nerede çalışacağını seçin. {app} masaüstü uygulamasından paylaştığınız bilgisayar burada seçilmez: bottan onu kullanmasını isteyin yeter.",
+  "settings.ai.otherServicesLine": "Ana modellerinizin dışında sesler, bilgisayarlar, uygulamalar ve yardımcılar için anahtarlar."
 }

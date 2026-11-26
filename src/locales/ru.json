@@ -7260,5 +7260,8 @@
   "workspaces.users": "Пользователи",
   "workspaces.usersTitle": "Кто может входить в {slug}",
   "workspaces.working": "Выполняется…",
-  "server.teammates.noLongerWaiting": "{who} больше не ждёт вас"
+  "server.teammates.noLongerWaiting": "{who} больше не ждёт вас",
+  "decider.provider.line": "Или используйте для этих небольших моделей ключ другого провайдера.",
+  "computer.worksOnHintServer": "Выберите, где работает этот бот. Компьютер, которым вы поделились из приложения {app} для компьютера, здесь не выбирается: просто попросите бота им воспользоваться.",
+  "settings.ai.otherServicesLine": "Ключи для голосов, компьютеров, приложений и помощников, помимо ваших основных моделей."
 }
