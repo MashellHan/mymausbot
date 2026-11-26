@@ -50,6 +50,7 @@ export const DEFAULT_VAPID_SUBJECT = "mailto:notifications@openmausbot.invalid";
 export const MAX_WEB_PUSH_SUBSCRIPTIONS = 50;
 export const MAX_WEB_PUSH_SUBSCRIPTIONS_PER_DEVICE = 4;
 export const WEB_PUSH_COALESCE_MS = 10_000;
+export const WEB_PUSH_TEST_COOLDOWN_MS = 15_000;
 export const WEB_PUSH_ACTIVITY_MIN_INTERVAL_MS = 20_000;
 export const WEB_PUSH_DEVICE_WINDOW_MS = 10 * 60_000;
 export const WEB_PUSH_DEVICE_WINDOW_MAX = 30;
@@ -531,6 +532,7 @@ export class WebPushService {
   private readonly lastPhaseByThread = new Map<string, WebPushActivityPhase>();
   private readonly sentTimestampsByDevice = new Map<string, number[]>();
   private readonly pausedUntilByOrigin = new Map<string, number>();
+  private readonly lastTestByDevice = new Map<string, number>();
   private timer: unknown = null;
   private draining: Promise<void> | null = null;
   private seq = 0;
@@ -689,6 +691,7 @@ export class WebPushService {
   forget(key: string): void {
     this.focusedByKey.delete(key);
     this.sentTimestampsByDevice.delete(key);
+    this.lastTestByDevice.delete(key);
     this.removeSubscription(key);
   }
 
@@ -820,11 +823,38 @@ export class WebPushService {
     if (!targets.length) {
       throw Object.assign(new Error("No Web Push subscription registered for this device"), { status: 404 });
     }
-    let sent = 0;
-    let failed = 0;
-    let pruned = 0;
     const now = this.now();
-    for (const sub of targets) {
+    const lastTest = this.lastTestByDevice.get(key) ?? -Infinity;
+    if (now - lastTest < WEB_PUSH_TEST_COOLDOWN_MS) {
+      const retryAfterSec = Math.max(1, Math.ceil((WEB_PUSH_TEST_COOLDOWN_MS - (now - lastTest)) / 1_000));
+      throw Object.assign(new Error("Please wait before sending another test notification"), { status: 429, retryAfterSec });
+    }
+    let recent = (this.sentTimestampsByDevice.get(key) ?? []).filter((at) => now - at < WEB_PUSH_DEVICE_WINDOW_MS);
+    if (recent.length >= WEB_PUSH_DEVICE_WINDOW_MAX) {
+      this.sentTimestampsByDevice.set(key, recent);
+      const oldest = recent[0] ?? now;
+      const retryAfterSec = Math.max(1, Math.ceil((WEB_PUSH_DEVICE_WINDOW_MS - (now - oldest)) / 1_000));
+      throw Object.assign(new Error("Web Push rate limit reached for this device"), { status: 429, retryAfterSec });
+    }
+    let maxPauseUntil = 0;
+    const deliverableTargets = targets.filter((sub) => {
+      const pausedUntil = this.pausedUntilByOrigin.get(endpointOriginOf(sub.endpoint)) ?? 0;
+      if (pausedUntil > maxPauseUntil) maxPauseUntil = pausedUntil;
+      return now >= pausedUntil;
+    });
+    if (!deliverableTargets.length) {
+      const retryAfterSec = Math.max(1, Math.ceil((maxPauseUntil - now) / 1_000));
+      throw Object.assign(new Error("Push service temporarily paused due to rate limiting"), { status: 429, retryAfterSec });
+    }
+    this.lastTestByDevice.set(key, now);
+    let sent = 0;
+    let failed = targets.length - deliverableTargets.length;
+    let pruned = 0;
+    for (const sub of deliverableTargets) {
+      if (recent.length >= WEB_PUSH_DEVICE_WINDOW_MAX) {
+        failed += 1;
+        continue;
+      }
       const payload: WebPushPayload = {
         version: WEB_PUSH_WIRE_VERSION,
         id: `wp_test_${now}_${++this.seq}`,
@@ -837,9 +867,15 @@ export class WebPushService {
         url: "/",
       };
       const outcome = await this.deliver(sub, payload, "high", undefined, now);
-      if (outcome === "sent") sent += 1;
-      else if (outcome === "gone") pruned += 1;
-      else failed += 1;
+      if (outcome === "sent") {
+        sent += 1;
+        recent = [...recent, now];
+        this.sentTimestampsByDevice.set(key, recent);
+      } else if (outcome === "gone") {
+        pruned += 1;
+      } else {
+        failed += 1;
+      }
     }
     return { ok: sent > 0 && failed === 0, sent, failed, pruned };
   }

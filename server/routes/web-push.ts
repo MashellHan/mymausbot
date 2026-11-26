@@ -31,6 +31,29 @@ export interface WebPushRouteDeps {
   live: (auth: RequestAuth) => boolean;
 }
 
+function readJsonErrorStatus(error: unknown): number {
+  const status = (error as { status?: unknown })?.status;
+  return status === 413 ? 413 : 400;
+}
+
+async function readJsonBodySafe(
+  readBody: RouteContext["readBody"],
+  req: RouteContext["req"],
+  res: RouteContext["res"],
+  json: RouteContext["json"],
+  limit: number,
+): Promise<{ ok: true; body: unknown } | { ok: false }> {
+  try {
+    return { ok: true, body: await readBody(req, limit) };
+  } catch (error) {
+    const status = readJsonErrorStatus(error);
+    json(res, status, {
+      error: status === 413 ? "Request body too large" : "Invalid JSON body",
+    });
+    return { ok: false };
+  }
+}
+
 export function createWebPushRoutes(deps: WebPushRouteDeps): RouteHandler {
   return async ({ req, res, url, path, method, auth, json, readBody }: RouteContext): Promise<typeof PASS | void> => {
     if (
@@ -82,9 +105,10 @@ export function createWebPushRoutes(deps: WebPushRouteDeps): RouteHandler {
       if (!JSON_CONTENT_TYPE.test(String(req.headers["content-type"] ?? ""))) {
         return json(res, 415, { error: "JSON required" });
       }
-      const rawBody = await readBody(req, 16_384);
+      const rawRead = await readJsonBodySafe(readBody, req, res, json, 16_384);
+      if (!rawRead.ok) return;
       if (!deps.live(auth)) return json(res, 401, { error: "Session expired" });
-      const parsed = webPushSubscriptionInputSchema.safeParse(rawBody);
+      const parsed = webPushSubscriptionInputSchema.safeParse(rawRead.body);
       if (!parsed.success) {
         return json(res, 400, { error: "Invalid Web Push subscription" });
       }
@@ -115,9 +139,10 @@ export function createWebPushRoutes(deps: WebPushRouteDeps): RouteHandler {
       if (!JSON_CONTENT_TYPE.test(String(req.headers["content-type"]))) {
         return json(res, 415, { error: "JSON required" });
       }
-      const rawBody = await readBody(req, 8_192);
+      const rawRead = await readJsonBodySafe(readBody, req, res, json, 8_192);
+      if (!rawRead.ok) return;
       if (!deps.live(auth)) return json(res, 401, { error: "Session expired" });
-      const parsed = testRequestSchema.safeParse(rawBody);
+      const parsed = testRequestSchema.safeParse(rawRead.body);
       if (!parsed.success) return json(res, 400, { error: "Invalid test push request" });
       targetEndpoint = parsed.data.endpoint;
     }
@@ -125,7 +150,12 @@ export function createWebPushRoutes(deps: WebPushRouteDeps): RouteHandler {
       const result = await deps.webPush.sendTest(key, targetEndpoint);
       return json(res, 200, result);
     } catch (error) {
-      const status = (error as { status?: unknown }).status === 404 ? 404 : 500;
+      const rawStatus = (error as { status?: unknown }).status;
+      const status = rawStatus === 404 || rawStatus === 429 ? rawStatus : 500;
+      const retryAfterSec = (error as { retryAfterSec?: unknown }).retryAfterSec;
+      if (status === 429 && typeof retryAfterSec === "number" && retryAfterSec > 0) {
+        res.setHeader("Retry-After", String(retryAfterSec));
+      }
       return json(res, status, { error: error instanceof Error ? error.message : "Could not send test push" });
     }
   };

@@ -16,6 +16,7 @@ import {
   WEB_PUSH_ACTIVITY_MIN_INTERVAL_MS,
   WEB_PUSH_COALESCE_MS,
   WEB_PUSH_DEVICE_WINDOW_MAX,
+  WEB_PUSH_DEVICE_WINDOW_MS,
   WEB_PUSH_RETRY_MS,
   WEB_PUSH_SUBSCRIPTIONS_FILE,
   WEB_PUSH_VAPID_FILE,
@@ -412,10 +413,36 @@ describe("WebPushService", () => {
     // Total sent over 10min window: 1 initial + 2 attempted (1 network error + 1 retry) + 28 capped = 31 transport calls (30 successful deliveries).
     expect(requests.length).toBe(3 + (WEB_PUSH_DEVICE_WINDOW_MAX - 2));
 
-    // HTTP 410 Gone during test push prunes the subscription permanently.
+    // HTTP 410 Gone during test push prunes the subscription permanently, except sendTest also respects the 30/10min device quota,
+    // so advance the clock by 10 minutes first to verify 410 pruning and add explicit sendTest throttle + 429 pause checks.
+    clock += WEB_PUSH_DEVICE_WINDOW_MS;
     responses.push({ status: 410 });
     const testResult = await service.sendTest("session:s1");
     expect(testResult).toEqual({ ok: false, sent: 0, failed: 0, pruned: 1 });
     expect(service.getSubscription("session:s1")).toBeNull();
+  });
+
+  it("enforces per-device cooldown, 30/10min quota, and origin 429 pause in sendTest()", async () => {
+    const keys = makeDeviceKeys();
+    const { service, requests } = createHarness({
+      responses: [{ status: 201 }, { status: 429, retryAfterMs: 120_000 }],
+    });
+    await service.upsertSubscription("session:s-test", {
+      endpoint: "https://web.push.apple.com/QMx/sub-test",
+      keys: { p256dh: keys.p256dh, auth: keys.auth },
+    });
+
+    const first = await service.sendTest("session:s-test");
+    expect(first).toEqual({ ok: true, sent: 1, failed: 0, pruned: 0 });
+    await expect(service.sendTest("session:s-test")).rejects.toMatchObject({ status: 429 });
+    expect(requests).toHaveLength(1);
+
+    clock += 16_000;
+    const second = await service.sendTest("session:s-test");
+    expect(second).toEqual({ ok: false, sent: 0, failed: 1, pruned: 0 });
+
+    clock += 16_000;
+    await expect(service.sendTest("session:s-test")).rejects.toMatchObject({ status: 429 });
+    expect(requests).toHaveLength(2);
   });
 });

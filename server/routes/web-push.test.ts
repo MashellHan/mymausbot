@@ -149,9 +149,19 @@ describe("Web Push routes", () => {
 
     as(session("pwa-1"));
     expect((await call("PUT", WEB_PUSH_SUBSCRIPTION_ROUTE, "raw", "text/plain")).status).toBe(415);
+    expect((await call("PUT", WEB_PUSH_SUBSCRIPTION_ROUTE, "{not-json", "application/json")).status).toBe(400);
+    expect((await call("PUT", WEB_PUSH_SUBSCRIPTION_ROUTE, JSON.stringify({ pad: "x".repeat(20_000) }), "application/json")).status).toBe(413);
+    expect((await call("POST", WEB_PUSH_TEST_ROUTE, "{not-json", "application/json")).status).toBe(400);
+    expect((await call("POST", WEB_PUSH_TEST_ROUTE, JSON.stringify({ pad: "x".repeat(10_000) }), "application/json")).status).toBe(413);
     expect((await call("PUT", WEB_PUSH_SUBSCRIPTION_ROUTE, makeSubscriptionBody("http://web.push.apple.com/x"))).status).toBe(400);
     expect((await call("PUT", WEB_PUSH_SUBSCRIPTION_ROUTE, makeSubscriptionBody("https://127.0.0.1/x"))).status).toBe(400);
     expect((await call("POST", WEB_PUSH_SUBSCRIPTION_ROUTE)).status).toBe(405);
     expect((await call("POST", WEB_PUSH_VAPID_KEY_ROUTE)).status).toBe(405);
+
+    // Rate-limited test push propagates 429 instead of 500.
+    expect((await call("POST", WEB_PUSH_TEST_ROUTE, {})).status).toBe(404);
+    expect((await call("PUT", WEB_PUSH_SUBSCRIPTION_ROUTE, makeSubscriptionBody())).status).toBe(200);
+    expect((await call("POST", WEB_PUSH_TEST_ROUTE, {})).status).toBe(200);
+    expect((await call("POST", WEB_PUSH_TEST_ROUTE, {})).status).toBe(429);
   });
 });
