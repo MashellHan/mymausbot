@@ -95,7 +95,8 @@ async function observeAgyProcesses(panes: readonly string[], run: HerdrRunner): 
   await Promise.all(panes.slice(0, 24).map(async (pane) => {
     try {
       const { result } = JSON.parse(await run(["--session", "default", "pane", "process-info", "--pane", pane]));
-      const processes = result?.process_info?.foreground_processes;
+      const info = result?.process_info;
+      const processes = info?.pane_id === pane ? info.foreground_processes : null;
       if (!Array.isArray(processes)) return;
       for (const proc of processes) {
         if (!Array.isArray(proc?.argv)) continue;
@@ -117,8 +118,10 @@ type BindingState = {
   starts: Map<string, number>;
   sessionOwners: Map<string, string>;
   legacyStarts?: Map<string, number>;
-  /** Maps sessionHash -> stable seat fingerprint (pane + agent + occupant, without transient terminal_id). */
+  /** Maps sessionHash -> stable seat fingerprint (pane + agent + seatName + session, without transient terminal_id). */
   seatOwners: Map<string, string>;
+  /** True when the restored file predated `seats` tracking (only `bindings` + `sessions`), enabling a one-time same-origin upgrade. */
+  preSeats?: boolean;
 };
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const sessionFingerprint = (session: string) => createHash("sha256").update(`session:${session}`).digest("hex");
@@ -134,8 +137,8 @@ async function restoreBindingStarts(file: OwnedFile): Promise<BindingState> {
           ? (parsed as { bindings: unknown[] }).bindings : null;
       const sessions = parsed && typeof parsed === "object" && !isLegacy && Array.isArray((parsed as { sessions?: unknown }).sessions)
         ? (parsed as { sessions: unknown[] }).sessions : [];
-      const seats = parsed && typeof parsed === "object" && !isLegacy && Array.isArray((parsed as { seats?: unknown }).seats)
-        ? (parsed as { seats: unknown[] }).seats : [];
+      const hasSeatsField = Boolean(parsed && typeof parsed === "object" && !isLegacy && Array.isArray((parsed as { seats?: unknown }).seats));
+      const seats = hasSeatsField ? (parsed as { seats: unknown[] }).seats : [];
       if (entries && entries.length <= 200 && entries.every((entry): entry is [string, number] =>
         Array.isArray(entry) && entry.length === 2 && typeof entry[0] === "string" && BINDING_FINGERPRINT.test(entry[0]) &&
         Number.isSafeInteger(entry[1]) && entry[1] >= 0)) {
@@ -151,6 +154,7 @@ async function restoreBindingStarts(file: OwnedFile): Promise<BindingState> {
           sessionOwners: new Map(validSessions),
           seatOwners: new Map(validSeats),
           ...(isLegacy ? { legacyStarts: new Map(entries) } : {}),
+          ...(!hasSeatsField ? { preSeats: true } : {}),
         };
       }
     }
@@ -262,14 +266,21 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         observeAgyProcesses(agyPanes, run),
       ]);
       // When Herdr has not yet emitted `agent_session` for an idle resumed Agy pane (before its first new turn),
-      // recover its exact `--conversation <uuid>` from the live pane's process argv so model/effort/context/usage stay visible.
+      // recover its uniquely claimed `--conversation <uuid>` from the live pane's process argv so model/effort/context/usage stay visible.
       const agyFallbackSessions = new Map<string, string>();
-      const claimedAgySessions = new Set(agySessions.values());
+      const agyConvClaims = new Map<string, number>();
+      for (const sessionId of agySessions.values()) {
+        agyConvClaims.set(sessionId, (agyConvClaims.get(sessionId) ?? 0) + 1);
+      }
       for (const agent of agents) {
         if (agent.agent !== "agy" || typeof agent.pane_id !== "string" || agySessions.has(agent.pane_id)) continue;
         const conv = agyProcesses.conversations.get(agent.pane_id);
-        if (conv && !claimedAgySessions.has(conv)) {
-          claimedAgySessions.add(conv);
+        if (conv) agyConvClaims.set(conv, (agyConvClaims.get(conv) ?? 0) + 1);
+      }
+      for (const agent of agents) {
+        if (agent.agent !== "agy" || typeof agent.pane_id !== "string" || agySessions.has(agent.pane_id)) continue;
+        const conv = agyProcesses.conversations.get(agent.pane_id);
+        if (conv && agyConvClaims.get(conv) === 1) {
           agyFallbackSessions.set(agent.pane_id, conv);
         }
       }
@@ -289,8 +300,11 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
       // Run synchronous OpenCode SQLite queries after async I/O has started (and fast-roster timer had a chance to fire).
       const openCodeUsage = readOpenCodeMemberUsage(openCodeFiles, openCodeIds, sampledAt);
       const openCodeMessages = readOpenCodeMessages(openCodeFiles, openCodeIds, "preview");
-      const liveUsageMembers = openCodeIds.length || agySessions.size || agyFallbackSessions.size || verified.some(codexSessionId)
-        ? verifiedLocalAgentMembers(herdrRows(await run(["--session", "default", "agent", "list"]), "agents")) : [];
+      const liveRawAgents = openCodeIds.length || agySessions.size || agyFallbackSessions.size || verified.some(codexSessionId)
+        ? herdrRows(await run(["--session", "default", "agent", "list"]), "agents") : [];
+      const liveRawByPane = new Map(liveRawAgents.flatMap((agent) =>
+        typeof agent.pane_id === "string" && agent.pane_id ? [[agent.pane_id, agent] as const] : []));
+      const liveUsageMembers = verifiedLocalAgentMembers(liveRawAgents);
       const liveByPane = new Map(liveUsageMembers.map((agent) => [agent.pane_id, agent] as const));
       const sessionTeams = new Map<string, Set<string>>();
       const sessionClaims = new Map<string, number>();
@@ -318,14 +332,22 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         const sessionId = codexSessionId(agent);
         const occupantId = localAgentOccupantId(agent, id);
         const live = liveByPane.get(id);
+        const liveRaw = liveRawByPane.get(id);
         const sameBinding = current() && live && occupantId && live.agent === agent.agent && live.cwd === agent.cwd &&
           live.terminal_id === agent.terminal_id && localAgentOccupantId(live, id) === occupantId;
         const verifiedCodexMember = sameBinding && verifiedIds.has(id) && sessionId !== null && codexSessionId(live) === sessionId &&
           sessionClaims.get(sessionId) === 1;
         const openCodeSession = sameBinding && openCodeSessionId(live) === openCodeSessions.get(id) ? openCodeSessions.get(id) : undefined;
         const agyFallbackSession = agyFallbackSessions.get(id);
+        const liveRawAgySession = liveRaw ? agySessionId(liveRaw) : null;
+        const sameFallbackBinding = Boolean(
+          current() && agyFallbackSession && liveRaw &&
+          liveRaw.agent === "agy" && liveRaw.cwd === agent.cwd &&
+          liveRaw.terminal_id === agent.terminal_id && liveRaw.name === agent.name &&
+          (liveRawAgySession === null || liveRawAgySession === agyFallbackSession),
+        );
         const agySession = (sameBinding && agySessionId(live) === agySessions.get(id) ? agySessions.get(id) : undefined)
-          ?? (current() && agyFallbackSession ? agyFallbackSession : undefined);
+          ?? (sameFallbackBinding ? agyFallbackSession : undefined);
         const openCode = openCodeSession ? openCodeMessages.get(openCodeSession) : undefined;
         const observation = sessionId ? observations.get(sessionId) : null;
         const openCodeEntry = openCodeSession ? openCodeUsage.get(openCodeSession) : undefined;
@@ -336,7 +358,7 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         const boundSession = verifiedCodexMember ? sessionId : openCodeSession ?? agySession;
         const rawSession = sessionId ?? openCodeSessionId(agent) ?? agySessionId(agent) ?? agyFallbackSession ?? null;
         const effectiveOccupant = occupantId ?? (agyFallbackSession && typeof agent.name === "string" && agent.name
-          ? `fallback:${agent.name}` : null);
+          ? localAgentOccupantId({ ...agent, agent_session: { source: "herdr:antigravity_cli", value: agyFallbackSession } }, id) : null);
         const binding = boundSession && effectiveOccupant ? JSON.stringify([id, agent.agent, effectiveOccupant, boundSession, agent.terminal_id]) : null;
         const bindingKey = binding && typeof agent.terminal_id === "string" && agent.terminal_id
           ? createHash("sha256").update(binding).digest("hex") : binding;
@@ -364,21 +386,25 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         const originStartedAt = verifiedCodexMember ? observation?.sessionStartedAt ?? null
           : openCodeEntry?.sessionStartedAt ?? agyEntry?.sessionStartedAt ?? null;
         // Same-origin continuity: a session started inside the same git repository belongs to this seat when
-        // unclaimed, already owned by this binding, or returning to the exact same `(pane, agent, occupant, session)`
-        // after a Herdr daemon restart rotates `terminal_id`. Cross-pane moves (`priorSeatOwner !== seatOwnerKey`)
-        // and non-origin sessions (no `originDir` / different repo) remain strictly gated at `sampledAt`.
+        // unclaimed, already owned by this binding, or returning to the exact same `(pane, agent, seatName, session)`
+        // after a Herdr daemon restart rotates `terminal_id`. Cross-pane moves (`priorSeatOwner !== seatOwnerKey`),
+        // missing `priorSeatOwner` on pre-`seats` caches, and non-origin sessions remain strictly gated at `sampledAt`.
         const sameSeatContinuity = Boolean(
           !priorOwner
           || priorOwner === bindingKey
-          || (seatOwnerKey && priorSeatOwner === seatOwnerKey)
-          || (seatOwnerKey && !priorSeatOwner),
+          || (seatOwnerKey && priorSeatOwner === seatOwnerKey),
         );
         const sameOrigin = Boolean(
           bindingKey && sameSeatContinuity &&
           typeof agent.cwd === "string" && originDir && await sameGitRepository(originDir, agent.cwd),
         );
         let switchedAt = savedStart !== undefined && savedStart <= sampledAt ? savedStart : sampledAt;
-        if (sameOrigin && (directStart === undefined || (originStartedAt !== null && originStartedAt < switchedAt))) {
+        // On a one-time upgrade from a pre-`seats` bindings cache where this exact binding already owns the
+        // same-origin session (never moved), lift any old restart-clamped `directStart` back to `originStartedAt`.
+        const upgradePreSeatsOrigin = Boolean(
+          previousBindings.preSeats && priorOwner === bindingKey && originStartedAt !== null && originStartedAt < switchedAt,
+        );
+        if (sameOrigin && (directStart === undefined || upgradePreSeatsOrigin)) {
           switchedAt = originStartedAt !== null && originStartedAt <= sampledAt ? originStartedAt : 0;
         }
         if (bindingKey) nextStarts.set(bindingKey, switchedAt);
@@ -393,17 +419,16 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         const usage = verifiedCodexMember && observation
           ? observation.memberUsage(switchedAt)
           : openCodeMemberUsage ?? agyMemberUsage ?? { tokenUsage24h: unavailableMemberUsage(), tokenUsage7d: unavailableMemberUsage() };
-        const fallbackAgyMeta = !agyEntry && agent.agent === "agy" ? agyObservations.get(id) : undefined;
-        const configuredAgy = !agyEntry && !fallbackAgyMeta && agyConfiguredOnly.has(id)
+        const configuredAgy = current() && !agyEntry && agyConfiguredOnly.has(id)
           ? resolveAgyConfiguredRuntime(home, agyConfiguredOnly.get(id) ?? null) : null;
         const member: LocalAgentMember = {
           id, name: dashboardText(agent.name, 100) || id, kind: dashboardText(agent.agent, 40) || "unknown",
           ...(occupantId ? { occupantId } : {}),
-          role: dashboardText(roles.get(id), 40), model: observation?.model ?? pi?.model ?? openCode?.model ?? agyEntry?.model ?? fallbackAgyMeta?.model ?? configuredAgy?.model ?? null,
-          reasoningEffort: observation?.reasoningEffort ?? pi?.reasoningEffort ?? openCode?.reasoningEffort ?? agyEntry?.reasoningEffort ?? fallbackAgyMeta?.reasoningEffort ?? configuredAgy?.effort ?? null,
-          contextUsed: observation?.contextUsed ?? agyEntry?.contextUsed ?? fallbackAgyMeta?.contextUsed ?? null,
-          contextWindow: observation?.contextWindow ?? (current() ? piContexts.get(id) : undefined) ?? agyEntry?.contextWindow ?? fallbackAgyMeta?.contextWindow ?? configuredAgy?.contextWindow ?? null,
-          state: state(agent.agent_status), taskHint: observation?.taskHint ?? agyEntry?.taskHint ?? fallbackAgyMeta?.taskHint ?? null,
+          role: dashboardText(roles.get(id), 40), model: observation?.model ?? pi?.model ?? openCode?.model ?? agyEntry?.model ?? configuredAgy?.model ?? null,
+          reasoningEffort: observation?.reasoningEffort ?? pi?.reasoningEffort ?? openCode?.reasoningEffort ?? agyEntry?.reasoningEffort ?? configuredAgy?.effort ?? null,
+          contextUsed: observation?.contextUsed ?? agyEntry?.contextUsed ?? null,
+          contextWindow: observation?.contextWindow ?? (current() ? piContexts.get(id) : undefined) ?? agyEntry?.contextWindow ?? configuredAgy?.contextWindow ?? null,
+          state: state(agent.agent_status), taskHint: observation?.taskHint ?? agyEntry?.taskHint ?? null,
           messagePreview: verifiedIds.has(id) ? observation?.messagePreview ?? pi?.preview ?? openCode?.preview ?? agyEntry?.preview ?? null : null,
           tokenUsage24h: usage.tokenUsage24h,
           tokenUsage7d: usage.tokenUsage7d,

@@ -1023,6 +1023,40 @@ describe("local Agent Team provider", () => {
     expect(afterMove.tokenUsage7d).toEqual({
       coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null },
     });
+
+    // A second poll on the destination pane must remain gated and never rewind back to sessionStartedAt.
+    time += 2_000;
+    const afterMoveSecondPoll = (await provider.get()).teams[0]!.agents[0]!;
+    expect(afterMoveSecondPoll.tokenUsage7d).toEqual({
+      coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null },
+    });
+
+    // A pre-`seats` bindings.json (`bindings` + `sessions` only) must also fail closed on a cross-pane move.
+    const preSeatsFile = join(home, "pre-seats-bindings.json");
+    const priorKey = createHash("sha256").update(JSON.stringify(["w6:p1", "codex", "o_prior", SESSION, "term_a"])).digest("hex");
+    const sessionHash = createHash("sha256").update(`session:${SESSION}`).digest("hex");
+    await writeFile(preSeatsFile, JSON.stringify({
+      bindings: [[priorKey, Date.UTC(2026, 10, 1, 10)]],
+      sessions: [[sessionHash, priorKey]],
+    }), { mode: 0o600 });
+    const preSeatsProvider = createLocalAgentTeamsProvider({
+      codexHome: home,
+      bindingCachePath: preSeatsFile,
+      now: () => time,
+      run: async (args) => args.at(-2) === "workspace" ? workspaces : JSON.stringify({
+        result: {
+          agents: [{
+            pane_id: "w6:p2", workspace_id: "w6", name: "origin-seat", agent: "codex", agent_status: "done",
+            cwd: repo, terminal_id: "term_b",
+            agent_session: { kind: "id", agent: "codex", source: "herdr:codex", value: SESSION },
+          }],
+        },
+      }),
+    });
+    const afterPreSeatsMove = (await preSeatsProvider.get()).teams[0]!.agents[0]!;
+    expect(afterPreSeatsMove.tokenUsage7d).toEqual({
+      coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null },
+    });
   });
 
   it("returns the fast Herdr roster immediately on slow cold enrichment and serves full enriched data once ready", async () => {
@@ -1268,5 +1302,123 @@ describe("local Agent Team provider", () => {
     const afterRestart = (await secondProvider.get()).teams[0]!.agents[0]!;
     expect(afterRestart).toMatchObject({ model: "gemini-4-neon", reasoningEffort: "high", contextUsed: 1300, contextWindow: 1_048_576 });
     expect(afterRestart.tokenUsage7d).toMatchObject({ coverage: "partial", knownTokens: 1500 });
+  });
+
+  it("fails closed on duplicate idle Agy --conversation claims, mismatched process-info pane_id, and mid-read pane occupant changes", async () => {
+    const home = await mkdtemp(join(tmpdir(), "mausbot-agy-fallback-guards-"));
+    folders.push(home);
+    const repo = join(home, "repo");
+    const brainLogs = join(home, ".gemini", "antigravity-cli", "brain", SESSION, ".system_generated", "logs");
+    await mkdir(repo, { recursive: true });
+    await mkdir(brainLogs, { recursive: true });
+    const summaryDb = new DatabaseSync(join(home, ".gemini", "antigravity-cli", "conversation_summaries.db"));
+    summaryDb.exec("CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, workspace_uris TEXT)");
+    summaryDb.prepare("INSERT INTO conversation_summaries (conversation_id, workspace_uris) VALUES (?, ?)").run(
+      SESSION, JSON.stringify([`file://${repo}`]),
+    );
+    summaryDb.close();
+    await writeFile(join(brainLogs, "transcript.jsonl"), [
+      JSON.stringify({ type: "USER_INPUT", created_at: "2026-11-24T08:00:00Z", content: "Secret prompt" }),
+      JSON.stringify({
+        type: "PLANNER_RESPONSE", created_at: "2026-11-25T09:00:00Z", model: "gemini-4-neon-high",
+        input_tokens: 1000, output_tokens: 200, cache_read_tokens: 300, content: "Reply",
+      }),
+    ].join("\n") + "\n");
+
+    const now = () => Date.UTC(2026, 10, 26, 3, 0);
+
+    // 1. Two idle Agy panes claiming the same --conversation must both fail closed.
+    const dupProvider = createLocalAgentTeamsProvider({
+      home, now,
+      run: async (args) => {
+        if (args.at(-2) === "workspace") return workspaces;
+        if (args.includes("process-info")) {
+          const pane = args.at(-1)!;
+          return JSON.stringify({
+            result: {
+              process_info: {
+                pane_id: pane,
+                foreground_processes: [{ argv: ["/opt/homebrew/bin/antigravity", "--conversation", SESSION] }],
+              },
+            },
+          });
+        }
+        return JSON.stringify({
+          result: {
+            agents: [
+              { pane_id: "w6:p1", workspace_id: "w6", name: "dup-a", agent: "agy", agent_status: "idle", cwd: repo, terminal_id: "t1" },
+              { pane_id: "w6:p2", workspace_id: "w6", name: "dup-b", agent: "agy", agent_status: "idle", cwd: repo, terminal_id: "t2" },
+            ],
+          },
+        });
+      },
+    });
+    const dupAgents = (await dupProvider.get()).teams[0]!.agents;
+    for (const member of dupAgents) {
+      expect(member.contextUsed).toBeNull();
+      expect(member.taskHint).toBeNull();
+      expect(member.tokenUsage7d).toEqual({ coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null } });
+    }
+
+    // 2. Mismatched process_info.pane_id must be rejected.
+    const mismatchProvider = createLocalAgentTeamsProvider({
+      home, now,
+      run: async (args) => {
+        if (args.at(-2) === "workspace") return workspaces;
+        if (args.includes("process-info")) {
+          return JSON.stringify({
+            result: {
+              process_info: {
+                pane_id: "w6:pOTHER",
+                foreground_processes: [{ argv: ["/opt/homebrew/bin/antigravity", "--conversation", SESSION] }],
+              },
+            },
+          });
+        }
+        return JSON.stringify({
+          result: {
+            agents: [
+              { pane_id: "w6:pQ", workspace_id: "w6", name: "mausbot-review3", agent: "agy", agent_status: "idle", cwd: repo, terminal_id: "t1" },
+            ],
+          },
+        });
+      },
+    });
+    const mismatchMember = (await mismatchProvider.get()).teams[0]!.agents[0]!;
+    expect(mismatchMember.contextUsed).toBeNull();
+    expect(mismatchMember.tokenUsage7d).toEqual({ coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null } });
+
+    // 3. Mid-read occupant change on the 2nd agent list must fail closed and never leak metadata via fallbackAgyMeta.
+    let listCall = 0;
+    const swappedProvider = createLocalAgentTeamsProvider({
+      home, now,
+      run: async (args) => {
+        if (args.at(-2) === "workspace") return workspaces;
+        if (args.includes("process-info")) {
+          return JSON.stringify({
+            result: {
+              process_info: {
+                pane_id: "w6:pQ",
+                foreground_processes: [{ argv: ["/opt/homebrew/bin/antigravity", "--conversation", SESSION] }],
+              },
+            },
+          });
+        }
+        listCall++;
+        return JSON.stringify({
+          result: {
+            agents: [{
+              pane_id: "w6:pQ", workspace_id: "w6", name: "mausbot-review3", agent: "agy", agent_status: "idle",
+              cwd: repo, terminal_id: listCall === 1 ? "t1" : "t2_replaced",
+            }],
+          },
+        });
+      },
+    });
+    const swappedMember = (await swappedProvider.get()).teams[0]!.agents[0]!;
+    expect(swappedMember.model).toBeNull();
+    expect(swappedMember.contextUsed).toBeNull();
+    expect(swappedMember.taskHint).toBeNull();
+    expect(swappedMember.tokenUsage7d).toEqual({ coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null } });
   });
 });
