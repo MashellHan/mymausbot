@@ -2461,6 +2461,8 @@
   "chat.notice.memoryReclaimedBrowserDetail": "Ran out of room, so I closed the browser to keep everything else running. ({detail})",
   "chat.notice.memoryReclaimedTask": "Ran out of room, so I stopped this task to keep everything else running.",
   "chat.notice.memoryReclaimedTaskDetail": "Ran out of room, so I stopped this task to keep everything else running. ({detail})",
+  "chat.notice.memoryReclaimedOnly": "Ran out of room, so I stopped this task to keep everything here from freezing.",
+  "chat.notice.memoryReclaimedOnlyDetail": "Ran out of room, so I stopped this task to keep everything here from freezing. ({detail})",
   "chat.notice.modelNoRoute": "{provider} can't use the model {model} here, so choose another model for this bot.",
   "chat.notice.modelNoRouteUnnamed": "{provider} can't use this bot's model here, so choose another model for this bot.",
   "chat.notice.modelServerStoppedAnswering": "The model server at {host} stopped answering, so the reply was stopped.",
