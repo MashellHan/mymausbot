@@ -1,4 +1,5 @@
 import type { Message, Store } from "../store.ts";
+import { messagesAround } from "../thread-history.ts";
 import { waitContinuationPlaceholder, type MessageLookup } from "../wait-continuation.ts";
 import { toolResultPrefix } from "../tool-results.ts";
 
@@ -36,7 +37,7 @@ export function pageMessage(message: Message, lookup?: MessageLookup): Message |
 }
 
 /** A conversation's messages one page at a time (newest first when `before` is absent), and the page around one message. */
-export function messagePages(store: Pick<Store, "messagesFor" | "messagesTail" | "activeLeaf">, readMessage: (threadId: string, id: string) => Message | null) {
+export function messagePages(store: Pick<Store, "messagesFor" | "messagesTail" | "messagesBefore" | "activeLeaf">, readMessage: (threadId: string, id: string) => Message | null) {
   const wireMessage = (threadId: string, message: Message) => pageMessage(message, (id) => readMessage(threadId, id));
   const paged = (threadId: string, messages: Message[]) =>
     messages.map((message) => pageMessage(message, (id) => readMessage(threadId, id)));
@@ -49,30 +50,19 @@ export function messagePages(store: Pick<Store, "messagesFor" | "messagesTail" |
         activeLeafId: store.activeLeaf(threadId),
       };
     }
-    if (!before) {
-      const tail = store.messagesTail(threadId, limit);
-      return { messages: paged(threadId, tail.messages), hasMore: tail.hasMore, activeLeafId: tail.activeLeafId };
-    }
-    const all = store.messagesFor(threadId);
-    const end = all.findIndex((msg) => msg.id === before);
-    const stop = end === -1 ? all.length : end;
-    const start = Math.max(0, stop - limit);
-    return {
-      messages: paged(threadId, all.slice(start, stop)),
-      hasMore: start > 0,
-      activeLeafId: store.activeLeaf(threadId),
-    };
+    const page = before ? store.messagesBefore(threadId, before, limit) : store.messagesTail(threadId, limit);
+    return page ? { ...page, messages: paged(threadId, page.messages) } : { messages: [], hasMore: false, activeLeafId: store.activeLeaf(threadId) };
+  }
+
+  function messagePageBefore(threadId: string, before: string, limit: number) {
+    const page = store.messagesBefore(threadId, before, limit);
+    return page ? { ...page, messages: paged(threadId, page.messages) } : null;
   }
 
   function messageWindow(threadId: string, messageId: string, limit: number) {
-    const all = store.messagesFor(threadId);
-    const index = all.findIndex((message) => message.id === messageId);
-    if (index < 0) return null;
-    const before = Math.floor((limit - 1) / 2);
-    const start = Math.max(0, Math.min(index - before, all.length - limit));
-    const stop = Math.min(all.length, start + limit);
-    return { messages: paged(threadId, all.slice(start, stop)), hasMore: start > 0 };
+    const page = messagesAround(threadId, messageId, limit, () => ({ messages: store.messagesFor(threadId), activeLeafId: store.activeLeaf(threadId) }));
+    return page ? { ...page, messages: paged(threadId, page.messages) } : null;
   }
 
-  return { messagePage, messageWindow, wireMessage };
+  return { messagePage, messagePageBefore, messageWindow, wireMessage };
 }
