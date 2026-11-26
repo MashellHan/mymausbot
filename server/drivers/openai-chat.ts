@@ -24,7 +24,7 @@ import { ChatProtocolError, ChatReasoningDetails, ChatToolCalls, object, replaya
 import { completionError, httpErrorDetail, refusedToolCall, refusedToolCallFailure, rejectsReasoningReplay, rejectsToolsParameter, RejectedToolCallError, StreamTruncatedError, UnsupportedChatToolsError, UnsupportedReasoningReplayError, type ProviderBody } from "./openai-chat-refusals.ts";
 import { ChatRepeatGuard } from "./chat-repeat-guard.ts";
 import { TextCallHoldback, textToolCalls } from "./chat-text-tool-calls.ts";
-import { createModelRoutes, ModelRouteRefused, noRouteLeft, readResponsesStream, responsesRequest, routeRefusal, type ModelRoute, type ResponseItem } from "./openai-responses.ts";
+import { createModelRoutes, ModelRouteRefused, noRouteLeft, readResponsesStream, responsesRequest, routeRefusal, selectedReasoningEffort, type ModelRoute, type ResponseItem } from "./openai-responses.ts";
 import { appendNative } from "./native.ts";
 import { classifyError, computeBackoff, interruptibleDelay, RETRY_MAX_ATTEMPTS } from "./retry.ts";
 import { plainFailure } from "./engine-errors.ts";
@@ -37,7 +37,6 @@ import { classifyContinuable, writeTurnHandoff } from "../turn-continuation.ts";
 import { KEY_REJECTED_REASON, keyRejected, noteKeyAccepted, noteKeyRejected, rejectsKey } from "../key-rejections.ts";
 import { FETCH_LIMIT_MS, fetchPastLimit, prepareChatModel } from "./openai-chat-fetch.ts";
 import { announcesAction } from "./chat-announcement.ts";
-
 export interface OpenAIChatMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string | ChatContentPart[] | null;
@@ -53,7 +52,6 @@ interface Usage {
   output: number;
   cachedInput?: number;
 }
-
 export interface Completion {
   text: string;
   reasoning: string;
@@ -84,7 +82,6 @@ interface NativeLog {
   outgoing(turn: SendTurnInput, messages: OpenAIChatMessage[], model: string, tools: ChatToolDefinition[]): unknown;
   incoming(completion: Completion): unknown;
 }
-
 const LIVENESS_MISSES = 3;
 
 interface RuntimeOptions<Config> {
@@ -92,14 +89,13 @@ interface RuntimeOptions<Config> {
   driverKind: string;
   apiKey: string;
   apiUrl: string;
-  models: () => ModelCatalog;
-  requestBody(model: string, messages: OpenAIChatMessage[], stream: boolean, variant?: string, threadId?: string): Record<string, unknown>;
+  models: () => ModelCatalog; prepareTurn?: (turn: SendTurnInput, signal: AbortSignal) => Promise<void> | undefined;
+  selectedReasoning?: (model: string, variant?: string) => boolean;
+  requestBody(model: string, messages: OpenAIChatMessage[], stream: boolean, variant?: string, threadId?: string, selectedModel?: string): Record<string, unknown>;
   httpErrorLabel: string;
   /** A refusal this provider words itself: the sentence the person sees instead of the HTTP line, or undefined. */
   plainRefusal?: (status: number, body: string) => string | undefined;
-  missingKeyError: string;
-  unavailableReason: string;
-  timeoutMs: number;
+  missingKeyError: string; unavailableReason: string; timeoutMs: number;
   /** Ask a server on this machine or network for its models this often while a reply is pending, and stop the reply
    * when it misses LIVENESS_MISSES checks in a row: it crashed, froze or left the network. */
   livenessEveryMs?: number;
@@ -282,10 +278,12 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
         : timeoutController.signal;
 
       const served = options.servedModel ? await prepareChatModel(() => options.servedModel!(model), activeSignal) : model;
+      const requestBody = options.requestBody(served, messages, stream, variant, threadId, model);
+      const effort = selectedReasoningEffort(requestBody, route, variant, options.selectedReasoning?.(model, variant));
       const payload = JSON.stringify(route === "responses"
-        ? responsesRequest({ model: served, messages, tools, replay: (message) => responseOutputs.get(message), summaries: routes.summaries(model), effort: options.requestBody(served, messages, stream, variant).reasoning_effort })
+        ? responsesRequest({ model: served, messages, tools, replay: (message) => responseOutputs.get(message), summaries: routes.summaries(model), effort })
         : {
-          ...options.requestBody(served, messages, stream, variant, threadId),
+          ...requestBody,
           ...(route === "chat-reasoning-off" ? (options.reasoningOffBody?.(served) ?? { reasoning_effort: "none" }) : {}),
           ...(tools.length ? { tools } : {}),
         });
@@ -519,15 +517,13 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
   const sendTurn = async (turn: SendTurnInput) => {
     if (!options.apiKey) throw new Error(options.missingKeyError);
     if (active.has(turn.threadId)) throw new Error("a turn is already running on this thread");
-    if (options.computerUse && ((turn.images?.length && seesImages(turn)) || turn.integrations?.localComputer || turn.integrations?.browser)) assertImageTransport(options.apiUrl);
-
+    if (options.computerUse && (turn.integrations?.localComputer || turn.integrations?.browser)) assertImageTransport(options.apiUrl);
     const turnId = newId();
     const abort = new AbortController();
-    const messages = messagesFor(turn);
-    const request = messages.at(-1)!;
+    let messages: OpenAIChatMessage[] = [];
+    let request: OpenAIChatMessage | undefined;
     const retainImages = chatImageBudget();
-    for (const message of messages) retainImages(message.content);
-    const model = turn.model || options.models().default;
+    let model = turn.model || options.models().default;
     const maskable = (value: unknown): value is string => typeof value === "string" && value.length >= 8; // a short placeholder key ("1") would redact every match
     const secrets = [options.apiKey].filter(maskable);
     for (const integration of Object.values(turn.integrations ?? {})) {
@@ -584,7 +580,6 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
     const turnEntry = { abort, turnId, done, approval, asides: [] as string[], ending: false };
     active.set(turn.threadId, turnEntry);
     emit({ ...base(turn.threadId, turnId), type: "turn.started" });
-    emit({ ...base(turn.threadId, turnId), type: "session.started", sessionId: null, model });
 
     void (async () => {
       let tools: ChatToolSession | undefined;
@@ -605,6 +600,17 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
       const repeats = options.localModel ? new ChatRepeatGuard() : undefined;
       let unreadable = false, askedAgain = false;
       try {
+        const preparation = options.prepareTurn?.(turn, abort.signal);
+        if (preparation) {
+          await preparation;
+          abort.signal.throwIfAborted();
+          model = turn.model || options.models().default;
+        }
+        if (options.computerUse && turn.images?.length && seesImages(turn)) assertImageTransport(options.apiUrl);
+        messages = messagesFor(turn);
+        request = messages.at(-1)!;
+        for (const message of messages) retainImages(message.content);
+        emit({ ...base(turn.threadId, turnId), type: "session.started", sessionId: null, model });
         const parsed = parseToolScope(turn.toolScope);
         if (!parsed.ok) throw new Error(parsed.error);
         const scope = parsed.scope;
@@ -912,7 +918,7 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
               threadId: turn.threadId, turnId, model,
               usage, hasUsage, failure, toolCalls: seenCalls.size,
               task: turn.text, updates: deliveredAsides,
-              messages: messages.slice(messages.indexOf(request) + 1),
+              messages: request ? messages.slice(messages.indexOf(request) + 1) : [],
             });
             if (handoffPath) emit({ ...base(turn.threadId, turnId), type: "cap.exhausted", handoffPath, reason: continuable });
           }
@@ -946,41 +952,23 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
     },
     adapter: {
       provider: options.driverKind,
-      capabilities: { ...(options.computerUse ? { computerMcp: options.tools !== false,
-        localComputerMcp: options.tools !== false,
+      capabilities: { ...(options.computerUse ? { computerMcp: options.tools !== false, localComputerMcp: options.tools !== false,
         browserMcp: options.tools !== false, nativeImageInput: true, images: true } : {}),
         ...(options.modelVariants ? { modelVariants: true } : {}), sessionModelSwitch: "in-session", customMcp: options.tools !== false, agentsMcp: options.tools !== false, composioMcp: options.tools !== false,
-        dataMcp: options.tools !== false,
-        emailMcp: options.tools !== false,
-        deviceMcp: options.tools !== false,
-        queueing: true,
-        ...(options.tools !== false ? { askTool: { kind: "native" as const, name: ASK_USER_TOOL } } : {}),
-        guestTurns: "confined" },
+        dataMcp: options.tools !== false, emailMcp: options.tools !== false, deviceMcp: options.tools !== false,
+        queueing: true, ...(options.tools !== false ? { askTool: { kind: "native" as const, name: ASK_USER_TOOL } } : {}), guestTurns: "confined" },
       sendTurn,
       interruptTurn: async (threadId, turnId) => {
         const turn = active.get(threadId);
         if (!turn || (turnId && turn.turnId !== turnId)) return;
-        turn.abort.abort();
-        await turn.done;
+        turn.abort.abort(); await turn.done;
       },
       respondToRequest: async (threadId, requestId, decision) =>
         active.get(threadId)?.approval.answer(requestId, decision.behavior, decision.message, decision.always) ?? "unavailable",
-      steer: async (threadId, text) => {
-        const running = active.get(threadId);
-        if (!running || running.ending) return "refused";
-        running.asides.push(text);
-        return "steered";
-      },
+      steer: async (threadId, text) => { const r = active.get(threadId); if (!r || r.ending) return "refused"; r.asides.push(text); return "steered"; },
       hasSession: (threadId) => active.has(threadId),
-      stopAll: async () => {
-        const turns = [...active.values()];
-        for (const turn of turns) turn.abort.abort();
-        await Promise.all(turns.map((turn) => turn.done));
-      },
-      onEvent: (listener) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
+      stopAll: async () => { const turns = [...active.values()]; for (const turn of turns) turn.abort.abort(); await Promise.all(turns.map((turn) => turn.done)); },
+      onEvent: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
     },
     generateText: async (prompt, { signal, onUsage, model: named } = {}) => {
       const model = named ?? options.generateModel?.() ?? options.models().default;
