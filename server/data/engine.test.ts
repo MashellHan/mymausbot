@@ -692,8 +692,8 @@ describe("lifecycle", () => {
     const e = createDataEngine({ dataDir: root, botFolder: (botId) => join(root, "bots", botId), catalog: null });
     const db = await e.forBot("unsafe-release");
     await db.run("CREATE TABLE t AS SELECT 1", bot);
-    const open = await (db as unknown as { state: Promise<{ instance: { closeSync(): void }; lanes: Record<string, { connection: { run: (sql: string) => Promise<unknown>; closeSync(): void } }> }> }).state;
-    const realRun = open.lanes.bot.connection.run.bind(open.lanes.bot.connection);
+    const open = await (db as unknown as { state: Promise<{ instance: { closeSync(): void }; lanes: Record<string, { connection: { run: () => Promise<unknown>; closeSync(): void } }> }> }).state;
+    const realRun = open.lanes.bot.connection.run;
     open.lanes.bot.connection.run = async () => { throw new Error("checkpoint denied"); };
     try {
       await expect(db.close(true)).rejects.toThrow(/checkpoint denied/);

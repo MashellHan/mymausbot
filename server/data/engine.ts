@@ -31,7 +31,6 @@ import {
   drainLanes,
   formatEpoch,
   formatNumber,
-  levenshtein,
   likePattern,
   missingTableName,
   toCount,
