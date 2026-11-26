@@ -10308,5 +10308,8 @@
   "chat.notice.waitingPasswordElsewhere": "正在 @{name} 中等待你填寫{label}",
   "chat.notice.waitingSignInElsewhere": "正在 @{name} 中等待你登入 {label}",
   "chat.notice.waitingConnectElsewhere": "正在 @{name} 中等待你連接 {label}",
-  "chat.notice.waitingReviewElsewhere": "正在 @{name} 中等待你審閱"
+  "chat.notice.waitingReviewElsewhere": "正在 @{name} 中等待你審閱",
+  "decider.provider.line": "也可以為這些小模型使用其他服務商的金鑰。",
+  "computer.worksOnHintServer": "選擇這個機器人的執行位置。從 {app} 桌面應用程式分享的電腦不在這裡選：直接請機器人去用它就行。",
+  "settings.ai.otherServicesLine": "主要模型之外的金鑰：語音、電腦、應用程式和小幫手。"
 }

@@ -10812,5 +10812,8 @@
   "chat.notice.waitingPasswordElsewhere": "正在等你在 @{name} 里填写{label}",
   "chat.notice.waitingSignInElsewhere": "正在等你在 @{name} 里登录 {label}",
   "chat.notice.waitingConnectElsewhere": "正在等你在 @{name} 里连接 {label}",
-  "chat.notice.waitingReviewElsewhere": "正在等你在 @{name} 里审阅"
+  "chat.notice.waitingReviewElsewhere": "正在等你在 @{name} 里审阅",
+  "decider.provider.line": "也可以为这些小模型使用其他服务商的密钥。",
+  "computer.worksOnHintServer": "选择这个机器人的工作位置。从 {app} 桌面应用共享的电脑不在这里选：直接让机器人去用它就行。",
+  "settings.ai.otherServicesLine": "主要模型之外的密钥：语音、电脑、应用和小助手。"
 }

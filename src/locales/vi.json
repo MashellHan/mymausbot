@@ -5999,5 +5999,8 @@
   "workspaces.users": "Người dùng",
   "workspaces.usersTitle": "Những ai có thể đăng nhập vào {slug}",
   "workspaces.working": "Đang xử lý…",
-  "server.teammates.noLongerWaiting": "{who} không còn chờ bạn nữa"
+  "server.teammates.noLongerWaiting": "{who} không còn chờ bạn nữa",
+  "decider.provider.line": "Hoặc dùng khóa của nhà cung cấp khác cho các mô hình nhỏ này.",
+  "computer.worksOnHintServer": "Chọn nơi bot này làm việc. Máy tính bạn chia sẻ từ ứng dụng {app} trên máy tính không chọn ở đây: chỉ cần nhờ bot dùng nó.",
+  "settings.ai.otherServicesLine": "Khóa cho giọng nói, máy tính, ứng dụng và trợ lý, ngoài các mô hình chính của bạn."
 }
