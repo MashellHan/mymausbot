@@ -21,11 +21,11 @@ export const ATTACHMENTS_DIR = join(DATA_DIR, "attachments");
 
 export const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 
-export const DEFAULT_ATTACHMENTS_MAX_BYTES = 512 * 1024 * 1024;
+export const DEFAULT_ATTACHMENTS_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 /** A person's own Cloud is the only home of everything their computers held, on a volume a move grows to fit. */
 export const CLOUD_HOME_ATTACHMENTS_MAX_BYTES = 8 * 1024 * 1024 * 1024;
 
-/** A team server can raise the ceiling with OMB_ATTACHMENTS_MAX_BYTES; a missing or invalid value keeps 512 MB, or 8 GB on a Cloud home. */
+/** A team server can raise the ceiling with OMB_ATTACHMENTS_MAX_BYTES; a missing or invalid value keeps 2 GB, or 8 GB on a Cloud home. */
 export function attachmentsMaxBytes(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env.OMB_ATTACHMENTS_MAX_BYTES?.trim();
   const parsed = raw ? Number(raw) : NaN;
@@ -37,6 +37,8 @@ export function attachmentsMaxBytes(env: NodeJS.ProcessEnv = process.env): numbe
 export const ATTACHMENTS_MAX_BYTES = attachmentsMaxBytes();
 
 function formatStoreLimit(bytes: number): string {
+  const gb = bytes / (1024 * 1024 * 1024);
+  if (gb >= 1 && Number.isInteger(gb)) return `${gb} GB`;
   const mb = Math.round(bytes / (1024 * 1024));
   return mb >= 1 ? `${mb} MB` : `${bytes} bytes`;
 }
