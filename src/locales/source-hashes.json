@@ -50767,6 +50767,7 @@
       "chat.newMessagesAria": "ef5df7e6051540cadc2942c9c85501a74772f87f4d30d28913478a84331b8062",
       "chat.nextVersion": "0671058c0f46bec7e39c26eccfd979d19ecd4035cc281e33919d31a35b2ac6d6",
       "chat.notice.acpEmpty": "de7c4057f59f1718ae03751eff5077f89bf4fc9fad9701138ae6e9c83abf06e4",
+      "chat.notice.acpEndedAfterTools": "3f2e82938d70cac61821002d7aed86de063bf388ee663778196ff4611f09dfb3",
       "chat.notice.acpMcpAppsFailed": "d4e7b2a8d9464e8365bf1842d5e0eea17f602dc29834f58cd2d4d8b258387fba",
       "chat.notice.acpMcpServerFailed": "0691e7f2e00e744d7a8092a5ff69a6be41fc3d998c0cd996bdf4ff6e31560bdd",
       "chat.notice.acpModelFallback": "561bf92c14b4e6a8d14f78d43cd2530436eb8f93ed7997b3e6644e1ba45ef717",
