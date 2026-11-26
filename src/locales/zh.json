@@ -10774,7 +10774,7 @@
   "settings.webPush.mentionsTitle": "群聊 @提及",
   "settings.webPush.mentionsSubtitle": "在群聊中被 @提及时提醒。",
   "settings.webPush.spendTitle": "月度预算告警",
-  "settings.webPush.spendSubtitle": "工作区用量达到预警线或上限时提醒。",
+  "settings.webPush.spendSubtitle": "用量达到预警线或上限时提醒。",
   "settings.webPush.liveSection": "实时活动（锁屏进度）",
   "settings.webPush.liveTitle": "锁屏实时进度推送",
   "settings.webPush.liveSubtitle": "在锁屏推送进行中任务的关键阶段变化，同一会话在锁屏原地覆盖更新不刷屏。（基于标准网页推送，非灵动岛）",

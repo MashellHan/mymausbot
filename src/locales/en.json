@@ -11880,7 +11880,7 @@
   "settings.webPush.mentionsTitle": "Group @mentions",
   "settings.webPush.mentionsSubtitle": "When a bot or teammate mentions you in a group chat.",
   "settings.webPush.spendTitle": "Monthly spend alerts",
-  "settings.webPush.spendSubtitle": "When workspace spending hits warning or cap limits.",
+  "settings.webPush.spendSubtitle": "When spending hits warning or cap limits.",
   "settings.webPush.liveSection": "Live Activities (Lock Screen)",
   "settings.webPush.liveTitle": "Lock-screen task progress",
   "settings.webPush.liveSubtitle": "Pushes key task stages and replaces the previous lock-screen notice for the same chat in place. Standard Web Push only — not iOS Dynamic Island.",

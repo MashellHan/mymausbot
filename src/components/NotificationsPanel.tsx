@@ -11,6 +11,7 @@ import { BotAvatar, type BotAvatarProps } from "./Avatar";
 import { threadUpdatedLabel } from "./SidebarThreadRow";
 import type { NotificationLogEntry, NotifyKind } from "../../shared/notification";
 import { plainPreviewText } from "../../shared/plain-preview";
+import { isRemotePwaMode } from "@/lib/pwa-transport";
 import { Select } from "./Select";
 
 const KIND_LOOK: Record<NotifyKind, { Icon: LucideIcon; className: string; status: LocaleKey }> = {
@@ -88,6 +89,17 @@ export function NotificationBell({ bar, badgeClassName, iconSize }: { bar?: stri
         </span>
       )}
     </button>
+  );
+}
+
+export function MobilePwaNotificationBell({ show = true, bar, iconSize }: { show?: boolean; bar: string; iconSize: number }) {
+  if (!show || !isRemotePwaMode()) return null;
+  return (
+    <NotificationBell
+      bar={bar}
+      iconSize={iconSize}
+      badgeClassName="-right-1 -top-1 min-w-4 h-4 px-1 text-[10px] font-semibold tabular-nums ring-2 ring-app"
+    />
   );
 }
 
