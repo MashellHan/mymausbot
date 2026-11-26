@@ -1613,6 +1613,7 @@
   "browser.dialog.response": "對話框回應",
   "browser.dialog.takeControl": "取得控制權以回應。",
   "browser.input.tooSlow": "瀏覽器跟不上輸入速度，因此已停止輸入（瀏覽器可能卡住，或連線速度較慢）。請重新連接畫面後再輸入。如果仍然卡住，請重新啟動瀏覽器。",
+  "browser.input.notReaching": "你的點擊和輸入沒有傳到頁面。",
   "browser.live.botBusy": "{name} 正在使用這個瀏覽器。空閒時就會開啟即時畫面…",
   "browser.noEngine": "這裡無法使用瀏覽器。",
   "browser.notice.copied": "頁面複製了文字",
