@@ -1,4 +1,6 @@
 // DOM-free remote PWA transport helpers shared by renderer modules that also typecheck under tsconfig.server.json.
+import { prepareDpopSignedFetch } from "./pwa-dpop.ts";
+
 export interface PwaAuthRecord {
   ownerKey: string;
   relayUrl: string;
@@ -9,12 +11,22 @@ export interface PwaAuthRecord {
   serverName: string;
   scopes: string[];
   defaultBotId?: string;
+  dpopBound?: boolean;
   pairedAt: number;
 }
 
 let activeAuth: PwaAuthRecord | null = null;
+let activeDpopPrivateKey: CryptoKey | null = null;
 let macOffline = false;
 const macOfflineListeners = new Set<() => void>();
+
+export function setActiveDpopKey(key: CryptoKey | null): void {
+  activeDpopPrivateKey = key;
+}
+
+export function getActiveDpopKey(): CryptoKey | null {
+  return activeDpopPrivateKey;
+}
 
 export function isMacOffline(): boolean {
   return macOffline;
@@ -41,9 +53,17 @@ export function getPwaAuth(): PwaAuthRecord | null {
   return activeAuth;
 }
 
-export function setActivePwaAuth(record: PwaAuthRecord | null): void {
+export function setActivePwaAuth(
+  record: PwaAuthRecord | null,
+  dpopPrivateKey?: CryptoKey | null,
+): void {
   activeAuth = record;
-  if (!record) setMacOffline(false);
+  if (!record) {
+    activeDpopPrivateKey = null;
+    setMacOffline(false);
+  } else if (dpopPrivateKey !== undefined) {
+    activeDpopPrivateKey = dpopPrivateKey;
+  }
 }
 
 export function isRemotePwaMode(): boolean {
@@ -107,7 +127,9 @@ export function remoteFetch(
   if (!isRemotePwaMode() || !isRelayTarget(path)) {
     return init === undefined ? fetchImpl(path) : fetchImpl(path, init);
   }
-  return fetchImpl(remoteUrl(path), remoteFetchInit(init)).then((res) => {
+  const resolvedUrl = remoteUrl(path);
+  const baseInit = remoteFetchInit(init);
+  const handleResponse = (res: Response): Response => {
     if (res.ok) {
       setMacOffline(false);
     } else if (res.status === 503 && isJsonResponse(res) && typeof res.clone === "function") {
@@ -121,5 +143,16 @@ export function remoteFetch(
       );
     }
     return res;
-  });
+  };
+  const dpopKey = activeDpopPrivateKey;
+  if (dpopKey === null) {
+    return fetchImpl(resolvedUrl, baseInit).then(handleResponse);
+  }
+  return prepareDpopSignedFetch({
+    privateKey: dpopKey,
+    url: resolvedUrl,
+    init: baseInit,
+  })
+    .then((signedInit) => fetchImpl(resolvedUrl, signedInit))
+    .then(handleResponse);
 }
