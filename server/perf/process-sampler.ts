@@ -6,6 +6,7 @@ import { execFile } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 
+import { LATE_TIMER_MS, loopIdleMs, pausedNotStalled } from "./loop-pause.ts";
 import { exactQuantile } from "./phases.ts";
 import {
   classifyProcesses, parseCgroupCpuMs, parseProcStat, parsePsLine, parseReapedChildrenMs, type ProcessBucket, type ProcessRow,
@@ -15,6 +16,7 @@ export const LINUX_SAMPLE_MS = 60_000;
 export const OTHER_SAMPLE_MS = 5 * 60_000;
 const HOUR = 3_600_000, FIVE_MINUTES = 5 * 60_000;
 const BUCKETS_SHOWN = 12;
+export { LATE_TIMER_MS, pausedNotStalled };
 
 export interface ProcessList {
   rows: ProcessRow[];
@@ -104,6 +106,7 @@ export function nodeUtilization(): () => number | null {
 export function createProcessSampler(options: ProcessSamplerOptions) {
   const now = options.now ?? Date.now, monotonic = options.monotonic ?? (() => performance.now());
   const serverPid = options.serverPid ?? process.pid;
+  const idle = options.idle ?? (options.monotonic ? () => null : loopIdleMs);
   const samples: Sample[] = [];
   let previous: { at: number; rows: Map<number, { start: string; cpuMs: number; bucket: ProcessBucket; ppid: number }>; reapedMs: number | null; totalMs: number | null } | null = null;
   let latest: { at: number; procs: Partial<Record<ProcessBucket, number>>; rss: Partial<Record<ProcessBucket, number>>; browsers: number } | null = null;

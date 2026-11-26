@@ -1,6 +1,6 @@
 import { availableMemory, boxMemory, type BoxMemory } from "../box-memory.ts";
 import { engineMemory, type EngineMemory } from "../engine-memory.ts";
-import { seenWithin } from "../thread-presence.ts";
+import { onThreadSeen, seenWithin } from "../thread-presence.ts";
 
 export interface SessionIdlePolicy {
   idleMs: number;
@@ -53,38 +53,98 @@ export interface WarmEngine {
   /** Still idle and free to close: no turn running, no hold keeping it up. */
   idle: () => boolean;
   close: () => void;
+  /** A per-chat engine's conversation: used to prefer keeping watched engines on the cap. */
+  threadId?: string;
+  /** Kept on purpose until a time (a prompt-cache keep-warm): never closed for idleness or the cap. */
+  held?: () => boolean;
+  /** Started before any message and not yet used by a turn: closes before used engines when capped. */
+  spare?: () => boolean;
 }
 
-/** Idle engines of every driver, the longest idle first. */
+const GB = 1024 ** 3;
+export const SMALL_BOX_IDLE_ENGINES = 2;
+const IDLE_ENGINES_FEWEST = 4, IDLE_ENGINES_MOST = 8;
+
+/** How many engines may stay idle at once across every driver and conversation, whatever the idle times allow:
+ * OMB_IDLE_ENGINES_MAX (1 or more), else one per 2 GB of the box between four and eight, and two on a box of 1.5 GB or
+ * less. Each holds 250 to 450 MB with its MCP servers. */
+export function idleEngineCap(env: Record<string, string | undefined> = process.env, boxBytes: number = boxMemory().bytes): number {
+  const configured = Number(env.OMB_IDLE_ENGINES_MAX);
+  if (env.OMB_IDLE_ENGINES_MAX && Number.isInteger(configured) && configured >= 1) return configured;
+  if (boxBytes <= SMALL_BOX_BYTES) return SMALL_BOX_IDLE_ENGINES;
+  return Math.min(IDLE_ENGINES_MOST, Math.max(IDLE_ENGINES_FEWEST, Math.floor(boxBytes / (2 * GB))));
+}
+
+/** Idle engines of every driver, the least recently used first: an engine moves to the end when it goes idle and when a
+ * person opens or reads its conversation. */
 const warmEngines = new Map<string, WarmEngine>();
 
-/** An engine went idle: when the box allows fewer idle engines than are up, the ones idle longest close now. */
+/** An engine went idle: when the box allows fewer idle engines than are up, the ones idle longest close now (an engine
+ * started ahead of a first message before them); past the cap on idle engines, the least recently used close now (one
+ * whose conversation no person has had in front of them before them). Never one with a turn running, nor one held. */
 export function keepWarm(key: string, engine: WarmEngine, box: Pick<BoxMemory, "bytes"> = boxMemory(),
-  available: () => number = availableMemory, fits: () => number = () => engineMemory.idleEnginesAllowed()): void {
-  const most = fits();
-  if (box.bytes > SMALL_BOX_BYTES && most === Infinity) return;
+  available: () => number = availableMemory, fits: () => number = () => engineMemory.idleEnginesAllowed(),
+  cap: () => number = () => idleEngineCap(process.env, box.bytes)): void {
   warmEngines.delete(key);
   warmEngines.set(key, engine);
-  for (const [other, warm] of warmEngines) if (other !== key && !warm.idle()) warmEngines.delete(other);
-  const extra = warmEngines.size - idleEnginesAllowed(box, available(), most);
-  if (extra <= 0) return;
-  for (const [other, warm] of [...warmEngines].slice(0, extra)) {
-    warmEngines.delete(other);
+  for (const [other, warm] of warmEngines) if (other !== key && (!warm.idle() || warm.held?.())) warmEngines.delete(other);
+  const most = fits();
+  const roomAllows = box.bytes > SMALL_BOX_BYTES && most === Infinity ? Infinity : idleEnginesAllowed(box, available(), most);
+  const idleBefore = () => [...warmEngines].filter(([other]) => other !== key);
+  closeKept(sparesFirst(idleBefore()).slice(0, Math.max(0, warmEngines.size - roomAllows)));
+  closeKept(unwatchedFirst(idleBefore()).slice(0, Math.max(0, warmEngines.size - Math.max(1, cap()))));
+}
+
+function closeKept(engines: Array<[string, WarmEngine]>): void {
+  for (const [key, warm] of engines) {
+    warmEngines.delete(key);
+    const entry = armed.get(key);
+    if (entry) clearTimeout(entry.timer);
+    armed.delete(key);
     warm.close();
   }
 }
 
-/** Closes an idle engine after `ms`, or sooner on a small box once another engine goes idle after it. */
-export function armIdleClose(key: string, ms: number, engine: WarmEngine): ReturnType<typeof setTimeout> {
-  const timer = setTimeout(engine.close, ms);
+const sparesFirst = (engines: Array<[string, WarmEngine]>): Array<[string, WarmEngine]> =>
+  [...engines.filter(([, warm]) => warm.spare?.()), ...engines.filter(([, warm]) => !warm.spare?.())];
+
+const watched = (warm: WarmEngine): boolean => warm.threadId !== undefined && seenWithin(warm.threadId, WATCHED_MS);
+const unwatchedFirst = (engines: Array<[string, WarmEngine]>): Array<[string, WarmEngine]> =>
+  [...engines.filter(([, warm]) => !watched(warm)), ...engines.filter(([, warm]) => watched(warm))];
+
+/** A person opened or read a conversation: its idle engines become the most recently used. */
+function touchWarm(threadId: string): void {
+  const touched = [...warmEngines].filter(([, warm]) => warm.threadId === threadId);
+  for (const [key, warm] of touched) {
+    warmEngines.delete(key);
+    warmEngines.set(key, warm);
+  }
+}
+onThreadSeen(touchWarm);
+
+/** Every per-chat engine idle now, with when it went idle: what the timer tracks. */
+const armed = new Map<string, { engine: WarmEngine; since: number; timer: ReturnType<typeof setTimeout> }>();
+
+/** Closes an idle engine after `ms`, or sooner on a small box or past the idle engine cap once another engine goes idle after it. */
+export function armIdleClose(key: string, ms: number, engine: WarmEngine, now: number = Date.now()): ReturnType<typeof setTimeout> {
+  const timer = setTimeout(() => {
+    if (armed.get(key)?.timer !== timer) return;
+    armed.delete(key);
+    if (!engine.idle() || engine.held?.()) return;
+    engine.close();
+  }, ms);
   timer.unref?.();
+  armed.set(key, { engine, since: now, timer });
   keepWarm(key, engine);
   return timer;
 }
 
 export function stopIdleClose(key: string, timer: ReturnType<typeof setTimeout> | null): void {
   if (timer) clearTimeout(timer);
+  const entry = armed.get(key);
+  if (timer && entry && entry.timer !== timer) return;
   warmEngines.delete(key);
+  armed.delete(key);
 }
 
 export function warmEngineKeys(): string[] {

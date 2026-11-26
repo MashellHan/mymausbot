@@ -12,3 +12,8 @@ export function dataHome(): string {
   home = process.env.VITEST !== undefined && real === userInfo().homedir ? mkdtempSync(join(tmpdir(), "omb-test-home-")) : real;
   return home;
 }
+
+type Env = Record<string, string | undefined>;
+
+/** Where defaultDataDir looks: the home the folder goes under and the account's own home. Tests give both. */
+export interface DataHomes { under?: () => string; realHome?: () => string | null }

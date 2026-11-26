@@ -468,7 +468,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         const session = sessions.get(threadId);
         if (!session) return;
         if (session.idleTimer) clearTimeout(session.idleTimer);
-        session.idleTimer = armIdleClose(`${instanceId}\0${threadId}`, engineIdleMs(threadId, sessionIdle), { close: () => closeSession(threadId, "idle"),
+        session.idleTimer = armIdleClose(`${instanceId}\0${threadId}`, engineIdleMs(threadId, sessionIdle), { threadId, close: () => closeSession(threadId, "idle"),
           idle: () => sessions.get(threadId) === session && !session.closing && !session.current });
       };
     // Session allows the driver keeps when the agent offered no `allow_always`: exact operations per

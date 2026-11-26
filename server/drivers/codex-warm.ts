@@ -275,6 +275,7 @@ export function codexWarmSessions<Carried>(instanceId: string) {
       const entry = {
         session,
         idleTimer: armIdleClose(idleKey(threadId), engineIdleMs(threadId, policy), {
+          threadId,
           close: () => void close(threadId, "idle"),
           idle: () => kept.get(threadId)?.session === session,
         }),
