@@ -8049,5 +8049,8 @@
   "workspaces.users": "ユーザー",
   "workspaces.usersTitle": "{slug} にサインインできる人",
   "workspaces.working": "処理中…",
-  "server.teammates.noLongerWaiting": "{who} はもうあなたを待っていません"
+  "server.teammates.noLongerWaiting": "{who} はもうあなたを待っていません",
+  "decider.provider.line": "または、これらの小さなモデルに別のプロバイダーのキーを使います。",
+  "computer.worksOnHintServer": "このボットの作業場所を選びます。{app} デスクトップアプリから共有したコンピューターはここでは選びません。使ってほしいときはボットに頼んでください。",
+  "settings.ai.otherServicesLine": "メインのモデル以外に使う、音声、コンピューター、アプリ、ヘルパー用のキーです。"
 }

@@ -11302,5 +11302,8 @@
   "chat.notice.waitingPasswordElsewhere": "Esperando você em @{name}: {label}",
   "chat.notice.waitingSignInElsewhere": "Esperando você entrar em {label} em @{name}",
   "chat.notice.waitingConnectElsewhere": "Esperando você conectar {label} em @{name}",
-  "chat.notice.waitingReviewElsewhere": "Esperando sua revisão em @{name}"
+  "chat.notice.waitingReviewElsewhere": "Esperando sua revisão em @{name}",
+  "decider.provider.line": "Ou use uma chave de outro provedor para esses modelos pequenos.",
+  "computer.worksOnHintServer": "Escolha onde este bot trabalha. Um computador que você compartilha pelo app de desktop {app} não é escolhido aqui: é só pedir ao bot para usá-lo.",
+  "settings.ai.otherServicesLine": "Chaves para vozes, computadores, apps e ajudantes, além dos seus modelos principais."
 }

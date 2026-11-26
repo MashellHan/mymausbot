@@ -7739,5 +7739,8 @@
   "workspaces.users": "사용자",
   "workspaces.usersTitle": "{slug}에 로그인할 수 있는 사람",
   "workspaces.working": "작업 중…",
-  "server.teammates.noLongerWaiting": "{who}이(가) 더 이상 회원님을 기다리지 않아요"
+  "server.teammates.noLongerWaiting": "{who}이(가) 더 이상 회원님을 기다리지 않아요",
+  "decider.provider.line": "또는 이 작은 모델들에 다른 제공업체의 키를 쓰세요.",
+  "computer.worksOnHintServer": "이 봇이 일할 곳을 고르세요. {app} 데스크톱 앱에서 공유한 컴퓨터는 여기서 고르지 않아요. 봇에게 쓰라고 말하면 돼요.",
+  "settings.ai.otherServicesLine": "주 모델 외에 음성, 컴퓨터, 앱, 도우미에 쓰는 키예요."
 }
