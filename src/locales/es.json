@@ -3714,7 +3714,7 @@
   "people.today": "Hoy",
   "people.turns": "{turns} turnos este mes",
   "permissions.approval.draftHanded": "Predeterminado para los hilos y las rutinas del nuevo bot y para el trabajo que se le encargue.",
-  "permissions.approval.helpHanded": "Predeterminado para los hilos nuevos, las rutinas y el trabajo que se le encargue. Acceso completo también se aplica de inmediato a todos los hilos existentes. Usa «Actualizar permisos» en un hilo para aplicar el nivel actual a esa conversación.",
+  "permissions.approval.helpHanded": "Predeterminado para los hilos nuevos, las rutinas y el trabajo que se le encargue. «Pedir aprobación» y «Acceso total» también se aplican de inmediato a todos los hilos existentes.",
   "permissions.peers.everyone": "Dejar que hable con todos los bots",
   "permissions.peers.limited": "Configurado para hablar solo con {names}.",
   "permissions.peers.none": "Configurado para no hablar con otros bots.",

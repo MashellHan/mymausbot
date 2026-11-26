@@ -4184,7 +4184,7 @@
   "people.turns": "Tury w tym miesiącu: {turns}",
   "permissions.approval.applyFull": "Zastosuj pełny dostęp do wszystkich wątków",
   "permissions.approval.draftHanded": "Domyślne dla wątków nowego bota, rutyn i przekazanej mu pracy.",
-  "permissions.approval.helpHanded": "Domyślne dla nowych wątków, rutyn i przekazanej mu pracy. Pełny dostęp obowiązuje też od razu we wszystkich istniejących wątkach. Użyj opcji Odśwież uprawnienia w wątku, aby zastosować bieżący poziom do tej rozmowy.",
+  "permissions.approval.helpHanded": "Domyślne dla nowych wątków, rutyn i przekazanej mu pracy. Pytaj o zatwierdzenie i Pełny dostęp obowiązują też od razu we wszystkich istniejących wątkach.",
   "permissions.approval.title": "Poziom zatwierdzania",
   "permissions.cannotCoordinate": "Ten model nie może kontaktować się z innymi botami",
   "permissions.chief.active": "To główny kontakt dla: {section}. Może tworzyć i koordynować specjalistów w tym dziale, a następnie łączyć ich pracę w jedną odpowiedź.",
