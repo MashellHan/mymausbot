@@ -212,4 +212,92 @@ describe("Antigravity CLI (agy) support in Agent Team", () => {
       else process.env.XDG_DATA_HOME = prevXdg;
     }
   });
+
+  it("backscans beyond RECENT_TAIL_BYTES to retain messagePreview and taskHint during long tool-only Agy runs", async () => {
+    const nowMs = Date.UTC(2026, 10, 26, 7, 20);
+    const { home, project, agyHome } = await createAgyFixture(nowMs);
+    const transcriptFile = join(agyHome, "brain", SESSION, ".system_generated", "logs", "transcript.jsonl");
+    const t0 = new Date(nowMs - 120_000).toISOString();
+    const t1 = new Date(nowMs - 110_000).toISOString();
+    const rows = [
+      JSON.stringify({ step_index: 0, type: "USER_INPUT", created_at: t0, content: "<USER_REQUEST>\nImplement upstream theme sync.\n</USER_REQUEST>" }),
+      JSON.stringify({
+        step_index: 1, type: "PLANNER_RESPONSE", created_at: t1, model: "gemini-4-hydrogen-high",
+        input_tokens: 10_000, cache_read_tokens: 5_000, output_tokens: 400,
+        content: "Started upstream theme sync; running tests now.",
+      }),
+    ];
+    // Append > 600 KiB of tool-call/tool-output rows with no assistant text so RECENT_TAIL_BYTES (512 KiB) has only tool rows.
+    const bigToolOutput = "x".repeat(40_000);
+    for (let i = 0; i < 16; i += 1) {
+      const ts = new Date(nowMs - (90 - i) * 1000).toISOString();
+      rows.push(JSON.stringify({
+        step_index: 2 + i * 2, type: "PLANNER_RESPONSE", created_at: ts, model: "gemini-4-hydrogen-high",
+        input_tokens: 12_000, cache_read_tokens: 6_000, output_tokens: 100,
+        tool_calls: [{ name: "run_command", args: { CommandLine: "pnpm test" } }],
+      }));
+      rows.push(JSON.stringify({
+        step_index: 3 + i * 2, type: "GENERIC", created_at: ts, content: bigToolOutput,
+      }));
+    }
+    await writeFile(transcriptFile, rows.join("\n") + "\n");
+
+    const agents = [{
+      pane_id: "w6:p6", workspace_id: "w6", name: "mausbot-upstream", agent: "agy", agent_status: "working",
+      cwd: project, terminal_id: "term_agy_long",
+      agent_session: { agent: "agy", kind: "id", source: "herdr:antigravity_cli", value: SESSION },
+    }];
+    const run = async (args: readonly string[]) => {
+      if (args.includes("workspace")) return JSON.stringify({ result: { workspaces: [{ workspace_id: "w6", label: "mymausbot" }] } });
+      return JSON.stringify({ result: { agents } });
+    };
+    const teams = createLocalAgentTeamsProvider({ home, codexHome: join(home, ".codex"), run, now: () => nowMs });
+    const snap = await teams.get();
+    const member = snap.teams[0]!.agents[0]!;
+    expect(member.messagePreview).toBe("Started upstream theme sync; running tests now.");
+    expect(member.taskHint).toBe("Implement upstream theme sync.");
+  });
+
+  it("caches pane process-info per stable occupant for 30s and re-probes immediately when occupant changes", async () => {
+    let clock = Date.UTC(2026, 10, 26, 8, 0);
+    const { home, project } = await createAgyFixture(clock);
+    let processInfoCalls = 0;
+    let terminalId = "term_agy_1";
+    const run = async (args: readonly string[]) => {
+      if (args.includes("workspace")) return JSON.stringify({ result: { workspaces: [{ workspace_id: "w6", label: "mymausbot" }] } });
+      if (args.includes("process-info")) {
+        processInfoCalls += 1;
+        return JSON.stringify({
+          result: {
+            process_info: {
+              pane_id: "w6:p5",
+              foreground_processes: [{ argv: ["antigravity", "--model", "gemini-4-neon-1m"] }],
+            },
+          },
+        });
+      }
+      return JSON.stringify({
+        result: {
+          agents: [{
+            pane_id: "w6:p5", workspace_id: "w6", name: "mausbot-review", agent: "agy", agent_status: "idle",
+            cwd: project, terminal_id: terminalId,
+            agent_session: { agent: "agy", kind: "id", source: "herdr:antigravity_cli", value: SESSION },
+          }],
+        },
+      });
+    };
+    const teams = createLocalAgentTeamsProvider({ home, codexHome: join(home, ".codex"), run, now: () => clock });
+    await teams.get(true);
+    expect(processInfoCalls).toBe(1);
+    clock += 5_000;
+    await teams.get(true);
+    expect(processInfoCalls).toBe(1);
+    clock += 31_000;
+    await teams.get(true);
+    expect(processInfoCalls).toBe(2);
+    terminalId = "term_agy_2";
+    clock += 2_000;
+    await teams.get(true);
+    expect(processInfoCalls).toBe(3);
+  });
 });
