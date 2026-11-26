@@ -6,9 +6,12 @@ import { rememberComputerPanelOpen } from "./computer-panel-focus";
 import { tableDelimiter } from "./table-data";
 
 export interface MessageFilePreview {
+  kind?: "markdown" | "table" | "changes";
   path: string;
   name: string;
   message: MessageAttachmentContext;
+  /** For "changes": the person's file this one is an edit of, in the message that attached it. */
+  original?: { path: string; name: string; messageId: string };
 }
 
 export interface PanelFilePreview extends MessageFilePreview {
@@ -57,7 +60,8 @@ export function useFilePanelOpener(): (file: MessageFilePreview, trigger: HTMLEl
     const app = latest.current;
     const state = app?.state();
     const bot = state?.bots.find((candidate) => candidate.id === state.selectedId && candidate.threadId === file.message.threadId);
-    if (!app || !bot || window.ogb?.remoteClient?.active || !filePreviewKind(file.name, file.path)) return false;
+    if (!app || !bot || window.ogb?.remoteClient?.active) return false;
+    if (file.kind !== "changes" && !filePreviewKind(file.name, file.path)) return false;
     pending = { ...file, botId: bot.id, nonce: ++nonce, at: Date.now(), returnFocus: trigger };
     if (!trigger.closest("[data-computer-panel]")) rememberComputerPanelOpen({ botId: bot.id, opener: trigger, tabs: false });
     writeComputerPanelView(bot.id, "files");
@@ -65,4 +69,9 @@ export function useFilePanelOpener(): (file: MessageFilePreview, trigger: HTMLEl
     app.dispatch({ type: "toggleComputer", open: true });
     return true;
   }, []);
+}
+
+export function useChangesPanelOpener(): (file: Omit<MessageFilePreview, "kind"> & { original: NonNullable<MessageFilePreview["original"]> }, trigger: HTMLElement) => boolean {
+  const openPanel = useFilePanelOpener();
+  return useCallback((file, trigger) => openPanel({ ...file, kind: "changes" }, trigger), [openPanel]);
 }
