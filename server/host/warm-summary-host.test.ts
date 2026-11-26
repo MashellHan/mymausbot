@@ -6,7 +6,6 @@ import type { Message } from "../store.ts";
 import { createJobSlots } from "../job-slots.ts";
 import { WARM_SUMMARY_GIVE_UP_MS, WARM_SUMMARY_IDLE_MS, WARM_SUMMARY_NOW_MS, WARM_SUMMARY_RETRY_MS, WARM_SUMMARY_SOON_MS } from "../warm-summary.ts";
 import { addServerLinePacks } from "../server-lines.ts";
-import { autoCompactWindow } from "../drivers/claude.ts";
 import { COMPACTION_STARTED_LINE, createWarmSummaryHost, keptAfterSummary, PRESENCE_HOLD_MS, summaryInstructions, type EngineCompactCheck, type WarmSummaryHostDeps } from "./warm-summary-host.ts";
 
 let at = 0;

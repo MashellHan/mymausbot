@@ -332,7 +332,6 @@ export function codexWarmSessions<Carried>(instanceId: string) {
         close: () => void close(threadId, "idle"),
         idle: () => kept.get(threadId)?.session === session,
         threadId,
-        policy,
       }),
     };
     kept.set(threadId, entry);

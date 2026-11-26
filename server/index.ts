@@ -406,7 +406,7 @@ import { connectedAppsForSetup, expandSetupTurnText, setupModeActive, setupSyste
 import { isSkillSwitchAction, type SkillRequestCardData } from "../shared/skill-request.ts"; import { createSkillSwitchHost } from "./host/skill-switch-host.ts";
 import { checkSoulDrift, readSoulDrift, soulFile, writeSoulMirror } from "./bot-folder.ts";
 import {
-  botPersona, botSessionConfigHash,
+  botPersona,
   buildSystemPrompt,
   userProfileSystemPrompt,
   cloudHomePrompt, syncedFolders,
@@ -8344,7 +8344,7 @@ async function beginTurn(
       }
       runningTurnEngines.set(threadId, instance);
       // Re-decide from the instructions sent, except on an unattended continuation wake, so the session receipt describes the actual prompt.
-      const dispatchedConfig = botSessionConfigHash(persistentConfig, liveBot?.soul ?? bot.soul, agentInstructions);
+      const dispatchedConfig = sessionConfig(liveBot?.soul ?? bot.soul);
       if (strictResume && !(opts?.cardContinuation && continuingRoutine) && dispatchedConfig !== plannedConfig) dispatchContext = decideContext(dispatchedConfig);
       // Before sendTurn: an adapter may emit the whole turn before it resolves.
       handoffs.dispatching(threadId, dispatchClaimId, dispatchContext.handoff);
