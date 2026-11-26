@@ -40,6 +40,7 @@ import { workerPort } from "./testing/worker-port.ts";
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
 const FAKE_CLAUDE_CLI = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
+const FAKE_CODEX_CLI = join(SERVER_DIR, "testing", "fake-codex-app-server.ts");
 const FAKE_MCP_SERVER = join(SERVER_DIR, "testing", "fake-mcp-server.ts");
 const PORT = workerPort(18800, 10_000);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -5766,6 +5767,71 @@ describe("harness HTTP API", () => {
       await api("DELETE", `/api/bots/${bot.id}`);
     }
   });
+
+  it("rejects contextWindowTokens larger than the selected model's advertised contextWindow", async () => {
+    chmodSync(FAKE_CODEX_CLI, 0o755);
+    const isolatedHome = mkdtempSync(join(tmpdir(), "omb-context-window-limit-"));
+    const isolatedData = join(isolatedHome, ".openmausbot");
+    const isolatedStatic = join(isolatedHome, "static");
+    const isolatedPort = await freePortBlock([0, 1]);
+    mkdirSync(join(isolatedStatic, "assets"), { recursive: true });
+    mkdirSync(isolatedData, { recursive: true });
+    mkdirSync(join(isolatedHome, ".codex", "model-catalogs"), { recursive: true });
+    writeFileSync(join(isolatedStatic, "index.html"), "<!doctype html><title>Context window limit test</title>");
+    writeFileSync(join(isolatedStatic, "assets", "smoke.css"), "body{}");
+    writeFileSync(join(isolatedHome, ".codex", "config.toml"), `model_provider = "raven"\nmodel = "narrow"\n[model_providers.raven]\nname = "Raven"\n`);
+    writeFileSync(join(isolatedHome, ".codex", "model-catalogs", "raven-models.json"), JSON.stringify({
+      models: [{ slug: "narrow", context_window: 128_000 }],
+    }));
+    writeFileSync(join(isolatedData, "config.json"), JSON.stringify({
+      instances: {
+        codex: { driver: "codex", displayName: "Fixture Codex", config: { cli: FAKE_CODEX_CLI } },
+      },
+    }));
+
+    let isolatedStderr = "";
+    const isolatedChild = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
+      cwd: ROOT,
+      env: {
+        ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
+        ...(process.env.PATHEXT ? { PATHEXT: process.env.PATHEXT } : {}),
+        ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+        HOME: isolatedHome,
+        USERPROFILE: isolatedHome,
+        OMB_PORT: String(isolatedPort),
+        OMB_WEBHOOK_PORT: String(isolatedPort + 1),
+        OMB_STATIC_DIR: isolatedStatic,
+        FAKE_CODEX_VERSION: "codex-cli 0.167.1",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    isolatedChild.stderr!.on("data", (chunk) => (isolatedStderr += chunk));
+    const isolatedApi = async (method: string, path: string, body?: unknown): Promise<{ status: number; body: any }> => {
+      const response = await fetch(`http://127.0.0.1:${isolatedPort}${path}`, {
+        method,
+        headers: body ? { "content-type": "application/json" } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      return { status: response.status, body: await response.json() };
+    };
+
+    try {
+      await waitForIsolatedServer(isolatedChild, isolatedPort, () => isolatedStderr);
+      const selection = { instanceId: "codex", model: "raven::narrow" };
+      const bot = (await isolatedApi("POST", "/api/bots", { modelSelection: selection, requireAvailableModel: true })).body.bot;
+
+      const allowed = await isolatedApi("PATCH", `/api/bots/${bot.id}/model`, { ...selection, contextWindowTokens: 128_000 });
+      expect(allowed.status, JSON.stringify(allowed.body)).toBe(200);
+
+      const rejected = await isolatedApi("PATCH", `/api/bots/${bot.id}/model`, { ...selection, contextWindowTokens: 200_000 });
+      expect(rejected.status).toBe(400);
+      expect(rejected.body.error).toBe("contextWindowTokens exceeds this model's context window");
+    } finally {
+      await waitForExit(isolatedChild, { signal: "SIGTERM" });
+      await removeTempDir(isolatedHome);
+    }
+    expectStoppedTestServerCleanly(isolatedChild, isolatedStderr);
+  }, 30_000);
 
   it("refuses paired model changes while the bot is working but saves a reasoning level", async () => {
     const instances = (await api("GET", "/api/instances")).body.instances;
