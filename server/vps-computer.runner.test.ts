@@ -14,7 +14,7 @@ vi.mock("./procs.ts", async () => ({
   killCliTree: stopMock,
 }));
 
-import { defaultRunner, dockerCliInstallCommand } from "./vps-computer.ts";
+import { defaultRunner, dockerCliInstallCommand, VpsHostUnreachableError } from "./vps-computer.ts";
 import { resolveCliSpawn } from "./env-path.ts";
 
 type FakeChild = EventEmitter & {

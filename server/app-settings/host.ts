@@ -228,6 +228,7 @@ export function createAppSettings(deps: AppSettingsDeps) {
     const bot = store.bot(turn.botId);
     if (!bot) return refuse(404, "This bot no longer exists.");
     if (entry.tier === "owner-only") {
+      if (deps.guestDriven(turn.threadId) || deps.turnOwner(turn) === null) return refuse(403, `Settings change only in the owner's own conversation. Nothing changed; you may still read settings. ${whyNotOwners(notOwners(turn)!, settingLocation(entry.where))}`);
       const knownPlace = settingLocation(entry.where) !== entry.where;
       return refuse(403, knownPlace ? personOnly(entry.label, entry.where)
         : `${entry.label} is changed only by the owner, in ${entry.where}. Tell the user where to find it; do not try another way.`);
@@ -309,6 +310,8 @@ export function createAppSettings(deps: AppSettingsDeps) {
   return {
     async handle(body: Record<string, unknown>, turn: Turn, ended?: AbortSignal): Promise<{ status: number; body: Record<string, unknown> }> {
       if (typeof body.action === "string" && THEME_ACTIONS.includes(body.action)) return theme(turn, body);
+      if (body.action === "set") return set(turn, body, ended);
+      if (body.action === "show_card") return showCard(turn, body);
       if (deps.guestDriven(turn.threadId) || deps.turnOwner(turn) === null) return refuse(403, "Settings are available only in the owner's own conversation.");
       if (body.action === "find") {
         const query = typeof body.query === "string" ? body.query : "";
@@ -328,8 +331,6 @@ export function createAppSettings(deps: AppSettingsDeps) {
         return reply(200, { text: JSON.stringify({ ...describe(entry), help: entry.help, ...("allowed" in entry ? { allowed: entry.allowed } : {}),
           change: entry.tier === "owner-only" ? `only the ${entry.where === settingLocation(entry.where) ? "owner" : "person"}, in ${settingLocation(entry.where)}` : entry.tier === "secret" ? "set with no value opens a secure card" : entry.tier === "confirm" ? "set shows the user a Change/Cancel card and waits" : "set applies at once, with Undo on the card" }) });
       }
-      if (body.action === "set") return set(turn, body, ended);
-      if (body.action === "show_card") return showCard(turn, body);
       return refuse(400, `action must be find, get, set, show_card, places, ${THEME_ACTIONS.join(", ")}.`);
     },
 
