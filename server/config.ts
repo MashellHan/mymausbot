@@ -9,7 +9,6 @@ import { z } from "zod";
 import type { ImageGenerationConfig } from "../shared/image-generation.ts";
 import { imageGenConfigSchema, imageGenPatchSchema, keepKeysOutOfImageModels, type ImageGenCredentialPatch } from "./image-generation-config.ts";
 import { botAvatarUrlSchema } from "../shared/bot-avatar.ts";
-import { writeFileAtomic } from "./atomic.ts";
 import { isValidSshAlias, normalizeVpsConfig, storedVpsServersSchema, vpsConfigSchema, vpsServersSchema, type VpsServer } from "./vps-config.ts";
 import { configBackupRefusal, configSaveRefusal, readConfigFile, writeConfigBackup } from "./config-backup.ts";
 import { defaultBotThreads, MAX_CONCURRENT_BOT_THREADS } from "./bot-thread-limits.ts";
