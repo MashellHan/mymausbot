@@ -416,6 +416,10 @@ describe("persistent Mini App frame", () => {
     expect(miniAppFrameDocument(report, false).can.openLinks).toBe(false);
     expect(miniAppFrameDocument({ ...report, app: { ...report.app, status: "archived" } }, true).can.openLinks).toBe(false);
     expect(miniAppFrameDocument({ ...report, app: { ...report.app, shippedTemplateKind: "bookkeeping" } }, true).can.openLinks).toBe(false);
+    expect(miniAppFrameDocument(teamDocument, true).can.openLinks).toBe(true);
+    expect(miniAppFrameDocument(teamDocument, false).can.openLinks).toBe(false);
+    expect(miniAppFrameDocument({ ...teamDocument, app: { ...teamDocument.app, status: "archived" } }, true).can.openLinks).toBe(false);
+    expect(miniAppFrameDocument({ ...teamDocument, app: { ...teamDocument.app, dashboardIdentity: null } }, true).can.openLinks).toBe(false);
     for (const [doc, allowed] of [[reportDoc, true], [miniAppFrameDocument(document, false), false]] as const) {
       const view = new HappyWindow({ settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
       const sent: Array<Record<string, unknown>> = [];

@@ -85,30 +85,62 @@ async function observePiContexts(agents: Record<string, unknown>[], sessions: Ma
   } catch { return new Map(); }
 }
 
-async function observeAgyProcesses(panes: readonly string[], run: HerdrRunner): Promise<{
+const AGY_PROCESS_CACHE_TTL_MS = 30_000;
+
+interface AgyProcessCacheEntry {
+  key: string;
+  at: number;
+  model: string | null;
+  conversation: string | null;
+}
+
+async function observeAgyProcesses(
+  panes: readonly { pane: string; key: string }[],
+  run: HerdrRunner,
+  cache: Map<string, AgyProcessCacheEntry>,
+  nowMs: number,
+): Promise<{
   models: Map<string, string>;
   conversations: Map<string, string>;
 }> {
   const models = new Map<string, string>();
   const conversations = new Map<string, string>();
-  if (!panes.length) return { models, conversations };
-  await Promise.all(panes.slice(0, 24).map(async (pane) => {
+  if (!panes.length) {
+    cache.clear();
+    return { models, conversations };
+  }
+  const activePanes = new Set<string>();
+  const toProbe: { pane: string; key: string }[] = [];
+  for (const entry of panes.slice(0, 24)) {
+    activePanes.add(entry.pane);
+    const cached = cache.get(entry.pane);
+    if (cached && cached.key === entry.key && nowMs - cached.at < AGY_PROCESS_CACHE_TTL_MS) {
+      if (cached.model) models.set(entry.pane, cached.model);
+      if (cached.conversation) conversations.set(entry.pane, cached.conversation);
+    } else {
+      toProbe.push(entry);
+    }
+  }
+  for (const pane of cache.keys()) {
+    if (!activePanes.has(pane)) cache.delete(pane);
+  }
+  if (!toProbe.length) return { models, conversations };
+  await Promise.all(toProbe.map(async ({ pane, key }) => {
     try {
       const { result } = JSON.parse(await run(["--session", "default", "pane", "process-info", "--pane", pane]));
       const info = result?.process_info;
       const processes = info?.pane_id === pane ? info.foreground_processes : null;
       if (!Array.isArray(processes)) return;
+      let model: string | null = null;
+      let conversation: string | null = null;
       for (const proc of processes) {
         if (!Array.isArray(proc?.argv)) continue;
-        if (!models.has(pane)) {
-          const model = agyModelFromArgv(proc.argv);
-          if (model) models.set(pane, model);
-        }
-        if (!conversations.has(pane)) {
-          const conversation = agyConversationFromArgv(proc.argv);
-          if (conversation) conversations.set(pane, conversation);
-        }
+        if (!model) model = agyModelFromArgv(proc.argv);
+        if (!conversation) conversation = agyConversationFromArgv(proc.argv);
       }
+      if (model) models.set(pane, model);
+      if (conversation) conversations.set(pane, conversation);
+      cache.set(pane, { key, at: nowMs, model, conversation });
     } catch { /* fallback to settings.json default */ }
   }));
   return { models, conversations };
@@ -179,6 +211,7 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
   let pendingRoster: Promise<LocalAgentTeamsResponse | null> | null = null;
   let revision = 0;
   const bindingFile = bindingCachePath ? new OwnedFile(bindingCachePath, { mode: 0o600 }) : null;
+  const agyProcessCache = new Map<string, AgyProcessCacheEntry>();
   let restoredBindings: Promise<BindingState> | undefined;
   let bindingStarts: BindingState | undefined;
 
@@ -257,13 +290,20 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         const id = agySessionId(agent);
         return id ? [[String(agent.pane_id), id] as const] : [];
       }));
-      const agyPanes = agents.flatMap((agent) =>
-        agent.agent === "agy" && typeof agent.pane_id === "string" && agent.pane_id ? [agent.pane_id] : []);
+      const agyPaneEntries = agents.flatMap((agent) => {
+        if (agent.agent !== "agy" || typeof agent.pane_id !== "string" || !agent.pane_id) return [];
+        const pane = agent.pane_id;
+        const occupant = localAgentOccupantId(agent, pane) ?? "";
+        const terminal = typeof agent.terminal_id === "string" ? agent.terminal_id : "";
+        const sid = agySessions.get(pane) ?? "";
+        return [{ pane, key: `${terminal}\0${occupant}\0${sid}` }];
+      });
+      const agyPanes = agyPaneEntries.map((entry) => entry.pane);
       const openCodeIds = [...openCodeSessions.values()];
       const openCodeFiles = openCodeUsageDatabases(home);
       const [observations, roles, piSessions, agyProcesses] = await Promise.all([
         observationsFor(agents), localAgentRoles(verified, home), piSessionsFor(verified),
-        observeAgyProcesses(agyPanes, run),
+        observeAgyProcesses(agyPaneEntries, run, agyProcessCache, sampledAt),
       ]);
       // When Herdr has not yet emitted `agent_session` for an idle resumed Agy pane (before its first new turn),
       // recover its uniquely claimed `--conversation <uuid>` from the live pane's process argv so model/effort/context/usage stay visible.

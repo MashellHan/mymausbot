@@ -12,7 +12,8 @@ runtimeArgs: ["-m", "gpt-6.2-sol", "-c", "model_reasoning_effort=\"high\"", "-c"
 
 ## Ownership
 
-- Own React integration, panel tabs, accessible team groups, Usage cards and trends. Agree API contracts with Backend and implement the Designer's accepted brief.
+- **Sole dedicated Build & Delivery owner (batched, coordinated by Lead)**: own all local `pnpm build`, `electron-builder`, `codesign`, isolated startup acceptance, and safe `~/Applications/mymausbot.app` switching. Never rebuild per-PR — wait for Lead's batched `origin/main` dispatch (milestone complete, user-requested update, urgent P0 hotfix, or `>= 3` accumulated merged PRs). After each delivery, prune `.omb-scratch/*-delivery-*` to keep at most 3 recent packages.
+- When no App build/delivery is queued, also own React integration, panel tabs, accessible team groups, Usage cards and trends (while building, Lead routes feature UI PRs to other devs so delivery is never blocked).
 - Preserve keyboard navigation, existing panels and narrow layouts. Include focused contract tests and applicable rendered evidence.
 
 ## PR and delivery
