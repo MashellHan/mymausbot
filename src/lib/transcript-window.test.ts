@@ -5,6 +5,7 @@ import {
   SELECTION_HOLD_MAX,
   TRANSCRIPT_WINDOW_MAX,
   TRANSCRIPT_WINDOW_SIZE,
+  TRANSCRIPT_WINDOW_STEP,
   capWindowEnd,
   expandWindowStart,
   firstFrameRow,
@@ -184,9 +185,10 @@ describe("a two-sided window", () => {
 
   it("draws at most the cap however many steps up the reader takes, then as many back down", () => {
     const total = 3_000;
+    const steps = Math.ceil(total / TRANSCRIPT_WINDOW_STEP);
     let window: TranscriptWindowBounds = { start: tailWindowStart(total), end: null };
     const seen = new Set<number>();
-    for (let step = 0; step < 30; step++) {
+    for (let step = 0; step < steps; step++) {
       window = windowEarlier(window, total);
       const shown = drawn(total, window);
       expect(shown.visible.length).toBeLessThanOrEqual(TRANSCRIPT_WINDOW_MAX);
@@ -196,18 +198,21 @@ describe("a two-sided window", () => {
     expect(window).toEqual({ start: 0, end: TRANSCRIPT_WINDOW_MAX });
     expect(seen.size, "every row was drawn on the way up").toBe(total);
 
-    for (let step = 0; step < 30; step++) {
+    for (let step = 0; step < steps; step++) {
+      const before = window;
       window = windowLater(window, total);
       expect(drawn(total, window).visible.length).toBeLessThanOrEqual(TRANSCRIPT_WINDOW_MAX);
+      expect((window.end ?? total) - (before.end ?? total), "a step mounts at most one step of rows").toBeLessThanOrEqual(TRANSCRIPT_WINDOW_STEP);
     }
     expect(window).toEqual({ start: total - TRANSCRIPT_WINDOW_MAX, end: null });
   });
 
   it("keeps the rows it had on each step, so the row under the reader stays drawn", () => {
     const total = 1_000;
+    expect(TRANSCRIPT_WINDOW_STEP).toBe(20);
     const up = windowEarlier({ start: 500, end: 740 }, total);
-    expect(up).toEqual({ start: 380, end: 620 });
-    const down = windowLater({ start: 380, end: 620 }, total);
+    expect(up).toEqual({ start: 480, end: 720 });
+    const down = windowLater({ start: 480, end: 720 }, total);
     expect(down).toEqual({ start: 500, end: 740 });
   });
 
@@ -218,8 +223,8 @@ describe("a two-sided window", () => {
   });
 
   it("moves over an older page put in front: one step of it at the top, the same rows anywhere else", () => {
-    expect(windowAfterPrepend({ start: 0, end: null }, 200, 400)).toEqual({ start: 80, end: 320 });
-    expect(windowAfterPrepend({ start: 0, end: null }, 50, 100)).toEqual({ start: 0, end: null });
+    expect(windowAfterPrepend({ start: 0, end: null }, 200, 400)).toEqual({ start: 200 - TRANSCRIPT_WINDOW_STEP, end: null });
+    expect(windowAfterPrepend({ start: 0, end: null }, 50, 100)).toEqual({ start: 50 - TRANSCRIPT_WINDOW_STEP, end: null });
     expect(windowAfterPrepend({ start: 40, end: 200 }, 200, 600)).toEqual({ start: 240, end: 400 });
   });
 
