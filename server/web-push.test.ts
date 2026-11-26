@@ -10,9 +10,11 @@ import {
   activityTopicForThread,
   type WebPushPayload,
 } from "../shared/web-push.ts";
+import { defaultPwaBridgeConfig, savePwaBridgeConfig } from "./pwa-bridge-config.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import { vapidPublicKeyObject } from "./web-push-crypto.ts";
 import {
+  DEFAULT_VAPID_SUBJECT,
   WEB_PUSH_ACTIVITY_MIN_INTERVAL_MS,
   WEB_PUSH_COALESCE_MS,
   WEB_PUSH_DEVICE_WINDOW_MAX,
@@ -22,6 +24,7 @@ import {
   WEB_PUSH_VAPID_FILE,
   WebPushService,
   buildRedactedNotificationPayload,
+  defaultVapidSubject,
   isForbiddenWebPushIp,
   resolveAndValidateWebPushEndpoint,
   validateWebPushEndpoint,
@@ -444,5 +447,41 @@ describe("WebPushService", () => {
     clock += 16_000;
     await expect(service.sendTest("session:s-test")).rejects.toMatchObject({ status: 429 });
     expect(requests).toHaveLength(2);
+  });
+
+  it("uses a non-.invalid default VAPID subject, prefers configured pwaOrigin or env override, and logs redacted 403 diagnostics", async () => {
+    expect(DEFAULT_VAPID_SUBJECT).toBe("https://openmausbot.com");
+    expect(DEFAULT_VAPID_SUBJECT.endsWith(".invalid")).toBe(false);
+    expect(defaultVapidSubject(dataDir, {})).toBe(DEFAULT_VAPID_SUBJECT);
+    expect(defaultVapidSubject(dataDir, { OMB_WEB_PUSH_SUBJECT: "mailto:ops@example.com" })).toBe("mailto:ops@example.com");
+    expect(defaultVapidSubject(dataDir, { OMB_WEB_PUSH_SUBJECT: "mailto:bad@openmausbot.invalid" })).toBe(DEFAULT_VAPID_SUBJECT);
+    expect(defaultVapidSubject(dataDir, { OMB_WEB_PUSH_SUBJECT: "https://localhost:3000" })).toBe(DEFAULT_VAPID_SUBJECT);
+
+    savePwaBridgeConfig(dataDir, { ...defaultPwaBridgeConfig(), pwaOrigin: "http://127.0.0.1:4173" });
+    expect(defaultVapidSubject(dataDir, {})).toBe(DEFAULT_VAPID_SUBJECT);
+
+    savePwaBridgeConfig(dataDir, { ...defaultPwaBridgeConfig(), pwaOrigin: "https://app.openmausbot.invalid" });
+    expect(defaultVapidSubject(dataDir, {})).toBe(DEFAULT_VAPID_SUBJECT);
+
+    savePwaBridgeConfig(dataDir, { ...defaultPwaBridgeConfig(), pwaOrigin: "https://mausbot.mxhan.com" });
+    expect(defaultVapidSubject(dataDir, {})).toBe("https://mausbot.mxhan.com");
+    expect(defaultVapidSubject(dataDir, { OMB_WEB_PUSH_SUBJECT: "https://custom.example.com" })).toBe("https://custom.example.com");
+
+    const keys = makeDeviceKeys();
+    const secretPath = "/QMx/secret-apple-device-token-999";
+    const { service, requests, logs } = createHarness({ responses: [{ status: 403 }] });
+    await service.upsertSubscription("session:s-403", {
+      endpoint: `https://web.push.apple.com${secretPath}`,
+      keys: { p256dh: keys.p256dh, auth: keys.auth },
+    });
+
+    const result = await service.sendTest("session:s-403");
+    expect(result).toEqual({ ok: false, sent: 0, failed: 1, pruned: 0 });
+    expect(requests).toHaveLength(1);
+    const jwt = /^vapid t=([^,]+), k=/.exec(requests[0]!.headers.authorization!)?.[1] ?? "";
+    const claims = JSON.parse(Buffer.from(jwt.split(".")[1]!, "base64url").toString("utf8")) as { sub: string };
+    expect(claims.sub).toBe("https://mausbot.mxhan.com");
+    expect(logs).toContain("[web-push] delivery rejected by https://web.push.apple.com (HTTP 403)");
+    expect(logs.join("\n")).not.toContain(secretPath);
   });
 });
