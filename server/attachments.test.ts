@@ -235,9 +235,9 @@ describe("saveAudio", () => {
 });
 
 describe("attachmentsMaxBytes", () => {
-  it("keeps 512 MB unless OMB_ATTACHMENTS_MAX_BYTES is a positive whole number of bytes", () => {
+  it("keeps 2 GB unless OMB_ATTACHMENTS_MAX_BYTES is a positive whole number of bytes", () => {
     expect(ATTACHMENTS_MAX_BYTES).toBe(DEFAULT_ATTACHMENTS_MAX_BYTES);
-    expect(attachmentsMaxBytes({})).toBe(512 * 1024 * 1024);
+    expect(attachmentsMaxBytes({})).toBe(2 * 1024 * 1024 * 1024);
     expect(attachmentsMaxBytes({ OMB_ATTACHMENTS_MAX_BYTES: " 4294967296 " })).toBe(4 * 1024 * 1024 * 1024);
     for (const bad of ["", "0", "-1", "2GB", "1.5", "NaN"]) {
       expect(attachmentsMaxBytes({ OMB_ATTACHMENTS_MAX_BYTES: bad })).toBe(DEFAULT_ATTACHMENTS_MAX_BYTES);
@@ -263,7 +263,7 @@ describe("aggregate attachment storage", () => {
       throw new Error("expected quota rejection");
     } catch (error) {
       expect(error).toMatchObject({ status: 507 });
-      expect(error).toHaveProperty("message", "attachments storage is full (512 MB limit). Clear old attachments in Settings → General.");
+      expect(error).toHaveProperty("message", "attachments storage is full (2 GB limit). Clear old attachments in Settings → General.");
     }
     expect(existsSync(referenced.path)).toBe(true);
     expect(statSync(referenced.path).size).toBe(ATTACHMENTS_MAX_BYTES);
@@ -771,7 +771,7 @@ describe("clearing attachments from Settings", () => {
     __resetAttachmentAccountingForTests();
     offerAttachmentClear(false);
     try {
-      expect(() => saveImage(Buffer.from("y"), "image/png")).toThrow(/^attachments storage is full \(512 MB limit\)$/);
+      expect(() => saveImage(Buffer.from("y"), "image/png")).toThrow(/^attachments storage is full \(2 GB limit\)$/);
     } finally {
       offerAttachmentClear(true);
     }
