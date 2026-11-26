@@ -12033,5 +12033,17 @@
   "server.checkWork.restarted": "the app restarted",
   "cloudSignIn.opencode": "OpenCode",
   "cloudSignIn.opencodeHint": "Free models, no account needed.",
-  "onboarding.meet.setUp": "Set up {name}"
+  "onboarding.meet.setUp": "Set up {name}",
+  "cloudBuy.signIn.saved": "This computer has a saved MausBot Cloud sign-in that it can't read, so a new sign-in can't start.",
+  "cloudBuy.signIn.reset": "Clear it and send the code",
+  "cloudBuy.signIn.savedWait": "This computer couldn't open its saved MausBot Cloud sign-in yet. If your system asks you to unlock your keychain, unlock it. The app tries again by itself, and offers to clear it if it still can't.",
+  "cloudBuy.signIn.connecting": "A sign-in is still under way in your browser.",
+  "cloudBuy.signIn.cancelBrowser": "Cancel it and send the code",
+  "cloudBuy.signIn.busy": "This app is still opening its MausBot Cloud sign-in. Try again in a moment.",
+  "cloudBuy.signIn.signedIn": "This computer is already signed in to MausBot Cloud.",
+  "cloudAccount.savedStuck": "This computer can't read or remove its saved MausBot Cloud sign-in. Clear it to sign in again. Your plan and My Cloud aren't affected.",
+  "cloudAccount.resetSaved": "Clear and sign in again",
+  "cloudAccount.resetKept": "The saved sign-in couldn't be removed from this computer, but you can sign in now. After the app restarts, it may ask you to clear it again.",
+  "cloudAccount.unsaved": "Signed in for now. This computer couldn't save the sign-in, so the app asks you to sign in again after it restarts.",
+  "homeScreen.offlineNetwork": "This computer couldn't connect to {host}. If My Cloud opens on another device or network, check whether a VPN, firewall or DNS filter here blocks that address."
 }
