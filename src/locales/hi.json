@@ -3758,5 +3758,6 @@
   "whatsNew.team.sales": "सेल्स",
   "whatsNew.team.start": "टीम शुरू करें",
   "whatsNew.team.support": "सपोर्ट",
-  "whatsNew.team.title": "आपकी पूरी टीम के लिए साझा बॉट"
+  "whatsNew.team.title": "आपकी पूरी टीम के लिए साझा बॉट",
+  "server.teammates.noLongerWaiting": "{who} अब आपका इंतज़ार नहीं कर रहा"
 }

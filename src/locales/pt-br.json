@@ -11295,5 +11295,12 @@
   "workspaces.upgraded": "Todas as instalações em execução foram reiniciadas na nova versão.",
   "workspaces.users": "Usuários",
   "workspaces.usersTitle": "Quem pode entrar em {slug}",
-  "workspaces.working": "Trabalhando…"
+  "workspaces.working": "Trabalhando…",
+  "backup.exportReconnecting": "Reconectando para verificar seu backup…",
+  "backup.exportUnavailable": "Este backup não está mais disponível. Exporte novamente e informe a senha do backup.",
+  "server.teammates.noLongerWaiting": "{who} não está mais esperando você",
+  "chat.notice.waitingPasswordElsewhere": "Esperando você em @{name}: {label}",
+  "chat.notice.waitingSignInElsewhere": "Esperando você entrar em {label} em @{name}",
+  "chat.notice.waitingConnectElsewhere": "Esperando você conectar {label} em @{name}",
+  "chat.notice.waitingReviewElsewhere": "Esperando sua revisão em @{name}"
 }

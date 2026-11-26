@@ -38,6 +38,7 @@ import { extractSteerImages } from "../turn-images.ts";
 import { followupFacts, helperFollowup, helperFollowupBody, mayFollowUp } from "../helper-followup.ts";
 import type { UsageTrigger } from "../usage-ledger.ts";
 import { noteOwnWindowSend } from "../own-window-sends.ts";
+import { forgetSendingSession, noteSendingSession } from "../sending-sessions.ts";
 import { noteTypedSend } from "../typed-sends.ts";
 import { engineSessionOutdated, startFresh } from "../fresh-start.ts";
 import { parseMentionPicks } from "../../shared/room-mentions.ts";
@@ -350,6 +351,7 @@ export function createBotMessageRoutes(deps: BotMessageRouteDeps): RouteHandler 
       // Only a new line the send itself adds: a repeat or a collision must not lend the proof to a line already there or waiting.
       const ownWindowSend = DESKTOP_MANAGED && auth.kind === "loopback" && !auth.companionDevice && sendId && !guarded && !press && !appSent
         && !store.messagesFor(threadId).some((line) => line.sendId === sendId) && !queuedSteeredMessage(bot.id, threadId, sendId);
+      const notedSession = auth.kind === "session" && sendId ? noteSendingSession(threadId, sendId, auth.session.id) : false;
       if (pressKey) pressesInFlight.set(pressKey, sendId);
       try {
         const receipt = await acceptDirectSend({
@@ -364,6 +366,7 @@ export function createBotMessageRoutes(deps: BotMessageRouteDeps): RouteHandler 
         return json(res, 202, receipt);
       } catch (error) {
         slot?.release();
+        if (notedSession) forgetSendingSession(threadId, sendId!);
         if (error instanceof DirectSendRefused) return json(res, error.status, error.body);
         throw error;
       } finally {
