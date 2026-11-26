@@ -1,5 +1,5 @@
 /** Self-hosted Web Push (RFC 8030 / 8291 / 8292) delivery pipeline, VAPID storage,
- * SSRF-guarded push delivery, lock-screen redaction, SSE focus dedupe, coalescing and throttling.
+ * SSRF-guarded push delivery, localized secret-scrubbed previews, SSE focus dedupe, coalescing and throttling.
  */
 import { lookup as dnsLookup } from "node:dns/promises";
 import type { LookupAddress } from "node:dns";
@@ -11,19 +11,9 @@ import { z } from "zod";
 
 import {
   DEFAULT_WEB_PUSH_PREFERENCES,
-  WEB_PUSH_ACTIVITY_NOTIFY_KINDS,
-  WEB_PUSH_BODY_MAX,
-  WEB_PUSH_FAILURE_KINDS,
-  WEB_PUSH_ID_MAX,
   WEB_PUSH_LABEL_MAX,
-  WEB_PUSH_TITLE_MAX,
-  WEB_PUSH_URGENT_KINDS,
-  WEB_PUSH_WIRE_VERSION,
-  activityTopicForThread,
   normalizeWebPushPreferences,
-  notificationTag,
   type PublicWebPushSubscription,
-  type WebPushActivityPhase,
   type WebPushPayload,
   type WebPushPreferences,
   type WebPushSubscriptionInput,
@@ -32,7 +22,6 @@ import {
 import { writeFileAtomic } from "./atomic.ts";
 import { PUSH_DEVICE_KEY } from "./phone-push.ts";
 import { PWA_BRIDGE_CONFIG_FILE, loadPwaBridgeConfig } from "./pwa-bridge-config.ts";
-import { conversationLanguage, serverLine, type ServerLineKey } from "./server-lines.ts";
 import {
   buildVapidHeaders,
   decodeBase64UrlStrict,
@@ -51,12 +40,36 @@ import {
   resolveAndValidateWebPushEndpoint,
   validateWebPushEndpoint,
 } from "./web-push-endpoint.ts";
+import {
+  ACTIVITY_NOTIFY_SET,
+  FAILURE_NOTIFY_SET,
+  SAFE_ID,
+  URGENT_NOTIFY_SET,
+  buildActivityPayload,
+  buildNotificationPayload,
+  buildRedactedActivityPayload,
+  buildRedactedNotificationPayload,
+  buildTestPayload,
+  clipText,
+  notifyOf,
+  preferenceEnabledForKind,
+  type WebPushActivityDetail,
+  type WebPushNotificationInput,
+  type WebPushRoomInfo,
+} from "./web-push-payload.ts";
 
 export {
   WebPushEndpointError,
+  buildActivityPayload,
+  buildNotificationPayload,
+  buildRedactedActivityPayload,
+  buildRedactedNotificationPayload,
   isForbiddenWebPushIp,
   resolveAndValidateWebPushEndpoint,
   validateWebPushEndpoint,
+  type WebPushActivityDetail,
+  type WebPushNotificationInput,
+  type WebPushRoomInfo,
 };
 
 export const WEB_PUSH_VAPID_FILE = "web-push-vapid.json";
@@ -95,6 +108,7 @@ export const MAX_WEB_PUSH_SUBSCRIPTIONS_PER_DEVICE = 4;
 export const WEB_PUSH_COALESCE_MS = 10_000;
 export const WEB_PUSH_TEST_COOLDOWN_MS = 15_000;
 export const WEB_PUSH_ACTIVITY_MIN_INTERVAL_MS = 20_000;
+export const WEB_PUSH_NOTIFY_DEDUPE_MS = 15_000;
 export const WEB_PUSH_DEVICE_WINDOW_MS = 10 * 60_000;
 export const WEB_PUSH_DEVICE_WINDOW_MAX = 30;
 export const WEB_PUSH_MAX_AGE_MS = 10 * 60_000;
@@ -102,6 +116,8 @@ export const WEB_PUSH_RETRY_MS = [5_000, 30_000, 120_000] as const;
 export const WEB_PUSH_FOCUS_TTL_MS = 5 * 60_000;
 const WEB_PUSH_TIMEOUT_MS = 10_000;
 const PUSH_TTL_SECONDS = 3600;
+const MAX_SEEN_NOTIFY_IDS = 500;
+const MAX_RECENT_NOTIFY_SIGNATURES = 1_000;
 
 export const webPushPreferencesSchema = z.object({ enabled: z.boolean().optional(), urgent: z.boolean().optional(), finished: z.boolean().optional(), failures: z.boolean().optional(), mentions: z.boolean().optional(), spend: z.boolean().optional(), liveActivities: z.boolean().optional() }).strict();
 
@@ -141,20 +157,6 @@ export interface WebPushTransportResponse {
 }
 
 export type WebPushTransport = (req: WebPushTransportRequest) => Promise<WebPushTransportResponse>;
-
-export interface WebPushNotificationInput {
-  id?: string;
-  kind: string;
-  botId: string;
-  botName: string;
-  threadId: string;
-  groupId?: string;
-}
-
-export interface WebPushRoomInfo {
-  id: string;
-  name: string;
-}
 
 export interface WebPushBotState {
   id: string;
@@ -206,32 +208,6 @@ interface FocusRecord {
   updatedAt: number;
 }
 
-const SAFE_ID = /^[\w-]{1,120}$/;
-
-const TITLE_KEYS: Readonly<Record<string, ServerLineKey>> = { approval: "server.notify.approval", question: "server.notify.question", "sign-in": "server.notify.signInWebsite", secret: "server.notify.secret", done: "server.notify.done", "turn-failed": "server.notify.turnFailed", "routine-failed": "server.notify.routineFailed", incident: "server.notify.incident", mention: "server.notify.mention", "delegation-settled": "server.notify.delegationSettled", wait: "server.notify.wait" };
-const REDACTED_BODY_PHRASES: Readonly<Record<string, string>> = { approval: "Approval requested", question: "Question waiting for reply", "sign-in": "Sign-in requested", secret: "Credential requested", done: "Finished a turn", "turn-failed": "Turn could not finish", "routine-failed": "Routine needs attention", incident: "Bot needs attention", mention: "Mentioned you", spend: "Monthly spend notice", "delegation-settled": "Results ready", wait: "Wait completed", brief: "New brief item" };
-const ACTIVITY_PHASE_PHRASES: Readonly<Record<WebPushActivityPhase, string>> = { started: "Started working", working: "Working on task", waiting: "Waiting for your input", done: "Finished working", failed: "Stopped with an error" };
-
-const URGENT_SET = new Set<string>(WEB_PUSH_URGENT_KINDS);
-const FAILURE_SET = new Set<string>(WEB_PUSH_FAILURE_KINDS);
-const ACTIVITY_NOTIFY_SET = new Set<string>(WEB_PUSH_ACTIVITY_NOTIFY_KINDS);
-
-const ACTIVITY_STAGE_EVENTS = new Set<string>([
-  "turn.started",
-  "turn.completed",
-  "turn.wait_started",
-  "turn.wait_ended",
-  "request.opened",
-  "request.resolved",
-  "session.exited",
-]);
-
-function clipText(value: string, max: number): string {
-  const clean = value.replace(/[\p{Cc}\u2028\u2029]/gu, " ").replace(/\s+/g, " ").trim();
-  const points = [...clean];
-  return points.length > max ? `${points.slice(0, max - 1).join("")}…` : points.join("");
-}
-
 function endpointOriginOf(endpoint: string): string {
   try {
     return new URL(endpoint).origin;
@@ -252,108 +228,6 @@ export function publicWebPushSubscription(sub: StoredWebPushSubscription): Publi
   };
 }
 
-function preferenceEnabledForKind(prefs: WebPushPreferences, kind: string): boolean {
-  if (!prefs.enabled) return false;
-  if (URGENT_SET.has(kind)) return prefs.urgent;
-  if (kind === "done") return prefs.finished;
-  if (FAILURE_SET.has(kind)) return prefs.failures;
-  if (kind === "mention") return prefs.mentions;
-  if (kind === "spend") return prefs.spend;
-  if (kind === "activity" || ACTIVITY_NOTIFY_SET.has(kind)) return prefs.liveActivities;
-  return false;
-}
-
-function buildDeepLink(threadId?: string, botId?: string): string | undefined {
-  if (threadId && SAFE_ID.test(threadId)) {
-    return `/chat/${encodeURIComponent(threadId)}`;
-  }
-  if (botId && SAFE_ID.test(botId)) {
-    return `/bot/${encodeURIComponent(botId)}`;
-  }
-  return "/";
-}
-
-/**
- * Builds a strictly lock-screen-redacted Web Push payload from IDs, bot/room names, and kind/phase only.
- * Never consumes raw notification text, tool input/output, or secrets.
- */
-export function buildRedactedNotificationPayload(
-  notification: WebPushNotificationInput,
-  options: { id: string; ts: number; room?: WebPushRoomInfo; unreadCount?: number },
-): WebPushPayload | null {
-  if (!SAFE_ID.test(notification.botId) || !SAFE_ID.test(notification.threadId)) return null;
-  if (!REDACTED_BODY_PHRASES[notification.kind]) return null;
-  const botName = clipText(notification.botName, 60) || "MausBot";
-  const roomName = options.room && SAFE_ID.test(options.room.id) ? clipText(options.room.name, 60) : "";
-  const language = conversationLanguage(notification.threadId);
-  const who = roomName ? serverLine(language, "server.notify.inRoom", { bot: botName, room: roomName }) : botName;
-
-  let title: string;
-  if (notification.kind === "spend") {
-    title = `${botName} spend update`;
-  } else if (notification.kind === "brief") {
-    title = `${botName} brief update`;
-  } else if (notification.kind === "secret") {
-    // Do not include secret labels on the lock screen.
-    title = `${who} needs a credential`;
-  } else {
-    const key = TITLE_KEYS[notification.kind] ?? "server.notify.done";
-    title = serverLine(language, key, { who });
-  }
-
-  const isActivityKind = ACTIVITY_NOTIFY_SET.has(notification.kind);
-  const kind = notification.kind as WebPushPayload["kind"];
-  const topic = isActivityKind ? activityTopicForThread(notification.threadId) : undefined;
-  const tag = isActivityKind
-    ? notificationTag(notification.threadId, "activity", options.id)
-    : notificationTag(notification.threadId, kind, options.id);
-
-  return {
-    version: WEB_PUSH_WIRE_VERSION,
-    id: options.id,
-    kind,
-    title: clipText(title, WEB_PUSH_TITLE_MAX),
-    body: clipText(REDACTED_BODY_PHRASES[notification.kind]!, WEB_PUSH_BODY_MAX),
-    tag,
-    ...(topic ? { topic } : {}),
-    botId: notification.botId,
-    botName,
-    threadId: notification.threadId,
-    ...(options.room && roomName ? { groupId: options.room.id } : {}),
-    ...(options.unreadCount !== undefined ? { unreadCount: options.unreadCount } : {}),
-    ts: options.ts,
-    url: buildDeepLink(notification.threadId, notification.botId),
-  };
-}
-
-export function buildRedactedActivityPayload(
-  bot: { id: string; name: string; threadId: string; room?: WebPushRoomInfo },
-  phase: WebPushActivityPhase,
-  options: { id: string; ts: number; unreadCount?: number },
-): WebPushPayload | null {
-  if (!SAFE_ID.test(bot.id) || !SAFE_ID.test(bot.threadId)) return null;
-  const botName = clipText(bot.name, 60) || "MausBot";
-  const roomName = bot.room && SAFE_ID.test(bot.room.id) ? clipText(bot.room.name, 60) : "";
-  const who = roomName ? `${botName} in ${roomName}` : botName;
-  return {
-    version: WEB_PUSH_WIRE_VERSION,
-    id: options.id,
-    kind: "activity",
-    title: clipText(who, WEB_PUSH_TITLE_MAX),
-    body: ACTIVITY_PHASE_PHRASES[phase],
-    tag: notificationTag(bot.threadId, "activity", options.id),
-    topic: activityTopicForThread(bot.threadId),
-    botId: bot.id,
-    botName,
-    threadId: bot.threadId,
-    ...(bot.room && roomName ? { groupId: bot.room.id } : {}),
-    phase,
-    ...(options.unreadCount !== undefined ? { unreadCount: options.unreadCount } : {}),
-    ts: options.ts,
-    url: buildDeepLink(bot.threadId, bot.id),
-  };
-}
-
 export function httpsWebPushTransport(req: WebPushTransportRequest): Promise<WebPushTransportResponse> {
   return new Promise((resolve, reject) => {
     const pinnedLookup: LookupFunction = (_hostname, options, callback) => {
@@ -369,10 +243,7 @@ export function httpsWebPushTransport(req: WebPushTransportRequest): Promise<Web
         servername: req.url.hostname.replace(/^\[|\]$/g, ""),
         rejectUnauthorized: true,
         timeout: req.timeoutMs,
-        headers: {
-          ...req.headers,
-          "content-length": String(req.body.length),
-        },
+        headers: { ...req.headers, "content-length": String(req.body.length) },
       },
       (response) => {
         // Drain response without following redirects; redirect status codes are returned directly.
@@ -381,34 +252,13 @@ export function httpsWebPushTransport(req: WebPushTransportRequest): Promise<Web
         const retryVal = Array.isArray(rawRetryAfter) ? rawRetryAfter[0] : rawRetryAfter;
         const parsedRetry = Number(retryVal);
         const retryAfterMs = Number.isFinite(parsedRetry) && parsedRetry > 0 ? parsedRetry * 1_000 : undefined;
-        resolve({
-          status: response.statusCode ?? 0,
-          ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
-        });
+        resolve({ status: response.statusCode ?? 0, ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) });
       },
     );
-    request.on("timeout", () => {
-      request.destroy(new Error("Web Push request timed out"));
-    });
+    request.on("timeout", () => request.destroy(new Error("Web Push request timed out")));
     request.on("error", reject);
     request.end(req.body);
   });
-}
-
-function notifyOf(value: unknown): WebPushNotificationInput | null {
-  if (!value || typeof value !== "object") return null;
-  const { id, kind, botId, botName, threadId, groupId } = value as Record<string, unknown>;
-  if (typeof kind !== "string" || typeof botId !== "string" || typeof botName !== "string" || typeof threadId !== "string") {
-    return null;
-  }
-  return {
-    ...(typeof id === "string" && id.length <= WEB_PUSH_ID_MAX ? { id } : {}),
-    kind,
-    botId,
-    botName,
-    threadId,
-    ...(typeof groupId === "string" ? { groupId } : {}),
-  };
 }
 
 export class WebPushService {
@@ -427,8 +277,8 @@ export class WebPushService {
   private readonly focusedByKey = new Map<string, FocusRecord>();
   private readonly outbox = new Map<string, QueuedJob>();
   private readonly lastSentBySlot = new Map<string, number>();
-  private readonly lastActivityByThread = new Map<string, number>();
-  private readonly lastPhaseByThread = new Map<string, WebPushActivityPhase>();
+  private readonly seenNotifyIds = new Set<string>();
+  private readonly recentNotifySignatures = new Map<string, number>();
   private readonly sentTimestampsByDevice = new Map<string, number[]>();
   private readonly pausedUntilByOrigin = new Map<string, number>();
   private readonly lastTestByDevice = new Map<string, number>();
@@ -505,22 +355,17 @@ export class WebPushService {
   }
 
   vapidPublicKey(): string | null {
-    if (!this.isEnabled() || !this.vapid) return null;
-    return this.vapid.publicKey;
+    return this.isEnabled() && this.vapid ? this.vapid.publicKey : null;
   }
 
   getSubscription(key: string, endpoint?: string): PublicWebPushSubscription | null {
     const matches = this.subscriptions.filter((sub) => sub.key === key && (!endpoint || sub.endpoint === endpoint));
     if (!matches.length) return null;
-    const latest = matches.reduce((best, item) => (item.updatedAt >= best.updatedAt ? item : best));
-    return publicWebPushSubscription(latest);
+    return publicWebPushSubscription(matches.reduce((best, item) => (item.updatedAt >= best.updatedAt ? item : best)));
   }
 
   listSubscriptions(key: string): PublicWebPushSubscription[] {
-    return this.subscriptions
-      .filter((sub) => sub.key === key)
-      .map(publicWebPushSubscription)
-      .sort((a, b) => b.updatedAt - a.updatedAt);
+    return this.subscriptions.filter((sub) => sub.key === key).map(publicWebPushSubscription).sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
   async upsertSubscription(key: string, input: WebPushSubscriptionInput): Promise<PublicWebPushSubscription> {
@@ -529,7 +374,6 @@ export class WebPushService {
     }
     const { url } = await resolveAndValidateWebPushEndpoint(input.endpoint, this.lookup);
     const endpoint = url.toString();
-    // Validate keys & curve point before storing.
     normalizeP256dhKey(input.keys.p256dh);
     normalizeAuthSecret(input.keys.auth);
 
@@ -550,15 +394,11 @@ export class WebPushService {
         ? { ...(existingOwn?.preferences ?? DEFAULT_WEB_PUSH_PREFERENCES), ...input.preferences }
         : existingOwn?.preferences,
     );
-
     const cleanLabel = input.deviceLabel ? clipText(input.deviceLabel, WEB_PUSH_LABEL_MAX) : existingOwn?.deviceLabel;
     const stored: StoredWebPushSubscription = {
       key,
       endpoint,
-      keys: {
-        p256dh: input.keys.p256dh,
-        auth: input.keys.auth,
-      },
+      keys: { p256dh: input.keys.p256dh, auth: input.keys.auth },
       preferences,
       ...(cleanLabel ? { deviceLabel: cleanLabel } : {}),
       createdAt: existingOwn?.createdAt ?? now,
@@ -572,16 +412,12 @@ export class WebPushService {
 
   removeSubscription(key: string, endpoint?: string): number {
     const before = this.subscriptions.length;
-    this.subscriptions = this.subscriptions.filter(
-      (sub) => sub.key !== key || (endpoint !== undefined && sub.endpoint !== endpoint),
-    );
+    this.subscriptions = this.subscriptions.filter((sub) => sub.key !== key || (endpoint !== undefined && sub.endpoint !== endpoint));
     const removed = before - this.subscriptions.length;
     if (removed > 0) {
       this.persistSubscriptions();
       for (const [slot, job] of this.outbox) {
-        if (job.key === key && (!endpoint || job.endpoint === endpoint)) {
-          this.outbox.delete(slot);
-        }
+        if (job.key === key && (!endpoint || job.endpoint === endpoint)) this.outbox.delete(slot);
       }
     }
     return removed;
@@ -608,8 +444,7 @@ export class WebPushService {
    * avoiding duplicate alerts on the foreground screen.
    */
   isDeviceFocusedOnThread(key: string, threadId: string): boolean {
-    const liveSse = this.options.liveSseKeys?.().has(key) ?? false;
-    if (!liveSse) return false;
+    if (!(this.options.liveSseKeys?.().has(key) ?? false)) return false;
     const focus = this.focusedByKey.get(key);
     if (!focus) return false;
     if (this.now() - focus.updatedAt > WEB_PUSH_FOCUS_TTL_MS) {
@@ -622,42 +457,42 @@ export class WebPushService {
   offerBroadcast(payload: Record<string, unknown>, reaches: (key: string) => boolean): void {
     try {
       if (!this.subscriptions.length || !this.isEnabled() || !this.vapid) return;
-      const frameKind = String(payload.kind ?? "");
-      if (frameKind === "notify") {
+      if (String(payload.kind ?? "") === "notify") {
         this.offerNotifyFrame(payload.notification, reaches);
-        return;
-      }
-      if (frameKind === "bot") {
-        const botObj = payload.bot as Record<string, unknown> | undefined;
-        const botId = typeof botObj?.id === "string" ? botObj.id : null;
-        if (botId) this.offerActivityState(botId, undefined, reaches);
-        return;
-      }
-      if (frameKind === "runtime") {
-        const event = payload.event as Record<string, unknown> | undefined;
-        const type = typeof event?.type === "string" ? event.type : "";
-        const threadId = typeof event?.threadId === "string" ? event.threadId : "";
-        if (!ACTIVITY_STAGE_EVENTS.has(type) || !SAFE_ID.test(threadId)) return;
-        const botId = this.options.botOfThread?.(threadId);
-        if (!botId) return;
-        const phaseHint: WebPushActivityPhase | undefined =
-          type === "turn.started"
-            ? "started"
-            : type === "turn.wait_started" || type === "request.opened"
-              ? "waiting"
-              : type === "turn.wait_ended" || type === "request.resolved"
-                ? "working"
-                : type === "turn.completed"
-                  ? event?.ok === false
-                    ? "failed"
-                    : "done"
-                  : type === "session.exited"
-                    ? "done"
-                    : undefined;
-        this.offerActivityState(botId, phaseHint, reaches, threadId);
       }
     } catch (error) {
       this.log(`[web-push] could not queue push: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private hasSeenNotifyId(dedupeKey: string): boolean {
+    if (!this.seenNotifyIds.has(dedupeKey)) return false;
+    this.seenNotifyIds.delete(dedupeKey);
+    this.seenNotifyIds.add(dedupeKey);
+    return true;
+  }
+
+  private rememberNotifyId(dedupeKey: string): void {
+    this.seenNotifyIds.delete(dedupeKey);
+    this.seenNotifyIds.add(dedupeKey);
+    while (this.seenNotifyIds.size > MAX_SEEN_NOTIFY_IDS) {
+      const oldest = this.seenNotifyIds.values().next().value;
+      if (oldest === undefined) break;
+      this.seenNotifyIds.delete(oldest);
+    }
+  }
+
+  private rememberNotifySignature(sigKey: string, now: number): void {
+    this.recentNotifySignatures.delete(sigKey);
+    this.recentNotifySignatures.set(sigKey, now);
+    if (this.recentNotifySignatures.size <= MAX_RECENT_NOTIFY_SIGNATURES) return;
+    for (const [key, at] of this.recentNotifySignatures) {
+      if (now - at >= WEB_PUSH_NOTIFY_DEDUPE_MS) this.recentNotifySignatures.delete(key);
+    }
+    while (this.recentNotifySignatures.size > MAX_RECENT_NOTIFY_SIGNATURES) {
+      const oldest = this.recentNotifySignatures.keys().next().value;
+      if (oldest === undefined) break;
+      this.recentNotifySignatures.delete(oldest);
     }
   }
 
@@ -668,37 +503,50 @@ export class WebPushService {
     const now = this.now();
     const room = this.options.room?.(notification);
     const id = notification.id ?? `wp_${now}_${++this.seq}`;
-    const isUrgent = URGENT_SET.has(notification.kind), isFailure = FAILURE_SET.has(notification.kind), isActivityNotify = ACTIVITY_NOTIFY_SET.has(notification.kind), isSpend = notification.kind === "spend";
-    const urgency: QueuedJob["urgency"] = isUrgent ? "high" : isActivityNotify ? "low" : "normal", immediate = isUrgent || isFailure || notification.kind === "done";
+    const isUrgent = URGENT_NOTIFY_SET.has(notification.kind);
+    const isFailure = FAILURE_NOTIFY_SET.has(notification.kind);
+    const isActivityNotify = ACTIVITY_NOTIFY_SET.has(notification.kind);
+    const isSpend = notification.kind === "spend";
+    const urgency: QueuedJob["urgency"] = isUrgent ? "high" : isActivityNotify ? "low" : "normal";
+    const immediate = isUrgent || isFailure || notification.kind === "done";
+
+    let enqueued = false;
     for (const sub of this.subscriptions) {
       if ((isSpend && this.options.isAdmin && !this.options.isAdmin(sub.key)) || !preferenceEnabledForKind(sub.preferences, notification.kind) || !reaches(sub.key)) continue;
       if (!isUrgent && this.isDeviceFocusedOnThread(sub.key, notification.threadId)) continue;
-      const payload = buildRedactedNotificationPayload(notification, { id, ts: now, room, unreadCount: this.options.unreadCount?.(sub.key) });
-      if (!payload) continue;
-      this.enqueueJob({ slot: `${sub.key}|${sub.endpoint}|${notification.threadId}|${notification.kind}`, key: sub.key, endpoint: sub.endpoint, payload, urgency, ...(payload.topic ? { topic: payload.topic } : {}), immediate, isActivity: isActivityNotify, queuedAt: now });
-    }
-    this.kick();
-  }
 
-  private offerActivityState(botId: string, phaseHint: WebPushActivityPhase | undefined, reaches: (key: string) => boolean, threadHint?: string): void {
-    const bot = this.options.bot?.(botId); if (!bot) return;
-    const threadId = threadHint && SAFE_ID.test(threadHint) ? threadHint : bot.threadId;
-    const prev = this.lastPhaseByThread.get(threadId);
-    const phase: WebPushActivityPhase | undefined = phaseHint ?? (bot.hasOpenAsk ? "waiting" : bot.busy ? (prev ? "working" : "started") : prev && prev !== "done" && prev !== "failed" ? "done" : undefined);
-    if (!phase || (prev === phase && phase !== "waiting")) return;
-    const now = this.now(), urgent = phase === "done" || phase === "failed" || phase === "waiting";
-    if (!urgent && now - (this.lastActivityByThread.get(threadId) ?? -Infinity) < WEB_PUSH_ACTIVITY_MIN_INTERVAL_MS) return;
-    this.lastPhaseByThread.set(threadId, phase);
-    if (this.lastPhaseByThread.size > 1_000) this.lastPhaseByThread.clear();
-    const id = `wp_act_${now}_${++this.seq}`; let enqueued = false;
-    for (const sub of this.subscriptions) {
-      if (!preferenceEnabledForKind(sub.preferences, "activity") || !reaches(sub.key) || (phase !== "waiting" && this.isDeviceFocusedOnThread(sub.key, threadId))) continue;
-      const payload = buildRedactedActivityPayload({ id: bot.id, name: bot.name, threadId, ...(bot.group ? { room: bot.group } : {}) }, phase, { id, ts: now, unreadCount: this.options.unreadCount?.(sub.key) });
+      const idKey = notification.id ? `${sub.key}|${sub.endpoint}|${notification.id}` : null;
+      if (idKey && this.hasSeenNotifyId(idKey)) continue;
+
+      const payload = buildNotificationPayload(notification, {
+        id,
+        ts: now,
+        room,
+        unreadCount: this.options.unreadCount?.(sub.key),
+      });
       if (!payload) continue;
-      this.enqueueJob({ slot: `${sub.key}|${sub.endpoint}|${threadId}|activity`, key: sub.key, endpoint: sub.endpoint, payload, urgency: phase === "waiting" ? "high" : "low", topic: payload.topic, immediate: urgent, isActivity: true, queuedAt: now });
+
+      const sigKey = `${sub.key}|${sub.endpoint}|${notification.threadId}|${notification.kind}|${payload.body ?? ""}`;
+      const prevSigAt = this.recentNotifySignatures.get(sigKey);
+      if (prevSigAt !== undefined && now - prevSigAt < WEB_PUSH_NOTIFY_DEDUPE_MS) continue;
+
+      if (idKey) this.rememberNotifyId(idKey);
+      this.rememberNotifySignature(sigKey, now);
+
+      this.enqueueJob({
+        slot: `${sub.key}|${sub.endpoint}|${notification.threadId}|${notification.kind}`,
+        key: sub.key,
+        endpoint: sub.endpoint,
+        payload,
+        urgency,
+        ...(payload.topic ? { topic: payload.topic } : {}),
+        immediate,
+        isActivity: isActivityNotify,
+        queuedAt: now,
+      });
       enqueued = true;
     }
-    if (enqueued) { this.lastActivityByThread.set(threadId, now); if (this.lastActivityByThread.size > 1_000) this.lastActivityByThread.clear(); this.kick(); }
+    if (enqueued) this.kick();
   }
 
   private enqueueJob(job: Omit<QueuedJob, "notBefore" | "attempts">): void {
@@ -707,21 +555,14 @@ export class WebPushService {
       const lastSent = this.lastSentBySlot.get(job.slot) ?? -Infinity;
       if (job.queuedAt - lastSent < WEB_PUSH_COALESCE_MS) return;
     }
-    this.outbox.set(job.slot, {
-      ...job,
-      notBefore: waiting?.notBefore ?? job.queuedAt,
-      attempts: waiting?.attempts ?? 0,
-    });
+    this.outbox.set(job.slot, { ...job, notBefore: waiting?.notBefore ?? job.queuedAt, attempts: waiting?.attempts ?? 0 });
   }
 
   async sendTest(key: string, endpoint?: string): Promise<WebPushTestResponse> {
-    if (!this.isEnabled() || !this.vapid) {
-      return { ok: false, sent: 0, failed: 0, pruned: 0 };
-    }
+    if (!this.isEnabled() || !this.vapid) return { ok: false, sent: 0, failed: 0, pruned: 0 };
     const targets = this.subscriptions.filter((sub) => sub.key === key && (!endpoint || sub.endpoint === endpoint));
-    if (!targets.length) {
-      throw Object.assign(new Error("No Web Push subscription registered for this device"), { status: 404 });
-    }
+    if (!targets.length) throw Object.assign(new Error("No Web Push subscription registered for this device"), { status: 404 });
+
     const now = this.now();
     const lastTest = this.lastTestByDevice.get(key) ?? -Infinity;
     if (now - lastTest < WEB_PUSH_TEST_COOLDOWN_MS) {
@@ -731,8 +572,7 @@ export class WebPushService {
     let recent = (this.sentTimestampsByDevice.get(key) ?? []).filter((at) => now - at < WEB_PUSH_DEVICE_WINDOW_MS);
     if (recent.length >= WEB_PUSH_DEVICE_WINDOW_MAX) {
       this.sentTimestampsByDevice.set(key, recent);
-      const oldest = recent[0] ?? now;
-      const retryAfterSec = Math.max(1, Math.ceil((WEB_PUSH_DEVICE_WINDOW_MS - (now - oldest)) / 1_000));
+      const retryAfterSec = Math.max(1, Math.ceil((WEB_PUSH_DEVICE_WINDOW_MS - (now - (recent[0] ?? now))) / 1_000));
       throw Object.assign(new Error("Web Push rate limit reached for this device"), { status: 429, retryAfterSec });
     }
     let maxPauseUntil = 0;
@@ -754,17 +594,7 @@ export class WebPushService {
         failed += 1;
         continue;
       }
-      const payload: WebPushPayload = {
-        version: WEB_PUSH_WIRE_VERSION,
-        id: `wp_test_${now}_${++this.seq}`,
-        kind: "test",
-        title: "OpenMausBot",
-        body: "Test notification",
-        tag: `omb:test:${sub.key}`,
-        ...(this.options.unreadCount ? { unreadCount: this.options.unreadCount(sub.key) } : {}),
-        ts: now,
-        url: "/",
-      };
+      const payload = buildTestPayload(sub.key, `wp_test_${now}_${++this.seq}`, now, this.options.unreadCount?.(sub.key));
       const outcome = await this.deliver(sub, payload, "high", undefined, now);
       if (outcome === "sent") {
         sent += 1;
@@ -821,25 +651,11 @@ export class WebPushService {
         this.log(`[web-push] delivery error: ${error instanceof Error ? error.name : "error"}`);
         return "failed" as const;
       });
-      if (outcome === "retry") {
+      if (outcome === "retry" || outcome === "paused") {
         const delay = WEB_PUSH_RETRY_MS[job.attempts];
         if (delay !== undefined && !this.outbox.has(job.slot)) {
-          this.outbox.set(job.slot, {
-            ...job,
-            attempts: job.attempts + 1,
-            notBefore: this.now() + delay,
-          });
-        }
-      } else if (outcome === "paused") {
-        const origin = endpointOriginOf(job.endpoint);
-        const until = this.pausedUntilByOrigin.get(origin) ?? this.now() + 60_000;
-        const delay = WEB_PUSH_RETRY_MS[job.attempts];
-        if (delay !== undefined && !this.outbox.has(job.slot)) {
-          this.outbox.set(job.slot, {
-            ...job,
-            attempts: job.attempts + 1,
-            notBefore: Math.max(until, this.now() + delay),
-          });
+          const until = outcome === "paused" ? this.pausedUntilByOrigin.get(endpointOriginOf(job.endpoint)) ?? this.now() + 60_000 : 0;
+          this.outbox.set(job.slot, { ...job, attempts: job.attempts + 1, notBefore: Math.max(until, this.now() + delay) });
         }
       }
     }
@@ -850,8 +666,7 @@ export class WebPushService {
     if (!sub || !this.isEnabled() || !this.vapid) return "gone";
     if (now - job.queuedAt > WEB_PUSH_MAX_AGE_MS) return "stale";
 
-    const origin = endpointOriginOf(sub.endpoint);
-    const pausedUntil = this.pausedUntilByOrigin.get(origin) ?? 0;
+    const pausedUntil = this.pausedUntilByOrigin.get(endpointOriginOf(sub.endpoint)) ?? 0;
     if (now < pausedUntil) {
       this.outbox.set(job.slot, { ...job, notBefore: pausedUntil });
       return "dropped";

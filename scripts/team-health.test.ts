@@ -51,11 +51,12 @@ describe("team-health monitor", () => {
     const anomalies = detectAnomalies({
       load1m: 62.5,
       cpuCount: 10,
-      staleWorktrees: 90,
+      totalWorktrees: 18,
+      staleWorktrees: 2,
       deliveryBackups: 5,
       stuckTscCount: 2,
       seats: [
-        { name: "mausbot-back", polls: 45, tscRuns: 4, buildRuns: 0, errors: 6, reads: 120, edits: 0, llmCalls: 50 },
+        { name: "mausbot-back", polls: 6, tscRuns: 4, buildRuns: 0, errors: 6, reads: 120, edits: 0, llmCalls: 50 },
         { name: "mausbot-front", polls: 5, tscRuns: 1, buildRuns: 2, errors: 0, reads: 10, edits: 4, llmCalls: 15 },
       ],
     });
@@ -68,6 +69,20 @@ describe("team-health monitor", () => {
     expect(codes).toContain("read-only-spin");
     expect(codes).toContain("worktree-bloat");
     expect(codes).toContain("backup-cap-exceeded");
+    expect(anomalies.filter((a) => a.code === "poll-loop").map((a) => a.seat)).toEqual(["mausbot-back"]);
     expect(anomalies.filter((a) => a.code === "dev-local-build").map((a) => a.seat)).toEqual(["mausbot-back"]);
+  });
+
+  it("alerts when total worktrees exceed 15 even if none are stale yet", () => {
+    const anomalies = detectAnomalies({
+      load1m: 1,
+      cpuCount: 10,
+      totalWorktrees: 16,
+      staleWorktrees: 0,
+      deliveryBackups: 0,
+      stuckTscCount: 0,
+      seats: [],
+    });
+    expect(anomalies.map((a) => a.code)).toContain("worktree-bloat");
   });
 });
