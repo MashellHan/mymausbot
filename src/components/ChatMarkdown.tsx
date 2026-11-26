@@ -348,13 +348,13 @@ function LocalFileLink({ filePath, shownPath, name, source, children, message }:
   const revealMenu = useRevealOriginalMenu();
   const fileOutsideWorkspace = useMessageFileOutsideWorkspace(filePath, message);
   const revealHere = Boolean(revealBridge());
-  const revealOnClick = fileOutsideWorkspace === true && canRevealHostPath(filePath) && revealHere;
+  const revealOnClick = fileOutsideWorkspace === true && canRevealHostPath(shownPath) && revealHere;
   const [revealProblem, setRevealProblem] = useState("");
   if (!message) {
     return <span title={t("chat.file.legacy")} className="break-words text-ink-secondary">{children}</span>;
   }
   // Only the desktop app probes; elsewhere the hook stays null and the link must stay usable.
-  const probing = revealHere && canRevealHostPath(filePath) && fileOutsideWorkspace === null;
+  const probing = revealHere && canRevealHostPath(shownPath) && fileOutsideWorkspace === null;
   const pathAction = async (event: { currentTarget: HTMLElement }) => {
     if (preview.available) {
       preview.show(event);
@@ -362,7 +362,7 @@ function LocalFileLink({ filePath, shownPath, name, source, children, message }:
     }
     if (revealOnClick) {
       setRevealProblem("");
-      const result = await revealHostPath(filePath);
+      const result = await revealHostPath(shownPath);
       const problem = revealProblemText(result);
       if (problem) setRevealProblem(problem);
       return;

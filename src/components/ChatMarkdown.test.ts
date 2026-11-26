@@ -1039,6 +1039,7 @@ describe("ChatMarkdown attachments", () => {
 
       it("asks the desktop app to show the real folder", async () => {
         const save = outsideSave();
+        const probe = vi.spyOn(OutsideWorkspaceProbe, "useMessageFileOutsideWorkspace").mockReturnValue(true);
         const ogb = (window as { ogb?: unknown }).ogb;
         const reveal = vi.fn(async () => "shown" as const);
         (window as { ogb?: unknown }).ogb = { revealInFolder: reveal, remoteClient: { active: false } };
@@ -1047,7 +1048,7 @@ describe("ChatMarkdown attachments", () => {
         const root = createRoot(host);
         try {
           await act(async () => root.render(createElement(ChatMarkdown, { text, message: { threadId: "thread-1", messageId: "message-1" } })));
-          const show = [...host.querySelectorAll("button")].find((button) => button.textContent === "Show in folder")!;
+          const show = host.querySelector('button[title="Show in folder"]') as HTMLButtonElement;
           await act(async () => show.click());
           expect(reveal).toHaveBeenCalledWith(folder);
         } finally {
@@ -1055,6 +1056,7 @@ describe("ChatMarkdown attachments", () => {
           host.remove();
           (window as { ogb?: unknown }).ogb = ogb;
           save.mockRestore();
+          probe.mockRestore();
         }
       });
     });
