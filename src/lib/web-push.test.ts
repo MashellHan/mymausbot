@@ -3,6 +3,7 @@ import { setActivePwaAuth } from "./pwa-transport";
 import {
   SW_PUSH_SUBSCRIPTION_CHANGE_TYPE,
   SW_SET_BADGE_TYPE,
+  deleteWebPushSubscription,
   detectWebPushEnvironment,
   enableWebPush,
   installWebPushSwSync,
@@ -204,5 +205,61 @@ describe("web-push subscription & preference lifecycle", () => {
     }
     await vi.waitFor(() => expect(putSpy).toHaveBeenCalledOnce());
     stop();
+  });
+
+  it("deletes subscriptions with endpoint in the query string instead of a DELETE body", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ deleted: true }));
+    const endpoint = "https://web.push.apple.com/sub-1?token=a&b=2";
+    await deleteWebPushSubscription(endpoint, fetchMock);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(`https://relay.mxhan.com/api/push/web/subscription?endpoint=${encodeURIComponent(endpoint)}`);
+    expect(init.method).toBe("DELETE");
+    expect(init.body).toBeUndefined();
+  });
+
+  it("unsubscribes and re-subscribes when an existing PushSubscription has a mismatched applicationServerKey", async () => {
+    const { subscribe, getSubscription } = installBrowserPush("granted", "granted");
+    const staleUnsubscribe = vi.fn(async () => true);
+    const staleSub = {
+      endpoint: "https://web.push.apple.com/stale",
+      options: { applicationServerKey: new Uint8Array([9, 9, 9, 9]).buffer },
+      toJSON: () => ({
+        endpoint: "https://web.push.apple.com/stale",
+        keys: { p256dh: "old-p256", auth: "old-auth" },
+      }),
+      unsubscribe: staleUnsubscribe,
+    };
+    getSubscription.mockResolvedValueOnce(staleSub as unknown as PushSubscription);
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/push/web/vapid-key")) {
+        return jsonResponse({ enabled: true, publicKey: btoa("1234").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "") });
+      }
+      if (url.endsWith("/api/push/web/subscription") && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body));
+        expect(body.endpoint).toBe("https://web.push.apple.com/sub-1");
+        return jsonResponse({
+          subscription: {
+            endpoint: body.endpoint,
+            endpointOrigin: "https://web.push.apple.com",
+            deviceLabel: body.deviceLabel,
+            preferences: { ...body.preferences },
+            createdAt: 100,
+            updatedAt: 100,
+            hasKeys: true,
+          },
+          vapidPublicKey: "pub",
+        });
+      }
+      return jsonResponse({}, 404);
+    });
+
+    const result = await enableWebPush({ fetchImpl: fetchMock });
+    expect(result.ok).toBe(true);
+    expect(staleUnsubscribe).toHaveBeenCalledOnce();
+    expect(subscribe).toHaveBeenCalledOnce();
   });
 });

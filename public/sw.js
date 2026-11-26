@@ -206,9 +206,11 @@ function buildDeepLinkUrl(raw) {
   const botId = cleanString(raw && raw.botId, 120);
   const groupId = cleanString(raw && raw.groupId, 120);
   const threadId = cleanString(raw && raw.threadId, 120);
+  const notificationId = cleanString(raw && (raw.notificationId || raw.id), 120);
   if (botId && !url.searchParams.has("bot")) url.searchParams.set("bot", botId);
   if (groupId && !url.searchParams.has("group")) url.searchParams.set("group", groupId);
   if (threadId && !url.searchParams.has("thread")) url.searchParams.set("thread", threadId);
+  if (notificationId && !url.searchParams.has("notificationId")) url.searchParams.set("notificationId", notificationId);
   return url.toString();
 }
 
@@ -266,6 +268,7 @@ self.addEventListener("push", (event) => {
   const botId = cleanString(payload && payload.botId, 120);
   const groupId = cleanString(payload && payload.groupId, 120);
   const id = cleanString(payload && payload.id, 120);
+  const notificationId = cleanString(payload && (payload.notificationId || payload.id), 120);
   const title = cleanString(payload && payload.title, 160) || DEFAULT_PUSH_TITLE;
   const body = cleanString(payload && payload.body, 140);
   const fallbackTag =
@@ -283,6 +286,7 @@ self.addEventListener("push", (event) => {
     url,
     kind,
     ...(id ? { id } : {}),
+    ...(notificationId ? { notificationId } : {}),
     ...(botId ? { botId } : {}),
     ...(threadId ? { threadId } : {}),
     ...(groupId ? { groupId } : {}),
@@ -313,11 +317,14 @@ self.addEventListener("notificationclick", (event) => {
   }
   const raw = (event.notification && event.notification.data) || {};
   const targetUrl = buildDeepLinkUrl(raw);
+  const notificationId = cleanString(raw.notificationId || raw.id, 120);
+  const id = cleanString(raw.id, 120);
   const target = {
     ...(cleanString(raw.botId, 120) ? { botId: cleanString(raw.botId, 120) } : {}),
     ...(cleanString(raw.threadId, 120) ? { threadId: cleanString(raw.threadId, 120) } : {}),
     ...(cleanString(raw.groupId, 120) ? { groupId: cleanString(raw.groupId, 120) } : {}),
-    ...(cleanString(raw.id, 120) ? { id: cleanString(raw.id, 120) } : {}),
+    ...(notificationId ? { notificationId } : {}),
+    ...(id ? { id } : {}),
     ...(cleanString(raw.kind, 40) ? { kind: cleanString(raw.kind, 40) } : {}),
     url: targetUrl,
   };

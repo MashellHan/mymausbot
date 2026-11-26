@@ -210,8 +210,9 @@ describe("useSwNotificationOpens", () => {
     expect(afterOpen).toHaveBeenCalledTimes(1);
 
     dispatch.mockClear();
-    onMessage?.({ data: { type: "omb:notification-click", target: { groupId: "room-1", threadId: "room-side" } } } as MessageEvent);
+    onMessage?.({ data: { type: "omb:notification-click", target: { groupId: "room-1", threadId: "room-side", notificationId: "n1" } } } as MessageEvent);
     runHook(ready, dispatch, afterOpen);
+    expect(dispatch).toHaveBeenCalledWith({ type: "notificationRead", id: "n1" });
     expect(dispatch).toHaveBeenCalledWith({ type: "select", id: "room-1" });
     expect(dispatch).toHaveBeenCalledWith({ type: "switchGroupTask", groupId: "room-1", threadId: "room-side" });
   });

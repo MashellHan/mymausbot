@@ -572,7 +572,8 @@ describe("pwa-cache", () => {
         botId: "scout",
         threadId: "thread-9",
         kind: "activity",
-        url: "https://mausbot.mxhan.com/?bot=scout&thread=thread-9",
+        notificationId: "act-1",
+        url: "https://mausbot.mxhan.com/?bot=scout&thread=thread-9&notificationId=act-1",
       }),
     }));
     expect(setAppBadge).toHaveBeenCalledWith(3);
@@ -618,7 +619,8 @@ describe("pwa-cache", () => {
         threadId: "thread-9",
         kind: "mention",
         id: "n1",
-        url: "https://mausbot.mxhan.com/?bot=scout&group=room-1&thread=thread-9",
+        notificationId: "n1",
+        url: "https://mausbot.mxhan.com/?bot=scout&group=room-1&thread=thread-9&notificationId=n1",
       },
     });
     expect(openWindow).not.toHaveBeenCalled();

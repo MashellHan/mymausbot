@@ -9,14 +9,14 @@ import {
   useNotificationSounds,
 } from "@/lib/notification-preferences";
 import { requestNotificationPermission } from "@/lib/notify";
-import { isElectronDesktop } from "@/lib/pwa-transport";
+import { isRemotePwaMode } from "@/lib/pwa-transport";
 import { SettingRow, Switch } from "./SettingsPrimitives";
 import { WebPushSettingsSection } from "./WebPushSettingsSection";
 
 export function NotificationRows({ simple = false }: { simple?: boolean }) {
   return (
     <>
-      {isElectronDesktop() ? <DeviceNotificationsRow simple={simple} /> : <WebPushSettingsSection simple={simple} />}
+      {isRemotePwaMode() ? <WebPushSettingsSection simple={simple} /> : <DeviceNotificationsRow simple={simple} />}
       <NotificationSoundsRow simple={simple} />
       <NotificationFeedRow simple={simple} />
     </>

@@ -280,7 +280,7 @@ export function WebPushSettingsSection({
             title={t("settings.webPush.urgentTitle")}
             tag={t("settings.webPush.tagUrgent")}
             subtitle={t("settings.webPush.urgentSubtitle")}
-            inert={rowsInert ? (renderInertReason ?? false) : undefined}
+            inert={rowsInert ? (renderInertReason ?? true) : undefined}
           >
             <Switch
               checked={effectiveState === "granted" && prefs.urgent}
@@ -293,7 +293,7 @@ export function WebPushSettingsSection({
           <SettingRow
             title={t("settings.webPush.finishedTitle")}
             subtitle={t("settings.webPush.finishedSubtitle")}
-            inert={rowsInert ? (renderInertReason ?? false) : undefined}
+            inert={rowsInert ? (renderInertReason ?? true) : undefined}
           >
             <Switch
               checked={effectiveState === "granted" && prefs.finished}
@@ -306,7 +306,7 @@ export function WebPushSettingsSection({
           <SettingRow
             title={t("settings.webPush.failuresTitle")}
             subtitle={t("settings.webPush.failuresSubtitle")}
-            inert={rowsInert ? (renderInertReason ?? false) : undefined}
+            inert={rowsInert ? (renderInertReason ?? true) : undefined}
           >
             <Switch
               checked={effectiveState === "granted" && prefs.failures}
@@ -319,7 +319,7 @@ export function WebPushSettingsSection({
           <SettingRow
             title={t("settings.webPush.mentionsTitle")}
             subtitle={t("settings.webPush.mentionsSubtitle")}
-            inert={rowsInert ? (renderInertReason ?? false) : undefined}
+            inert={rowsInert ? (renderInertReason ?? true) : undefined}
           >
             <Switch
               checked={effectiveState === "granted" && prefs.mentions}
@@ -333,7 +333,7 @@ export function WebPushSettingsSection({
             <SettingRow
               title={t("settings.webPush.spendTitle")}
               subtitle={t("settings.webPush.spendSubtitle")}
-              inert={rowsInert ? (renderInertReason ?? false) : undefined}
+              inert={rowsInert ? (renderInertReason ?? true) : undefined}
             >
               <Switch
                 checked={effectiveState === "granted" && prefs.spend}
@@ -352,7 +352,7 @@ export function WebPushSettingsSection({
             title={t("settings.webPush.liveTitle")}
             tag={t("settings.webPush.tagBeta")}
             subtitle={t("settings.webPush.liveSubtitle")}
-            inert={rowsInert ? (renderInertReason ?? false) : undefined}
+            inert={rowsInert ? (renderInertReason ?? true) : undefined}
           >
             <Switch
               checked={effectiveState === "granted" && prefs.liveActivities}

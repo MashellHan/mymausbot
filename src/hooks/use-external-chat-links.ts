@@ -13,7 +13,12 @@ function parseNotificationTarget(data: unknown): PwaNotificationTarget | null {
   const botId = typeof candidate.botId === "string" && candidate.botId ? candidate.botId : undefined;
   const threadId = typeof candidate.threadId === "string" && candidate.threadId ? candidate.threadId : undefined;
   const groupId = typeof candidate.groupId === "string" && candidate.groupId ? candidate.groupId : undefined;
-  const notificationId = typeof candidate.notificationId === "string" && candidate.notificationId ? candidate.notificationId : undefined;
+  const notificationId =
+    typeof candidate.notificationId === "string" && candidate.notificationId
+      ? candidate.notificationId
+      : typeof candidate.id === "string" && candidate.id
+        ? candidate.id
+        : undefined;
   if (!botId && !threadId && !groupId) return null;
   return {
     ...(botId ? { botId } : {}),

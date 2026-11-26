@@ -272,6 +272,18 @@ function bytesToBase64Url(value: ArrayBuffer | ArrayBufferView | null | undefine
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
+function sameByteArray(existing: ArrayBuffer | ArrayBufferView | null | undefined, expected: Uint8Array): boolean {
+  if (!existing) return false;
+  const view = existing instanceof ArrayBuffer
+    ? new Uint8Array(existing)
+    : new Uint8Array(existing.buffer, existing.byteOffset, existing.byteLength);
+  if (view.byteLength !== expected.byteLength) return false;
+  for (let i = 0; i < view.byteLength; i += 1) {
+    if (view[i] !== expected[i]) return false;
+  }
+  return true;
+}
+
 export function extractPushSubscriptionKeys(subscription: Pick<PushSubscription, "toJSON"> & Partial<Pick<PushSubscription, "getKey">>): WebPushSubscriptionKeys | null {
   try {
     const json = typeof subscription.toJSON === "function" ? subscription.toJSON() : null;
@@ -340,12 +352,12 @@ export async function upsertWebPushSubscription(
 }
 
 export async function deleteWebPushSubscription(endpoint?: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const route = endpoint
+    ? `${WEB_PUSH_ROUTES.subscription}?endpoint=${encodeURIComponent(endpoint)}`
+    : WEB_PUSH_ROUTES.subscription;
   const res = await remoteFetch(
-    WEB_PUSH_ROUTES.subscription,
-    {
-      method: "DELETE",
-      ...(endpoint ? { headers: { "content-type": "application/json" }, body: JSON.stringify({ endpoint }) } : {}),
-    },
+    route,
+    { method: "DELETE" },
     fetchImpl,
   );
   if (!res.ok && res.status !== 404 && res.status !== 410) {
@@ -474,11 +486,19 @@ export async function enableWebPush(options: {
       return { ok: false, reason: "unsupported" };
     }
 
+    const applicationServerKey = urlBase64ToUint8Array(vapid.publicKey);
     let browserSub = await registration.pushManager.getSubscription();
+    const existingKey = browserSub?.options?.applicationServerKey;
+    if (browserSub && existingKey && !sameByteArray(existingKey, applicationServerKey)) {
+      try {
+        await browserSub.unsubscribe();
+      } catch {}
+      browserSub = null;
+    }
     if (!browserSub || !extractPushSubscriptionKeys(browserSub)) {
       browserSub = await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(vapid.publicKey),
+        applicationServerKey,
       });
     }
     const keys = extractPushSubscriptionKeys(browserSub);
