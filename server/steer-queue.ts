@@ -5,6 +5,7 @@ import { chatFollowups, saveChatFollowup, settleChatFollowups } from "./message-
 import { drainCoalesceHead } from "./admission.ts";
 import { spokenLineFields } from "./live-call-record.ts";
 import { workOriginSchema, type WorkOrigin } from "./peer-provenance.ts";
+import { transitionProgressiveIntakeState } from "../shared/progressive-intake.ts";
 import type { BotQueuedMessages, ResolvedSender, SteerQueueReason } from "../shared/wire.ts";
 import type { BotRecord, Message } from "./store.ts";
 import type { UsageTrigger } from "./usage-ledger.ts";
@@ -47,7 +48,17 @@ interface QueueEntry {
   }>;
 }
 
-export type SteerQueueHead = Pick<QueueEntry["items"][number], "trigger" | "sender" | "peerAsk" | "origin" | "mentions">;
+export type SteerQueueHead = Pick<QueueEntry["items"][number], "trigger" | "sender" | "peerAsk" | "origin" | "mentions" | "messageId" | "rowId" | "text">;
+
+export interface DrainSteerOptions {
+  formatPrompt?: (input: {
+    botId: string;
+    threadId: string;
+    group: ReadonlyArray<{ messageId: string; text: string; prompt: string; rowId?: string }>;
+    appended: readonly Message[];
+    defaultPrompt: string;
+  }) => string;
+}
 
 const queues = new Map<string, QueueEntry>();
 
@@ -186,6 +197,7 @@ export function drainSteeredMessages(
     head: SteerQueueHead,
   ) => void | Promise<void>,
   isBlocked?: (botId: string, threadId: string, head: SteerQueueHead) => boolean,
+  options?: DrainSteerOptions,
 ): void {
   // deleting only the entry being visited is safe under Map iteration
   for (const [threadId, entry] of queues) {
@@ -208,9 +220,31 @@ export function drainSteeredMessages(
     if (rest.length > 0) queues.set(threadId, { botId: entry.botId, items: rest });
     else queues.delete(threadId);
     changed();
+    const now = Date.now();
     const appended: Message[] = [];
     for (const item of group) {
-      const recorded = item.rowId ? store.messagesFor?.(threadId).find((message) => message.id === item.rowId) : undefined;
+      let recorded = item.rowId ? store.messagesFor?.(threadId).find((message) => message.id === item.rowId) : undefined;
+      if (recorded) {
+        let nextIntake = recorded.intake;
+        if (nextIntake && (nextIntake.state === "received" || nextIntake.state === "folding")) {
+          if (group.length > 1 && nextIntake.state === "received") {
+            const folding = transitionProgressiveIntakeState(nextIntake, "folding", now);
+            if (folding) {
+              recorded = store.patchMessage(threadId, recorded.id, { intake: folding }) ?? { ...recorded, intake: folding };
+              nextIntake = recorded.intake;
+            }
+          }
+          const processing = transitionProgressiveIntakeState(nextIntake, "processing", now, { targetTurnId: null });
+          if (processing) nextIntake = processing;
+        }
+        if (nextIntake !== recorded.intake || recorded.queueId !== item.messageId) {
+          const patch: Partial<Message> = {
+            ...(nextIntake ? { intake: nextIntake } : {}),
+            ...(recorded.queueId !== item.messageId ? { queueId: item.messageId } : {}),
+          };
+          recorded = store.patchMessage(threadId, recorded.id, patch) ?? { ...recorded, ...patch };
+        }
+      }
       appended.push(
         recorded ?? store.appendMessage(threadId, {
           role: "user",
@@ -232,7 +266,10 @@ export function drainSteeredMessages(
     const last = appended.at(-1);
     if (!last) continue;
     // A blank line keeps each message its own Markdown block; otherwise a trailing attachment tag merges into the next and stops being an image.
-    const prompt = group.map((item) => item.prompt).join("\n\n");
+    const defaultPrompt = group.map((item) => item.prompt).join("\n\n");
+    const prompt = options?.formatPrompt
+      ? options.formatPrompt({ botId: entry.botId, threadId, group, appended, defaultPrompt })
+      : defaultPrompt;
     const mentions = group.flatMap((item) => item.mentions ?? []);
     let running: void | Promise<void>;
     try {
@@ -244,7 +281,16 @@ export function drainSteeredMessages(
         appended.map((message) => message.id),
         // One unattended line makes the turn unattended: a person's words in the group cannot re-attend a bot's own.
         group.some((item) => item.unattended === true),
-        { trigger: group[0].trigger, sender: group[0].sender, peerAsk: group[0].peerAsk, origin: group[0].origin, ...(mentions.length ? { mentions } : {}) },
+        {
+          trigger: group[0].trigger,
+          sender: group[0].sender,
+          peerAsk: group[0].peerAsk,
+          origin: group[0].origin,
+          messageId: group[0].messageId,
+          text: group[0].text,
+          ...(group.some((item) => item.rowId !== undefined) ? { rowId: group.find((item) => item.rowId !== undefined)!.rowId } : {}),
+          ...(mentions.length ? { mentions } : {}),
+        },
       );
     } catch (error) { console.warn("steer-queue: queued dispatch threw", error); running = Promise.reject(error); }
     void Promise.resolve(running).then(
@@ -316,6 +362,19 @@ export function restoreHeldSteeredQueue(held: HeldSteerQueue): void {
 
 export function settleHeldSteeredQueue(held: HeldSteerQueue): void {
   settleChatFollowups(held.items.map((item) => item.messageId), null);
+}
+
+export function queuedSteerRowId(botId: string, threadId: string, queueId: string): string | undefined {
+  const entry = queues.get(threadId);
+  if (!entry || entry.botId !== botId) return undefined;
+  return entry.items.find((candidate) => candidate.messageId === queueId)?.rowId;
+}
+
+/** Transcript row ids already persisted for queued items in `threadId` that have not drained into a turn yet. */
+export function queuedSteerRowIds(threadId: string): Set<string> {
+  const entry = queues.get(threadId);
+  if (!entry) return new Set();
+  return new Set(entry.items.flatMap((item) => (item.rowId ? [item.rowId] : [])));
 }
 
 export function _queuedCount(threadId: string): number {

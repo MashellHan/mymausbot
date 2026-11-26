@@ -474,7 +474,93 @@ describe("work from outside stays out of a person's work", () => {
   it("still reaches work of its own lineage", async () => {
     const own = world({ confined: ["inbox", "work"] });
     own.node({ status: "running" });
-    expect(await own.routing.relay({ sourceLevel: "full", sender: FUCHS, senderThreadId: "inbox", target: DACHS, message: "Excel", threadId: "work" })).toMatchObject({ outcome: "injected" });
+  expect(await own.routing.relay({ sourceLevel: "full", sender: FUCHS, senderThreadId: "inbox", target: DACHS, message: "Excel", threadId: "work" })).toMatchObject({ outcome: "injected" });
     expect(own.steered).toHaveLength(1);
+  });
+});
+
+describe("busy parent-thread forwarding into delegated sub-workers", () => {
+  it("forwards a running supplement into a delegated worker thread via live steer without cancelling it", async () => {
+    const w = world();
+    const child = w.node({ id: "as_child", parentId: "root", status: "running" });
+    const result = await w.routing.forwardDelegated({
+      parentThreadId: "inbox",
+      parentBotId: "fuchs",
+      sourceLevel: "full",
+      targets: [child],
+      text: "Also verify the tax column",
+      redirect: false,
+      updatedAt: 2_000,
+    });
+    expect(result.delivered).toBe(true);
+    expect(result.outcomes).toEqual([{ nodeId: "as_child", botId: "dachs", threadId: "work", kind: "steered" }]);
+    expect(w.steered).toHaveLength(1);
+    expect(w.steered[0]!.text).toContain("assignment as_child");
+    expect(w.steered[0]!.text).toContain("Also verify the tax column");
+    expect(w.rows("work")).toEqual([
+      expect.objectContaining({
+        role: "user",
+        text: "Also verify the tax column",
+        aside: true,
+        steered: true,
+        intake: { mode: "delegation-forward", state: "processing", targetTurnId: "as_child", updatedAt: 2_000 },
+      }),
+    ]);
+    expect(w.rows("inbox")).toEqual([
+      expect.objectContaining({
+        kind: "activity",
+        tool: expect.objectContaining({ name: "Forwarded to Dachs", ok: true }),
+      }),
+    ]);
+    expect(w.revoked).toEqual(["work"]);
+  });
+
+  it("answers a waiting delegated child's question instead of re-dispatching it", async () => {
+    const w = world();
+    const child = w.node({ id: "as_wait", parentId: "root", status: "waiting", question: "CSV or Excel?" });
+    w.store.appendMessage("work", {
+      role: "bot",
+      kind: "options",
+      text: "CSV or Excel?",
+      card: { title: "Question", subtitle: "CSV or Excel?", options: ["CSV", "Excel"], requestId: "needs-input-as_wait-1", requestType: "question" },
+    });
+    const result = await w.routing.forwardDelegated({
+      parentThreadId: "inbox",
+      parentBotId: "fuchs",
+      sourceLevel: "full",
+      targets: [child],
+      text: "Use Excel and include Q4",
+    });
+    expect(result.delivered).toBe(true);
+    expect(result.outcomes[0]!.kind).toBe("answered");
+    expect(w.answeredNodes).toEqual([{ id: "as_wait", text: "Use Excel and include Q4", by: { kind: "bot", botId: "fuchs" } }]);
+    expect(w.rows("work")[0]!.card).toMatchObject({ answered: "answer", answeredText: "Use Excel and include Q4", answeredBy: { kind: "bot", name: "Fuchs" } });
+  });
+
+  it("returns delivered:false safely when permission, privacy, or steer capability blocks propagation", async () => {
+    const blocked = world({ steers: false });
+    const child = blocked.node({ id: "as_nosteer", parentId: "root", status: "running" });
+    expect(
+      await blocked.routing.forwardDelegated({
+        parentThreadId: "inbox",
+        parentBotId: "fuchs",
+        sourceLevel: "full",
+        targets: [child],
+        text: "Switch format",
+        redirect: true,
+      }),
+    ).toEqual({ delivered: false, outcomes: [] });
+
+    const escalated = world({ levels: { work: "full" } });
+    const fullChild = escalated.node({ id: "as_full", parentId: "root", status: "running" });
+    expect(
+      await escalated.routing.forwardDelegated({
+        parentThreadId: "inbox",
+        parentBotId: "fuchs",
+        sourceLevel: "ask",
+        targets: [fullChild],
+        text: "Switch format",
+      }),
+    ).toEqual({ delivered: false, outcomes: [] });
   });
 });
