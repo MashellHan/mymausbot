@@ -121,6 +121,14 @@ export function rowScrollTop(scroller: HTMLElement, transcript: HTMLElement, row
   return Math.max(0, Math.min(target, scroller.scrollHeight - scroller.clientHeight));
 }
 
+/** How far `rowId`'s top currently lies from the top of the scrolling content (independent of `scrollTop`). */
+export function rowContentTop(scroller: HTMLElement, transcript: HTMLElement, rowId: string): number | undefined {
+  if (typeof transcript.querySelectorAll !== "function") return undefined;
+  const row = Array.from(transcript.querySelectorAll<HTMLElement>(ROW_SELECTOR)).find((candidate) => candidate.dataset.mid === rowId);
+  if (!row) return undefined;
+  return scroller.scrollTop + rowBox(row).top - scroller.getBoundingClientRect().top;
+}
+
 // A streaming reply moves the end every frame, so the target may never hold still: past this many frames, follow's own
 // growth handling takes over.
 const SETTLE_MAX_FRAMES = 60;

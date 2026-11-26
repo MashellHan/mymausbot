@@ -83,7 +83,7 @@ vi.mock("@/state/store", () => ({ useStore: () => store }));
 vi.mock("@/lib/focus-message", () => ({ useFocusMessage: () => {} }));
 
 import { useTranscriptViewport } from "./use-transcript-viewport";
-import { TRANSCRIPT_WINDOW_MAX } from "@/lib/transcript-window";
+import { TRANSCRIPT_WINDOW_MAX, TRANSCRIPT_WINDOW_STEP } from "@/lib/transcript-window";
 import { forgetTranscriptPositions, rememberTranscriptPosition } from "@/lib/transcript-follow";
 import { noteLiveReplyEvent, resetLiveReplies } from "@/state/live-reply";
 import type { RuntimeEvent } from "../../shared/runtime-events";
@@ -92,15 +92,17 @@ type Row = { id: string; role?: "user" | "bot"; liveSendNonce?: number; outboxRe
 const rows = (count: number, from = 0): Row[] => Array.from({ length: count }, (_, index) => ({ id: `m${from + index}` }));
 
 const ROW = 50;
+let heightOf = (_row: Row) => ROW;
 class Scroller {
   rows = 0;
+  content = 0;
   extra = 0;
   scrollTop = 0;
   clientHeight = 400;
   clientWidth = 400;
   calls: ScrollToOptions[] = [];
   get scrollHeight() {
-    return this.rows * ROW + this.extra;
+    return this.content + this.extra;
   }
   get bottom() {
     return Math.max(0, this.scrollHeight - this.clientHeight);
@@ -114,12 +116,16 @@ class Scroller {
   }
 }
 
-/** The mounted rows, each ROW tall, laid out from the scroller's top. */
+/** The mounted rows, each `heightOf` tall (ROW unless a test says otherwise), laid out from the scroller's top. */
 const transcriptOf = (shown: readonly Row[]) => ({
-  querySelectorAll: () => shown.map((row, index) => {
-    const top = index * ROW - scroller.scrollTop;
-    return { dataset: { mid: row.id }, getBoundingClientRect: () => ({ top, bottom: top + ROW, height: ROW }) };
-  }),
+  querySelectorAll: () => {
+    let below = 0;
+    return shown.map((row) => {
+      const top = below - scroller.scrollTop, height = heightOf(row);
+      below += height;
+      return { dataset: { mid: row.id }, getBoundingClientRect: () => ({ top, bottom: top + height, height }) };
+    });
+  },
 });
 
 type Props = Parameters<typeof useTranscriptViewport<Row>>[0];
@@ -141,6 +147,7 @@ function mount(initial: Partial<Props> = {}) {
     result.scrollRef.current = scroller as unknown as HTMLDivElement;
     result.transcriptRef.current = transcriptOf(result.windowedMessages) as unknown as HTMLDivElement;
     scroller.rows = result.windowedMessages.length;
+    scroller.content = result.windowedMessages.reduce((sum, row) => sum + heightOf(row), 0);
     scroller.scrollTop = Math.min(scroller.scrollTop, scroller.bottom);
   };
   const flushFrames = () => {
@@ -178,6 +185,7 @@ function unmount() {
 beforeEach(() => {
   react.runtime.slots = [];
   scroller = new Scroller();
+  heightOf = () => ROW;
   frames = [];
   keyListeners = new Set();
   observers = 0;
@@ -276,7 +284,7 @@ describe("transcript viewport", () => {
     expect(view.current.hiddenCount).toBe(180);
 
     view.act(() => view.current.showEarlier());
-    expect(view.current.hiddenCount).toBe(60);
+    expect(view.current.hiddenCount).toBe(180 - TRANSCRIPT_WINDOW_STEP);
 
     view.rerender({ threadId: "other", messages: [{ id: "ask", role: "user" }, ...rows(299, 1_001)] });
     expect(view.current.transcriptKey).toBe("bot:other");
@@ -374,7 +382,7 @@ describe("transcript viewport", () => {
 
   it("slides back to the latest window when the reader returns to the bottom", () => {
     const view = mount({ messages: rows(300) });
-    view.act(() => view.current.showEarlier());
+    while (view.current.windowedMessages.length < TRANSCRIPT_WINDOW_MAX) view.act(() => view.current.showEarlier());
     view.act(() => {
       scroller.scrollTop = 1_000;
       view.current.scrollHandlers.onScroll();
@@ -454,8 +462,8 @@ describe("transcript viewport", () => {
     const view = mount({ messages: rows(300) });
     scroller.scrollTop = 1_000;
     view.act(() => view.current.showEarlier());
-    expect(view.current.windowedMessages[0]?.id).toBe("m60");
-    expect(scroller.scrollTop).toBe(1_000 + 120 * ROW);
+    expect(view.current.windowedMessages[0]?.id).toBe(`m${180 - TRANSCRIPT_WINDOW_STEP}`);
+    expect(scroller.scrollTop).toBe(1_000 + TRANSCRIPT_WINDOW_STEP * ROW);
     expect(view.current.following).toBe(false);
   });
 
@@ -473,7 +481,7 @@ describe("transcript viewport", () => {
     store.state.loadingOlder = {};
     view.rerender({ messages: [...rows(50, 50), ...rows(50, 100)] });
     expect(view.current.olderPending).toBe(false);
-    expect(scroller.scrollTop).toBe(300 + 50 * ROW);
+    expect(scroller.scrollTop).toBe(300 + TRANSCRIPT_WINDOW_STEP * ROW);
   });
 
   it("drops a height capture taken in the thread the reader left", () => {
@@ -507,16 +515,44 @@ describe("transcript viewport", () => {
     expect(view.current.following).toBe(false);
 
     view.act(() => view.current.showLater());
-    expect(view.current.laterCount).toBe(60);
+    expect(view.current.laterCount).toBe(180 - TRANSCRIPT_WINDOW_STEP);
+  });
+
+  it("keeps the reader's row in place when the rows let go above them leave the content shorter than where they were", () => {
+    heightOf = (row) => Number(row.id.slice(1)) < 1_000 ? 8 * ROW : ROW;
+    store.state.focusMessage = { threadId: "thread", messageId: "m1000", nonce: 1, consumed: false };
+    const view = mount({ messages: rows(3_000) });
+    const reading = () => {
+      const top = (view.current.transcriptRef.current as unknown as ReturnType<typeof transcriptOf>).querySelectorAll()
+        .find((row) => row.getBoundingClientRect().bottom > 0)!;
+      return { id: top.dataset.mid, offset: top.getBoundingClientRect().top };
+    };
+    const scrollTo = (top: number) => view.act(() => {
+      scroller.scrollTop = top;
+      view.current.scrollHandlers.onScroll();
+    });
+    while (view.current.windowedMessages.length < TRANSCRIPT_WINDOW_MAX) {
+      scrollTo(scroller.bottom - 2_000);
+      scrollTo(scroller.bottom - 100);
+    }
+    scrollTo(scroller.bottom - 2_000);
+    scroller.scrollTop = scroller.bottom - 500;
+    const before = reading();
+    view.act(() => view.current.scrollHandlers.onScroll());
+    expect(view.current.windowedMessages[0]?.id, "the step let tall rows go above the reader").toBe(`m${940 + TRANSCRIPT_WINDOW_STEP}`);
+    expect(reading()).toEqual(before);
   });
 
   it("pages on past a search result as the reader scrolls down, and follows only from the newest row", () => {
     store.state.focusMessage = { threadId: "thread", messageId: "m10", nonce: 1, consumed: false };
     const view = mount({ messages: rows(300) });
-    view.act(() => {
-      scroller.scrollTop = scroller.bottom;
-      view.current.scrollHandlers.onScroll();
-    });
+    while (view.current.windowedMessages.length < TRANSCRIPT_WINDOW_MAX) {
+      view.act(() => view.current.scrollHandlers.onWheel({ deltaY: 40 } as never));
+      view.act(() => {
+        scroller.scrollTop = scroller.bottom;
+        view.current.scrollHandlers.onScroll();
+      });
+    }
     expect(view.current.following).toBe(false);
     expect(view.current.windowedMessages[0]?.id).toBe("m0");
     expect(view.current.laterCount).toBe(60);
@@ -566,10 +602,10 @@ describe("transcript viewport", () => {
     const view = mount({ messages: rows(300) });
     expect(view.current.hiddenCount).toBe(180);
     view.act(() => view.current.scrollHandlers.onWheel({ deltaY: -40 } as never));
-    expect(view.current.hiddenCount).toBe(60);
+    expect(view.current.hiddenCount).toBe(180 - TRANSCRIPT_WINDOW_STEP);
     view.act(() => view.current.scrollHandlers.onTouchStart({ touches: [{ clientY: 100 }] } as never));
     view.act(() => view.current.scrollHandlers.onTouchMove({ touches: [{ clientY: 200 }] } as never));
-    expect(view.current.hiddenCount).toBe(0);
+    expect(view.current.hiddenCount).toBe(180 - 2 * TRANSCRIPT_WINDOW_STEP);
   });
 
   it("loads an older page on an upward scroll when the whole thread so far is too short to scroll (#4365)", () => {
@@ -639,7 +675,7 @@ describe("transcript viewport", () => {
       view.current.scrollHandlers.onScroll();
     });
 
-    expect(view.current.hiddenCount).toBe(60);
+    expect(view.current.hiddenCount).toBe(180 - TRANSCRIPT_WINDOW_STEP);
   });
 
   it("automatically loads older messages from server when at top of window and hasMore is true", () => {
@@ -674,8 +710,8 @@ describe("a long conversation read from its end to its start and back", () => {
     const view = mount({ messages: rows(3_000) });
     view.act(() => view.current.scrollHandlers.onWheel({ deltaY: -40 } as never));
     let steps = 0;
-    while (view.current.hiddenCount > 0 && steps++ < 100) {
-      scrollTo(view, 400);
+    while (view.current.hiddenCount > 0 && steps++ < 200) {
+      scrollTo(view, 900);
       const reading = readAt(view, 200);
       expect(view.current.windowedMessages.length).toBeLessThanOrEqual(TRANSCRIPT_WINDOW_MAX);
       expect(topId(view), "the row at the top stays the row at the top").toBe(reading);
@@ -686,8 +722,8 @@ describe("a long conversation read from its end to its start and back", () => {
     expect(view.current.following).toBe(false);
 
     steps = 0;
-    while (view.current.laterCount > 0 && steps++ < 100) {
-      scrollTo(view, scroller.bottom - 800);
+    while (view.current.laterCount > 0 && steps++ < 200) {
+      scrollTo(view, scroller.bottom - 900);
       const reading = readAt(view, scroller.bottom - 100);
       expect(view.current.windowedMessages.length).toBeLessThanOrEqual(TRANSCRIPT_WINDOW_MAX);
       expect(topId(view), "the row at the top stays the row at the top").toBe(reading);
@@ -705,11 +741,11 @@ describe("a long conversation read from its end to its start and back", () => {
     view.act(() => view.current.scrollHandlers.onWheel({ deltaY: -40 } as never));
     for (let page = 13; page >= 0; page--) {
       while (view.current.hiddenCount > 0) {
-        scrollTo(view, 400);
+        scrollTo(view, 900);
         scrollTo(view, 100);
       }
       dispatched = [];
-      scrollTo(view, 400);
+      scrollTo(view, 900);
       scrollTo(view, 100);
       expect(dispatched).toEqual([{ type: "loadOlderMessages", threadId: "thread" }]);
       const reading = topId(view);
