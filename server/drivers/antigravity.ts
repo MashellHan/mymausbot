@@ -54,10 +54,42 @@ export function normalizeAntigravityTurn(turn: SendTurnInput, offeredModels: rea
   return split ? { ...turn, ...split } : turn;
 }
 
-/** Antigravity's session modes: `yolo` for Full, `auto_edit` for auto-accept edits, `default` otherwise (it has no reviewer for Auto). */
-export function antigravityPermissionMode(fullAuto: boolean, approvalMode?: ApprovalMode): "yolo" | "auto_edit" | "default" {
-  if (fullAuto || approvalMode === "full") return "yolo";
-  return approvalMode === "edits" ? "auto_edit" : "default";
+export type AntigravityPermissionMode = "yolo" | "auto_edit" | "accept-edits" | "auto" | "default";
+
+/** Antigravity's session modes: official runtimes offer `yolo`/`auto_edit`/`default`, while local `agy` 1.5.14 offers `default`/`accept-edits`/`plan`. */
+export function antigravityPermissionMode(
+  fullAuto: boolean,
+  approvalMode?: ApprovalMode,
+  offeredModes?: readonly string[],
+): AntigravityPermissionMode {
+  const has = (value: string) => offeredModes !== undefined && offeredModes.length > 0 && offeredModes.includes(value);
+  if (fullAuto || approvalMode === "full") {
+    if (!offeredModes?.length || has("yolo")) return "yolo";
+    if (has("auto")) return "auto";
+    if (has("accept-edits")) return "accept-edits";
+    if (has("auto_edit")) return "auto_edit";
+    return "yolo";
+  }
+  if (approvalMode === "edits") {
+    if (!offeredModes?.length || has("auto_edit")) return "auto_edit";
+    if (has("accept-edits")) return "accept-edits";
+    return "auto_edit";
+  }
+  return "default";
+}
+
+function selectOptionValues(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const values: string[] = [];
+  const visit = (entry: any) => {
+    if (Array.isArray(entry?.options)) {
+      entry.options.forEach(visit);
+      return;
+    }
+    if (typeof entry?.value === "string" && entry.value) values.push(entry.value);
+  };
+  value.forEach(visit);
+  return values;
 }
 
 const SIGN_IN_WORDS = /\bauthenticat|\bunauthenticated\b|\bsign(?:ed)?[ -]?in\b|\blog(?:ged)?[ -]?in\b|\bcredentials?\b/iu;
@@ -93,6 +125,7 @@ const support: AcpSupport = {
   },
   images: true,
   spawnArgs: () => [],
+  credentialEnv: ["GEMINI_API_KEY"],
   selectModel: { configId: "model" },
   modelVariants: true,
   normalizeSessionSelection: normalizeAntigravityTurn,
@@ -112,7 +145,9 @@ const support: AcpSupport = {
     if (profile.tempDirectory) scheduleAntigravityTempSweep(instanceId);
     return {
       command: runtime.executablePath,
-      args: process.platform === "linux" ? ["--uid="] : [],
+      args: runtime.source === "local-cli"
+        ? ["acp"]
+        : process.platform === "linux" ? ["--uid="] : [],
       env: profile.environment,
       ro: [join(profile.directory, "omb-skills")],
     };
@@ -131,10 +166,12 @@ const support: AcpSupport = {
     return catalog;
   },
 
-  pickAuthMethod: (methods) => methods.some((method) => method.id === "oauth-personal")
-    ? "oauth-personal"
-    : null,
-  authFailure: "fail",
+  pickAuthMethod: (methods, env) => {
+    if (env.AGY_ACP_FORCE_FILE_STORAGE !== "1") return null;
+    if (methods.some((method) => method.id === "oauth-personal")) return "oauth-personal";
+    throw new Error(support.loginNote);
+  },
+  authFailure: "fail-request",
   // With a stored token Google no longer honours, agy_acp_server 1.4.3 prints its sign-in link and waits on
   // `authenticate`.
   signInRequest: {
@@ -161,6 +198,13 @@ const support: AcpSupport = {
   snapshot: async (env, config, instanceId): Promise<ProviderSnapshot> => {
     try {
       const runtime = await resolveAntigravityRuntime(config.cli, env);
+      if (runtime.source === "local-cli") {
+        return {
+          state: "available",
+          version: runtime.version,
+          authenticated: true,
+        };
+      }
       const profile = await prepareAntigravityProfile({ instanceId, runtime, baseEnv: env });
       return {
         state: "available",
@@ -174,10 +218,14 @@ const support: AcpSupport = {
   },
 
   configureSession: async ({ request, sessionId, config, turn, configOptions }) => {
-    if (!Array.isArray(configOptions) || !configOptions.some(option => option?.id === "mode")) {
+    const modeOption = Array.isArray(configOptions)
+      ? configOptions.find((option: any) => option?.id === "mode")
+      : undefined;
+    if (!modeOption) {
       return;
     }
-    const wanted = antigravityPermissionMode(config.fullAuto, turn.approvalMode);
+    const offered = selectOptionValues((modeOption as { options?: unknown }).options);
+    const wanted = antigravityPermissionMode(config.fullAuto, turn.approvalMode, offered.length ? offered : undefined);
     const result = await request("session/set_config_option", {
       sessionId,
       configId: "mode",
@@ -254,6 +302,9 @@ export const AntigravityDriver: ProviderDriver<AcpConfig> = {
       startAuthentication: async () => {
         await signingOut;
         const { runtime, profile } = await runtimeAndProfile();
+        if (runtime.source === "local-cli") {
+          throw new Error("Local Antigravity CLI uses local Gemini API key configuration instead of Google sign-in.");
+        }
         await verifyAntigravityBrowserHelper(profile);
         return auth.start(runtime, profile);
       },
