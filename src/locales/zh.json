@@ -1605,6 +1605,7 @@
   "browser.dialog.response": "对话框回复",
   "browser.dialog.takeControl": "接管后才能回复。",
   "browser.input.tooSlow": "浏览器跟不上输入，因此已停止发送输入（浏览器可能卡住，或连接较慢）。请重新连接视图后再输入。如果仍然卡住，请重启浏览器。",
+  "browser.input.notReaching": "你的点击和输入没有传到页面。",
   "browser.live.botBusy": "{name} 正在使用这个浏览器。空闲时会打开实时视图…",
   "browser.noEngine": "这里无法使用浏览器。",
   "browser.notice.copied": "页面拷贝了文字",

@@ -1178,6 +1178,7 @@
   "browser.control.yours": "Używasz przeglądarki",
   "browser.control.yoursHint": "Narzędzia przeglądarki bota {name} są wstrzymane, gdy jej używasz. Kontrola wróci do {name} po kilku sekundach bezczynności.",
   "browser.input.tooSlow": "Wprowadzanie w przeglądarce zatrzymano, ponieważ przeglądarka nie nadąża (może się zawiesiła lub połączenie jest wolne). Połącz ponownie widok przed ponownym wpisywaniem. Jeśli nadal się zawiesza, uruchom przeglądarkę ponownie.",
+  "browser.input.notReaching": "Twoje kliknięcia i wpisywany tekst nie docierają do strony.",
   "browser.live.botBusy": "{name} używa tej przeglądarki. Widok na żywo otworzy się, gdy będzie wolna…",
   "browser.noEngine": "Przeglądarka nie jest tu dostępna.",
   "browser.panel.address": "Adres przeglądarki",
