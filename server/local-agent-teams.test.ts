@@ -1062,6 +1062,8 @@ describe("local Agent Team provider", () => {
   it("returns the fast Herdr roster immediately on slow cold enrichment and serves full enriched data once ready", async () => {
     const codexHome = await codexLog(SESSION);
     let releaseSecondList: (() => void) | null = null;
+    let markSecondListEntered!: () => void;
+    const secondListEntered = new Promise<void>((resolve) => { markSecondListEntered = resolve; });
     let agentListCalls = 0;
     let time = 10_000;
     const verifiedAgents = JSON.stringify({
@@ -1082,7 +1084,10 @@ describe("local Agent Team provider", () => {
         agentListCalls++;
         // Hold only the first enrichment verification pass (2nd agent list call) so cold enrichment exceeds fastRosterTimeoutMs.
         if (agentListCalls === 2) {
-          await new Promise<void>((resolve) => { releaseSecondList = resolve; });
+          await new Promise<void>((resolve) => {
+            releaseSecondList = resolve;
+            markSecondListEntered();
+          });
         }
         return verifiedAgents;
       },
@@ -1101,11 +1106,14 @@ describe("local Agent Team provider", () => {
     // Advance clock past 1_000ms while enrichment is still in flight; once it finishes,
     // a non-fresh get() must see the settled snapshot (enriching === undefined), never loop forever.
     time += 2_000;
+    await secondListEntered;
     expect(releaseSecondList).not.toBeNull();
     releaseSecondList!();
-    await new Promise((resolve) => setTimeout(resolve, 15));
-    const settled = await provider.get();
-    expect(settled.enriching).toBeUndefined();
+    const settled = await vi.waitFor(async () => {
+      const snap = await provider.get();
+      expect(snap.enriching).toBeUndefined();
+      return snap;
+    }, { timeout: 2_000, interval: 10 });
     expect(settled.teams[0]?.agents[0]).toMatchObject({ model: "gpt-6-sol", reasoningEffort: "xhigh", contextUsed: 150 });
 
     // Warm SWR returns lastResult immediately with enriching: true after >1s, then clears once background refresh finishes.
@@ -1113,14 +1121,19 @@ describe("local Agent Team provider", () => {
     const warm = await provider.get();
     expect(warm.status).toBe("ready");
     expect(warm.enriching).toBe(true);
-    await new Promise((resolve) => setTimeout(resolve, 15));
-    const afterWarm = await provider.get();
+    const afterWarm = await vi.waitFor(async () => {
+      const snap = await provider.get();
+      expect(snap.enriching).toBeUndefined();
+      return snap;
+    }, { timeout: 2_000, interval: 10 });
     expect(afterWarm.enriching).toBeUndefined();
   });
 
   it("awaits full enrichment on concurrent cold calls when fastRosterTimeoutMs is disabled (0) and transitions warm SWR to stale on Herdr failure", async () => {
     const codexHome = await codexLog(SESSION);
     let releaseSecondList: (() => void) | null = null;
+    let markSecondListEntered!: () => void;
+    const secondListEntered = new Promise<void>((resolve) => { markSecondListEntered = resolve; });
     let agentListCalls = 0;
     let failHerdr = false;
     let time = 10_000;
@@ -1138,7 +1151,10 @@ describe("local Agent Team provider", () => {
       if (args.at(-2) === "workspace") return workspaces;
       agentListCalls++;
       if (agentListCalls === 2) {
-        await new Promise<void>((resolve) => { releaseSecondList = resolve; });
+        await new Promise<void>((resolve) => {
+          releaseSecondList = resolve;
+          markSecondListEntered();
+        });
       }
       return verifiedAgents;
     };
@@ -1147,7 +1163,7 @@ describe("local Agent Team provider", () => {
     const syncProvider = createLocalAgentTeamsProvider({ codexHome, fastRosterTimeoutMs: 0, now: () => time, run });
     const p1 = syncProvider.get();
     const p2 = syncProvider.get();
-    await new Promise((resolve) => setTimeout(resolve, 15));
+    await secondListEntered;
     expect(releaseSecondList).not.toBeNull();
     releaseSecondList!();
     const [r1, r2] = await Promise.all([p1, p2]);
@@ -1167,8 +1183,12 @@ describe("local Agent Team provider", () => {
     const duringFailure = await swrProvider.get();
     expect(duringFailure.status).toBe("ready");
     expect(duringFailure.enriching).toBe(true);
-    await new Promise((resolve) => setTimeout(resolve, 15));
-    const settledStale = await swrProvider.get();
+    const settledStale = await vi.waitFor(async () => {
+      const snap = await swrProvider.get();
+      expect(snap.status).toBe("stale");
+      expect(snap.enriching).toBeUndefined();
+      return snap;
+    }, { timeout: 2_000, interval: 10 });
     expect(settledStale.status).toBe("stale");
     expect(settledStale.enriching).toBeUndefined();
   });
