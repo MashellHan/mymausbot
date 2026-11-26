@@ -190,7 +190,7 @@ import { serveStatic } from "./static-files.ts";
 import { startUpkeep } from "./host/start-upkeep.ts";
 import { ComputerControl, type ControlSnapshot } from "./computer-control.ts"; import { createSharedVmControl } from "./host/shared-vm-control.ts";
 import { resetPathCache, sealedFixture } from "./env-path.ts";
-import { registerEnginesBinDir } from "./engine-install.ts"; import { engineUpdatesFor } from "./engine-updates-host.ts";
+import { registerEnginesBinDir } from "./engine-install.ts"; import { keepsLoadedEngine } from "./engine-entry.ts"; import { engineUpdatesFor } from "./engine-updates-host.ts";
 import { appendUsage, flushUsageLedger, queuedTurnTrigger, usageTriggerFor, type UsageRow, type UsageTrigger } from "./usage-ledger.ts"; import { createUsageAttribution } from "./usage-attribution.ts";
 import { createTraceRecorder } from "./usage-trace/recorder.ts";
 import { GroupUsageReader } from "./group-thread-usage.ts";
@@ -11867,18 +11867,18 @@ async function stopCompanyInstances(ids: string[]) {
 }
 
 async function persistProviderInstance(instanceId: string, instances: NonNullable<AppConfig["instances"]>) {
+  const before = instanceConfigs(cfg)[instanceId];
   saveConfig({ instances }, { replaceInstances: true });
   await confirmSessionConfig();
   cfg.instances = instances;
+  if (registry.get(instanceId) && keepsLoadedEngine(instanceId, instances, before, instanceConfigs(cfg)[instanceId])) return;
   providerAuthSessions.clearInstance(instanceId);
   bus.detach(instanceId);
   if (Object.hasOwn(instances, instanceId)) {
     await registry.load({ [instanceId]: instanceConfigs(cfg)[instanceId] });
     const live = registry.get(instanceId);
     if (live) bus.attach([live]);
-  } else {
-    await registry.dispose(instanceId);
-  }
+  } else await registry.dispose(instanceId);
   resetPathCache();
 }
 
