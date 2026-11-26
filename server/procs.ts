@@ -14,11 +14,12 @@ import { closeSync, existsSync, readdirSync, readFileSync, realpathSync } from "
 import type { Readable, Writable } from "node:stream";
 import { basename, dirname, join, resolve } from "node:path";
 import { botBox, type WrappedSpawn } from "./bot-box/box.ts";
-import type { BoxRequest } from "./bot-box/plan.ts";
+import { type BoxRequest, under } from "./bot-box/plan.ts";
 import { homeProgramsDistrusted, serverMayRunFrom, serverPath } from "./bot-box/program-trust.ts";
 import { engineMemory } from "./engine-memory.ts";
 import { ENGINE_TAG_ENV, engineRunTag, engineStopped, recordEngine } from "./engine-records.ts";
 import { engineHomes } from "./engine-homes/engine-homes.ts";
+import { currentTurn } from "./crash-guard.ts";
 import type { HomedSpawn } from "./engine-homes/layout.ts";
 import { resolveCliSpawn, type ResolvedSpawn } from "./env-path.ts";
 import { spawnBotWork } from "./oom-score.ts";
@@ -304,7 +305,20 @@ export function boxedSpawn(resolved: ResolvedSpawn, opts: CliSpawnOptions, owner
   const request = typeof opts.box === "object" ? opts.box : {};
   const home = homed ? { home: homed.home, shared: homed.shared } : {};
   const threadId = engineHomes.thread(), conversationBot = engineHomes.bot();
-  return botBox.wrap({ command: resolved.command, args: resolved.args, cwd: typeof opts.cwd === "string" ? opts.cwd : undefined, env: opts.env ?? process.env, ...(threadId ? { threadId } : {}), ...(conversationBot ? { conversationBot } : {}), ...request, ...home });
+  const cwd = typeof opts.cwd === "string" ? opts.cwd : undefined;
+  const turn = projectFolderTurn(cwd);
+  return botBox.wrap({ command: resolved.command, args: resolved.args, cwd, env: opts.env ?? process.env, ...(threadId ? { threadId } : {}), ...(conversationBot ? { conversationBot } : {}), ...turn, ...request, ...home });
+}
+
+/** A configured project folder can lie inside another bot's folder, so a turn working there still needs its own bot's
+ * folder and conversation folder in its box. A turn in its bot's own folder (a room's) needs its conversation's too, for
+ * that conversation's uploads (server/box-attachments.ts). */
+function projectFolderTurn(cwd: string | undefined): { botId: string; conversationFolder: string } | null {
+  const dataDir = botBox.startOptions()?.dataDir, turn = currentTurn();
+  if (!cwd || !dataDir || !turn?.botId) return null;
+  const full = resolve(cwd), workspaces = join(resolve(dataDir), "workspaces"), conversations = join(resolve(dataDir), "task-workspaces");
+  if (under(full, conversations) || (dirname(full) === workspaces && basename(full) !== turn.botId) || full === workspaces) return null;
+  return { botId: turn.botId, conversationFolder: join(conversations, turn.botId, turn.threadId) };
 }
 
 /** What the audience rule gives a box in `cwd` now, as a key (null off a team or with the box off): a process kept
@@ -321,7 +335,13 @@ export function boxAudienceKey(cwd: string): string | null {
 export function sharedBoxScope(cwd: string): string | null {
   if (!botBox.enabled()) return null;
   const parent = dirname(resolve(cwd));
-  if (basename(dirname(parent)) !== "task-workspaces") return resolve(cwd);
+  if (basename(dirname(parent)) !== "task-workspaces") {
+    // Another bot's turn in the same project folder has that bot's folder in its box, so it never shares this process;
+    // nor does another conversation's turn in the bot's own folder, whose box has only its own conversation's uploads.
+    const turn = projectFolderTurn(cwd);
+    if (!turn) return resolve(cwd);
+    return `${resolve(cwd)}#${basename(resolve(cwd)) === turn.botId ? turn.conversationFolder : turn.botId}`;
+  }
   const threadId = engineHomes.thread(), conversationBot = engineHomes.bot();
   const threads = botBox.sharedThreadsKey({ cwd, ...(threadId ? { threadId } : {}), ...(conversationBot ? { conversationBot } : {}) });
   return threads ? `${parent}#${createHash("sha256").update(threads).digest("hex").slice(0, 16)}` : parent;
