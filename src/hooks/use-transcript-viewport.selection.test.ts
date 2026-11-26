@@ -51,14 +51,17 @@ function Harness({
     createElement(
       "div",
       { ref: viewport.transcriptRef, role: "log" },
-      viewport.windowedMessages.map((row) =>
-        createElement(
-          "div",
-          { key: row.id, "data-mid": row.id, className: "contents" },
-          createElement("p", null, row.lines[0]),
-          createElement("p", null, row.lines[1]),
-        ),
-      ),
+      (() => {
+        const start = viewport.drawFrom ? Math.max(0, viewport.windowedMessages.findIndex((row) => row.id === viewport.drawFrom)) : 0;
+        return viewport.windowedMessages.slice(start).map((row) =>
+          createElement(
+            "div",
+            { key: row.id, "data-mid": row.id, className: "contents" },
+            createElement("p", null, row.lines[0]),
+            createElement("p", null, row.lines[1]),
+          ),
+        );
+      })(),
     ),
   ) as ReactNode;
 }
@@ -374,5 +377,29 @@ describe("useTranscriptViewport cross-line selection retention", () => {
     render({ messages: edited });
     for (let step = 0; step < 6 && viewport.laterCount > 0; step++) flushSync(() => viewport.showLater());
     expect(document.getSelection()!.isCollapsed).toBe(true);
+  });
+
+  it("keeps a cross-line selection on the newest rows intact when a switched chat's deferred fill completes", async () => {
+    const threadA = makeRows(40, "a");
+    const threadB = makeRows(80, "b");
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: true, value: 400 });
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get() { return this.querySelectorAll ? 50 * this.querySelectorAll("[data-mid]").length : 0; },
+    });
+    try {
+      render({ threadId: "thread-a", messages: threadA });
+      render({ threadId: "thread-b", messages: threadB });
+      expect(viewport.drawFrom).toBe("b60");
+      expect(container.querySelectorAll("[data-mid]")).toHaveLength(20);
+      const selected = selectCrossLine("b75", "b77");
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(viewport.drawFrom).toBeUndefined();
+      expect(container.querySelectorAll("[data-mid]")).toHaveLength(80);
+      expect(String(document.getSelection())).toBe(selected);
+    } finally {
+      delete (HTMLElement.prototype as { clientHeight?: unknown }).clientHeight;
+      delete (HTMLElement.prototype as { scrollHeight?: unknown }).scrollHeight;
+    }
   });
 });
