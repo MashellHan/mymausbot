@@ -706,6 +706,7 @@
   "browser.control.yours": "Tarayıcıyı siz kullanıyorsunuz",
   "browser.control.yoursHint": "Siz kullanırken {name} adlı botun tarayıcı araçları duraklatılır. Girdi olmadan birkaç saniye geçtikten sonra kontrol tekrar {name} adlı bota geçer.",
   "browser.input.tooSlow": "Tarayıcı yetişemediği için tarayıcı girişi durduruldu (takılmış olabilir veya bağlantı yavaş olabilir). Tekrar yazmadan önce görünümü yeniden bağlayın. Takılı kalmaya devam ederse tarayıcıyı yeniden başlatın.",
+  "browser.input.notReaching": "Tıklamalarınız ve yazdıklarınız sayfaya ulaşmıyor.",
   "browser.live.botBusy": "{name} bu tarayıcıyı kullanıyor. Canlı görünüm, tarayıcı boşaldığında açılır…",
   "browser.noEngine": "Tarayıcı burada kullanılamıyor.",
   "browser.panel.engineNotInstalled": "Tarayıcı kurulu değil",

@@ -1238,6 +1238,7 @@
   "browser.control.yours": "あなたがブラウザーを操作中です",
   "browser.control.yoursHint": "あなたの操作中は {name} のブラウザーツールが一時停止します。数秒間入力がなければ、操作権は {name} に戻ります。",
   "browser.input.tooSlow": "ブラウザーが入力に追いつかないため、入力を停止しました（ブラウザーが応答していないか、接続が遅い可能性があります）。再び入力する前にビューを再接続してください。応答しないままの場合は、ブラウザーを再起動してください。",
+  "browser.input.notReaching": "クリックや入力がページに届いていません。",
   "browser.live.botBusy": "{name} がこのブラウザーを使用中です。空くとライブビューが開きます…",
   "browser.noEngine": "ここではブラウザーを利用できません。",
   "browser.panel.address": "ブラウザーのアドレス",
