@@ -22,6 +22,7 @@ import { PageBoundary } from "./components/PageBoundary";
 import { preloadPwaBootCache, type PwaBootCache } from "./lib/pwa-cache";
 import { registerPwaServiceWorker } from "./lib/pwa-sw";
 import { markSessionEnded, endedBeforeReload, forgetEndedSession } from "./lib/session-ended";
+import { startDesktopLaunchMarks } from "./lib/launch-marks";
 import "./styles.css";
 
 // Before first paint; settleInterfaceMode must run before applySkin writes omb-skin.
@@ -38,6 +39,7 @@ const pageLanguage = loadPageLanguage();
 const PAGES_WITHOUT_THE_APP = new Set(["/home", "/pair", "/desktop-viewer"]);
 const loadApp = () => import("./App").catch((error: unknown) => ({ default: (): never => { throw error; } }));
 const appPage = PAGES_WITHOUT_THE_APP.has(location.pathname) ? null : loadApp();
+if (appPage) startDesktopLaunchMarks();
 
 /** A team's name as its server describes itself to anyone (the descriptor's label), null when it can't say. */
 const teamName = () => remoteFetch("/.well-known/openmausbot/environment").then((res) => res.json() as Promise<{ label?: unknown; capabilities?: { cloudTeam?: unknown } }>)

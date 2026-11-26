@@ -13,6 +13,7 @@ import { createSetupClock, type SetupClock, type SetupMs } from "./setup-steps.t
 import type { FailoverWhy } from "./turn-record.ts";
 import { createTurnTimings, type Refusal, type SlowNote, type TurnTimings } from "./turn-timings.ts";
 import { startStallWatch, stallReportLines, type StallWatch } from "./stall-watch.ts";
+import { createLaunchTimings, LAUNCH_FILE, type LaunchTimings } from "./launch-timings.ts";
 
 export const PERF_FILE = "perf-timings.json";
 /** One line per kind of slow event at most this often; the ones held back are counted on the next. */
@@ -41,6 +42,8 @@ export interface PerfHostDeps {
   /** Watch for main-thread stalls (stall-watch.ts): on a Cloud home and a self-hosted server, not in the desktop app. Never
    * without the sampler timer. */
   watchStalls?: boolean;
+  /** The desktop app started this server: its launches are recorded (launch-timings.ts). */
+  launches?: Pick<NonNullable<Parameters<typeof createLaunchTimings>[0]>, "launchId" | "counts" | "server">;
 }
 
 /** What a report shows when the recorder failed: diagnostics never fail because of it. */
@@ -70,6 +73,7 @@ export function createPerfHost(deps: PerfHostDeps) {
     file: join(deps.dataDir, PERF_FILE), now, botOf: (threadId) => deps.store.botByThread(threadId)?.id ?? null,
     slow: (note) => say(note.kind, slowLine(note, now())),
   });
+  const launches: LaunchTimings | null = deps.launches ? createLaunchTimings({ file: join(deps.dataDir, LAUNCH_FILE), now, ...deps.launches }) : null;
   /** Runs `read`, or logs once a minute and returns `fallback`: nothing the recorder does may fail its caller. */
   const guarded = <T>(what: string, read: () => T, fallback: T): T => {
     try { return read(); } catch (error) { say(`failed:${what}`, `the performance recorder failed (${what}): ${error instanceof Error ? error.name : "error"}`); return fallback; }
@@ -107,7 +111,8 @@ export function createPerfHost(deps: PerfHostDeps) {
   const stallsFirst = (lines: string[]) => { const stalls = caught(); return lines[0]?.startsWith("## ") ? [lines[0], ...stalls, ...lines.slice(1)] : [...stalls, ...lines]; };
   if (deps.timer !== false && linux) guarded("limits", () => (deps.log ?? ((line: string) => console.warn(line)))(processes.startLine()), undefined);
 
-  const sources = () => ({ hour: timings.window(), day: timings.day(), live: timings.live(), limits: limits(), process: windows ? null : sampler.report(), stalls: guarded("stalls", () => stalls.report(), null), processes: processes.report() });
+  const sources = () => ({ hour: timings.window(), day: timings.day(), live: timings.live(), limits: limits(), process: windows ? null : sampler.report(), stalls: guarded("stalls", () => stalls.report(), null), processes: processes.report(),
+    launches: launches ? guarded("launches", () => ({ stats: launches.stats(), recent: launches.recent() }), null) : null });
   return {
     timings,
     sampler,
@@ -117,6 +122,8 @@ export function createPerfHost(deps: PerfHostDeps) {
     /** Times one direct turn's setup; its laps go to `noteSetup` just before the engine is asked. */
     setupClock: (): SetupClock => createSetupClock(),
     noteSetup: (threadId: string, ms: SetupMs) => guarded("setup", () => timings.noteSetup(threadId, ms), undefined),
+    /** A part of the app's launch from its main process or its page; null where no app starts this server. */
+    noteLaunch: (part: unknown) => (launches ? guarded("launch", () => launches.note(part), { ok: false, complete: false }) : null),
     /** Logs a usage-limit hold that started or ended since the last check; the sampler runs it after each sample. */
     checkHolds: watchHolds,
     health: (): PerfHealth | null => guarded("health", () => perfHealth(sources()), null),
@@ -129,7 +136,7 @@ export function createPerfHost(deps: PerfHostDeps) {
       return stallsFirst(guarded("text", () => perfLines(sources(), timings.recent({ limit: RECENT_IN_REPORT }), "Latest turns, newest last:"), PERF_UNAVAILABLE)).join("\n");
     },
     /** The graceful shutdown: no more samples, and the turns since the last save written now. */
-    stop() { sampler.stop(); stalls.stop(); watch?.stop(); guarded("save", () => timings.flush(), undefined); },
+    stop() { sampler.stop(); stalls.stop(); watch?.stop(); guarded("save", () => timings.flush(), undefined); if (launches) guarded("launch", () => launches.flush(), undefined); },
   };
 }
 export type PerfHost = ReturnType<typeof createPerfHost>;
