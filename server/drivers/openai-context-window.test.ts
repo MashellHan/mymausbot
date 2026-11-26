@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { OpenAICompatDriver, advertisedContextWindow } from "./openai-compat.ts";
 import { recordEvents } from "../testing/events.ts";
-import { compactBudget, contextWindowFor } from "../context-budget.ts";
+import { DEFAULT_AUTO_COMPACT_CAP, compactBudget, contextWindowFor } from "../context-budget.ts";
 
 const KEY = "fixture-key";
 const MODEL = "local-qwen";
@@ -34,7 +34,7 @@ it("carries discovered capacity into compaction and reported turn usage", async 
   try {
     const window = contextWindowFor(MODEL, inst.models);
     expect(window).toBe(262144);
-    expect(compactBudget(window)).toBe(Math.floor(window * 0.8));
+    expect(compactBudget(window)).toBe(Math.min(Math.floor(window * 0.8), DEFAULT_AUTO_COMPACT_CAP));
     await inst.adapter.sendTurn({ threadId: "window", text: "hello", model: MODEL });
     await recorder.until(event => event.type === "turn.completed");
     expect(recorder.events.find(event => event.type === "thread.token-usage.updated")).toMatchObject({ contextWindow: window, contextTokens: 102 });
