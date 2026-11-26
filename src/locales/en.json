@@ -1495,7 +1495,7 @@
   "botPanel.library.memoryError": "Couldn't read the memory file just now.",
   "botPanel.library.memoryOff": "Memory is off for {name}.",
   "botPanel.library.pages": "Pages",
-  "botPanel.library.scope": "From this conversation",
+  "botPanel.library.showAll": "Show all",
   "botPanel.memory.addPlaceholder": "Tell {name} something to remember",
   "botPanel.memory.editText": "Edit as text",
   "botPanel.memory.empty": "Nothing remembered yet.",

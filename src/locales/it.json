@@ -7075,5 +7075,6 @@
   "server.teammates.noLongerWaiting": "{who} non ti aspetta più",
   "decider.provider.line": "Oppure usa la chiave di un altro fornitore per questi modelli piccoli.",
   "computer.worksOnHintServer": "Scegli dove lavora questo bot. Un computer che condividi dall'app desktop di {app} non si sceglie qui: chiedi al bot di usarlo.",
-  "settings.ai.otherServicesLine": "Chiavi per voci, computer, app e assistenti, oltre ai tuoi modelli principali."
+  "settings.ai.otherServicesLine": "Chiavi per voci, computer, app e assistenti, oltre ai tuoi modelli principali.",
+  "botPanel.library.showAll": "Mostra tutto"
 }

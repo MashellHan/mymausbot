@@ -1083,7 +1083,7 @@
   "botPanel.library.memoryError": "지금은 메모리 파일을 읽지 못했어요.",
   "botPanel.library.memoryOff": "{name}의 메모리가 꺼져 있어요.",
   "botPanel.library.pages": "페이지",
-  "botPanel.library.scope": "이 대화에서",
+  "botPanel.library.showAll": "모두 보기",
   "botPanel.memory.addPlaceholder": "{name}에게 기억할 것을 알려 주세요",
   "botPanel.memory.empty": "아직 기억하는 것이 없어요.",
   "botPanel.memory.forget": "잊기",
