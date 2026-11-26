@@ -54,6 +54,8 @@ export interface LocalAgentTeamsResponse {
   status: LocalDashboardStatus;
   updatedAt: number | null;
   teamCount: number | null;
+  /** True while the server returns a fast roster first and finishes loading model/message/usage details asynchronously. */
+  enriching?: boolean;
   teams: LocalAgentTeam[];
 }
 

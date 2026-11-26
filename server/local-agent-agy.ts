@@ -126,9 +126,26 @@ function readAgySettings(agyHome: string): AgySettingsInfo {
   }
 }
 
+/** Resolves an Agy pane's configured model/effort/contextWindow from `--model` argv or settings.json default, even before a first turn creates a transcript. */
+export function resolveAgyConfiguredRuntime(home: string, configuredModel: string | null): {
+  model: string; effort: string | null; contextWindow: number | null;
+} | null {
+  const settings = readAgySettings(agyHomeDir(home));
+  return resolveConfiguredModel(configuredModel ?? settings.defaultModel, settings);
+}
+
 function resolveBuiltinModel(raw: string): { model: string; effort: string | null; contextWindow: number | null } | null {
   const trimmed = raw.trim();
-  if (!trimmed || trimmed === BYOM_MODEL || !MODEL.test(trimmed)) return null;
+  if (!trimmed || trimmed === BYOM_MODEL) return null;
+  // Handle human-readable Agy settings labels such as "Gemini 4 Neon (High)" or "Gemini 4 Neon (1M / High)".
+  const friendly = /^gemini\s+(4|3\.\d)\s+([a-z0-9-]+)(?:\s*\(([^)]+)\))?$/i.exec(trimmed);
+  if (friendly) {
+    const base = `gemini-${friendly[1]!.toLowerCase()}-${friendly[2]!.toLowerCase()}`;
+    const effort = parseEffortFromLabel(friendly[3]) ?? null;
+    const contextWindow = /^gemini-4-carbon$/i.test(base) ? 1_000_000 : 1_048_576;
+    return { model: base, effort, contextWindow };
+  }
+  if (!MODEL.test(trimmed)) return null;
   const effortMatch = EFFORT_SUFFIX.exec(trimmed);
   const effort = effortMatch ? effortMatch[1]!.toLowerCase() : null;
   const base = effortMatch ? trimmed.slice(0, -effortMatch[0].length) : trimmed;
@@ -160,6 +177,23 @@ export function agyModelFromArgv(argv: readonly unknown[]): string | null {
     if (arg.startsWith("--model=")) {
       const value = arg.slice("--model=".length).trim();
       return value || null;
+    }
+  }
+  return null;
+}
+
+/** Extracts `--conversation <uuid>` from live pane process argv when Herdr has not yet observed an Agy session ID. */
+export function agyConversationFromArgv(argv: readonly unknown[]): string | null {
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index];
+    if (typeof arg !== "string") continue;
+    if ((arg === "--conversation" || arg === "-c") && typeof argv[index + 1] === "string") {
+      const value = (argv[index + 1] as string).trim().toLowerCase();
+      return SESSION_ID.test(value) ? value : null;
+    }
+    if (arg.startsWith("--conversation=")) {
+      const value = arg.slice("--conversation=".length).trim().toLowerCase();
+      return SESSION_ID.test(value) ? value : null;
     }
   }
   return null;

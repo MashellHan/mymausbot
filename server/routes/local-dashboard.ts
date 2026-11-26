@@ -46,7 +46,10 @@ export function createLocalDashboardRoutes(providers: LocalDashboardProviders): 
 }
 
 export const localDashboardProviders: LocalDashboardProviders = {
-  agents: createLocalAgentTeamsProvider({ bindingCachePath: join(DATA_DIR, "local-agent-usage-bindings-v1.json") }),
+  agents: createLocalAgentTeamsProvider({
+    bindingCachePath: join(DATA_DIR, "local-agent-usage-bindings-v1.json"),
+    fastRosterTimeoutMs: 120,
+  }),
   activity: createLocalAgentActivityProvider(),
   configuration: createLocalAgentConfigurationProvider(),
   usage: createLocalUsageProvider(),

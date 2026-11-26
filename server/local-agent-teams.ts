@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import type { LocalAgentMember, LocalAgentState, LocalAgentTeamsResponse, LocalAgentTeam } from "../shared/local-dashboard.ts";
 import { OwnedFile } from "./atomic.ts";
 import { augmentedPath } from "./env-path.ts";
-import { agyModelFromArgv, agySessionId, readAgySessions } from "./local-agent-agy.ts";
+import { agyConversationFromArgv, agyModelFromArgv, agySessionId, readAgySessions, resolveAgyConfiguredRuntime } from "./local-agent-agy.ts";
 import { readOpenCodeMessages } from "./local-agent-opencode-message.ts";
 import { openCodeSessionId, openCodeUsageDatabases, readOpenCodeMemberUsage } from "./local-agent-opencode-usage.ts";
 import { codexSessionId, createLocalAgentSessionReader, dashboardText, unavailableMemberUsage } from "./local-agent-session.ts";
@@ -85,25 +85,44 @@ async function observePiContexts(agents: Record<string, unknown>[], sessions: Ma
   } catch { return new Map(); }
 }
 
-async function observeAgyModels(panes: readonly string[], run: HerdrRunner): Promise<Map<string, string>> {
+async function observeAgyProcesses(panes: readonly string[], run: HerdrRunner): Promise<{
+  models: Map<string, string>;
+  conversations: Map<string, string>;
+}> {
   const models = new Map<string, string>();
-  if (!panes.length) return models;
-  await Promise.all(panes.slice(0, 16).map(async (pane) => {
+  const conversations = new Map<string, string>();
+  if (!panes.length) return { models, conversations };
+  await Promise.all(panes.slice(0, 24).map(async (pane) => {
     try {
       const { result } = JSON.parse(await run(["--session", "default", "pane", "process-info", "--pane", pane]));
-      const processes = result?.process_info?.foreground_processes;
+      const info = result?.process_info;
+      const processes = info?.pane_id === pane ? info.foreground_processes : null;
       if (!Array.isArray(processes)) return;
       for (const proc of processes) {
         if (!Array.isArray(proc?.argv)) continue;
-        const model = agyModelFromArgv(proc.argv);
-        if (model) { models.set(pane, model); return; }
+        if (!models.has(pane)) {
+          const model = agyModelFromArgv(proc.argv);
+          if (model) models.set(pane, model);
+        }
+        if (!conversations.has(pane)) {
+          const conversation = agyConversationFromArgv(proc.argv);
+          if (conversation) conversations.set(pane, conversation);
+        }
       }
     } catch { /* fallback to settings.json default */ }
   }));
-  return models;
+  return { models, conversations };
 }
 
-type BindingState = { starts: Map<string, number>; sessionOwners: Map<string, string>; legacyStarts?: Map<string, number> };
+type BindingState = {
+  starts: Map<string, number>;
+  sessionOwners: Map<string, string>;
+  legacyStarts?: Map<string, number>;
+  /** Maps sessionHash -> stable seat fingerprint (pane + agent + seatName + session, without transient terminal_id). */
+  seatOwners: Map<string, string>;
+  /** True when the restored file predated `seats` tracking (only `bindings` + `sessions`), enabling a one-time same-origin upgrade. */
+  preSeats?: boolean;
+};
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const sessionFingerprint = (session: string) => createHash("sha256").update(`session:${session}`).digest("hex");
 
@@ -118,41 +137,92 @@ async function restoreBindingStarts(file: OwnedFile): Promise<BindingState> {
           ? (parsed as { bindings: unknown[] }).bindings : null;
       const sessions = parsed && typeof parsed === "object" && !isLegacy && Array.isArray((parsed as { sessions?: unknown }).sessions)
         ? (parsed as { sessions: unknown[] }).sessions : [];
+      const hasSeatsField = Boolean(parsed && typeof parsed === "object" && !isLegacy && Array.isArray((parsed as { seats?: unknown }).seats));
+      const seats = hasSeatsField ? (parsed as { seats: unknown[] }).seats : [];
       if (entries && entries.length <= 200 && entries.every((entry): entry is [string, number] =>
         Array.isArray(entry) && entry.length === 2 && typeof entry[0] === "string" && BINDING_FINGERPRINT.test(entry[0]) &&
         Number.isSafeInteger(entry[1]) && entry[1] >= 0)) {
         const validSessions = sessions.length <= 200 && sessions.every((entry): entry is [string, string] =>
           Array.isArray(entry) && entry.length === 2 && typeof entry[0] === "string" && BINDING_FINGERPRINT.test(entry[0]) &&
           typeof entry[1] === "string" && BINDING_FINGERPRINT.test(entry[1])) ? sessions : [];
+        const validSeats = seats.length <= 200 && seats.every((entry): entry is [string, string] =>
+          Array.isArray(entry) && entry.length === 2 && typeof entry[0] === "string" && BINDING_FINGERPRINT.test(entry[0]) &&
+          typeof entry[1] === "string" && BINDING_FINGERPRINT.test(entry[1])) ? seats : [];
         file.loaded(saved.markdown!);
         return {
           starts: new Map(entries),
           sessionOwners: new Map(validSessions),
+          seatOwners: new Map(validSeats),
           ...(isLegacy ? { legacyStarts: new Map(entries) } : {}),
+          ...(!hasSeatsField ? { preSeats: true } : {}),
         };
       }
     }
   } catch { /* The cache is optional. */ }
-  return { starts: new Map(), sessionOwners: new Map() };
+  return { starts: new Map(), sessionOwners: new Map(), seatOwners: new Map() };
 }
 
 export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir(), codexHome = process.env.CODEX_HOME || join(home, ".codex"),
-  bindingCachePath, now = Date.now, readProcessStart = readPiProcessStart }: {
+  bindingCachePath, now = Date.now, readProcessStart = readPiProcessStart, fastRosterTimeoutMs = 0 }: {
   run?: HerdrRunner; home?: string; codexHome?: string; bindingCachePath?: string;
   now?: () => number; readProcessStart?: PiProcessStart;
+  /** When > 0 and no full snapshot is cached yet, return the fast Herdr roster if full enrichment exceeds this budget while continuing enrichment in the background. */
+  fastRosterTimeoutMs?: number;
 } = {}) {
   const observationsFor = createLocalAgentSessionReader(codexHome, now);
   const piSessionsFor = createPiSessionReader(join(home, ".local", "share", "mausbot-team", "pi-agent"));
   let lastGood: LocalAgentTeamsResponse | null = null;
   let lastResult: LocalAgentTeamsResponse | null = null;
+  let lastFastRoster: LocalAgentTeamsResponse | null = null;
   let lastAttempt = -Infinity;
   let pending: Promise<LocalAgentTeamsResponse> | null = null;
+  let pendingRoster: Promise<LocalAgentTeamsResponse | null> | null = null;
   let revision = 0;
   const bindingFile = bindingCachePath ? new OwnedFile(bindingCachePath, { mode: 0o600 }) : null;
   let restoredBindings: Promise<BindingState> | undefined;
   let bindingStarts: BindingState | undefined;
 
-  async function refresh(current: () => boolean): Promise<LocalAgentTeamsResponse> {
+  function buildFastRoster(workspaces: Record<string, unknown>[], agents: Record<string, unknown>[], sampledAt: number): LocalAgentTeamsResponse {
+    const teams = new Map<string, LocalAgentTeam>();
+    for (const workspace of workspaces) {
+      const id = workspace.workspace_id;
+      if (typeof id !== "string" || !id || teams.has(id)) throw new Error("Invalid workspace identity");
+      teams.set(id, {
+        id, name: dashboardText(workspace.label, 100) || id, agentCount: 0, activeAgentCount: 0, lastActivityAt: null,
+        tokenUsage24h: { coverage: "unavailable", knownTokens: null },
+        tokenUsage7d: { coverage: "unavailable", knownTokens: null },
+        agents: [],
+      });
+    }
+    const seen = new Set<string>();
+    for (const agent of agents) {
+      const id = agent.pane_id;
+      const team = teams.get(String(agent.workspace_id));
+      if (typeof id !== "string" || !id || seen.has(id) || !team) throw new Error("Invalid agent identity");
+      seen.add(id);
+      const occupantId = localAgentOccupantId(agent, id);
+      team.agents.push({
+        id, name: dashboardText(agent.name, 100) || id, kind: dashboardText(agent.agent, 40) || "unknown",
+        ...(occupantId ? { occupantId } : {}),
+        role: null, model: null, reasoningEffort: null, contextUsed: null, contextWindow: null,
+        state: state(agent.agent_status), taskHint: null, messagePreview: null,
+        tokenUsage24h: unavailableMemberUsage(), tokenUsage7d: unavailableMemberUsage(),
+      });
+    }
+    for (const team of teams.values()) {
+      team.agentCount = team.agents.length;
+      team.activeAgentCount = team.agents.filter((member) => member.state === "working").length;
+    }
+    return { status: "ready", updatedAt: sampledAt, teamCount: teams.size, enriching: true, teams: [...teams.values()] };
+  }
+
+  async function refresh(current: () => boolean, onRoster?: (roster: LocalAgentTeamsResponse | null) => void): Promise<LocalAgentTeamsResponse> {
+    let rosterResolved = false;
+    const emitRoster = (value: LocalAgentTeamsResponse | null) => {
+      if (rosterResolved) return;
+      rosterResolved = true;
+      onRoster?.(value);
+    };
     try {
       const responses = await Promise.allSettled([
         run(["--session", "default", "workspace", "list"]),
@@ -163,6 +233,14 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
       const workspaces = herdrRows(workspaceOutput, "workspaces");
       const agents = herdrRows(agentOutput, "agents");
       const sampledAt = now();
+      if (fastRosterTimeoutMs > 0 && !lastResult) {
+        const fastRoster = buildFastRoster(workspaces, agents, sampledAt);
+        if (current()) lastFastRoster = fastRoster;
+        emitRoster(fastRoster);
+        // Yield once so a caller waiting on the fast-roster race timer can receive the fast roster
+        // before synchronous SQLite queries (`readOpenCodeMemberUsage` / `readOpenCodeMessages`) run.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
       const teams = new Map<string, LocalAgentTeam>();
       for (const workspace of workspaces) {
         const id = workspace.workspace_id;
@@ -179,22 +257,54 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         const id = agySessionId(agent);
         return id ? [[String(agent.pane_id), id] as const] : [];
       }));
+      const agyPanes = agents.flatMap((agent) =>
+        agent.agent === "agy" && typeof agent.pane_id === "string" && agent.pane_id ? [agent.pane_id] : []);
       const openCodeIds = [...openCodeSessions.values()];
       const openCodeFiles = openCodeUsageDatabases(home);
-      const openCodeUsage = readOpenCodeMemberUsage(openCodeFiles, openCodeIds, sampledAt);
-      const [observations, roles, piSessions, agyModels] = await Promise.all([
+      const [observations, roles, piSessions, agyProcesses] = await Promise.all([
         observationsFor(agents), localAgentRoles(verified, home), piSessionsFor(verified),
-        observeAgyModels([...agySessions.keys()], run),
+        observeAgyProcesses(agyPanes, run),
       ]);
-      const agyInput = new Map([...agySessions.entries()].map(([pane, sessionId]) =>
-        [pane, { sessionId, configuredModel: agyModels.get(pane) ?? null }] as const));
+      // When Herdr has not yet emitted `agent_session` for an idle resumed Agy pane (before its first new turn),
+      // recover its uniquely claimed `--conversation <uuid>` from the live pane's process argv so model/effort/context/usage stay visible.
+      const agyFallbackSessions = new Map<string, string>();
+      const agyConvClaims = new Map<string, number>();
+      for (const sessionId of agySessions.values()) {
+        agyConvClaims.set(sessionId, (agyConvClaims.get(sessionId) ?? 0) + 1);
+      }
+      for (const agent of agents) {
+        if (agent.agent !== "agy" || typeof agent.pane_id !== "string" || agySessions.has(agent.pane_id)) continue;
+        const conv = agyProcesses.conversations.get(agent.pane_id);
+        if (conv) agyConvClaims.set(conv, (agyConvClaims.get(conv) ?? 0) + 1);
+      }
+      for (const agent of agents) {
+        if (agent.agent !== "agy" || typeof agent.pane_id !== "string" || agySessions.has(agent.pane_id)) continue;
+        const conv = agyProcesses.conversations.get(agent.pane_id);
+        if (conv && agyConvClaims.get(conv) === 1) {
+          agyFallbackSessions.set(agent.pane_id, conv);
+        }
+      }
+      const agyInput = new Map([
+        ...[...agySessions.entries()].map(([pane, sessionId]) =>
+          [pane, { sessionId, configuredModel: agyProcesses.models.get(pane) ?? null }] as const),
+        ...[...agyFallbackSessions.entries()].map(([pane, sessionId]) =>
+          [pane, { sessionId, configuredModel: agyProcesses.models.get(pane) ?? null }] as const),
+      ]);
+      const agyConfiguredOnly = new Map(
+        agyPanes.filter((pane) => !agyInput.has(pane)).map((pane) => [pane, agyProcesses.models.get(pane) ?? null] as const),
+      );
       const [piContexts, agyObservations] = await Promise.all([
         observePiContexts(verified, piSessions, run, readProcessStart, now),
         readAgySessions(home, agyInput, sampledAt),
       ]);
+      // Run synchronous OpenCode SQLite queries after async I/O has started (and fast-roster timer had a chance to fire).
+      const openCodeUsage = readOpenCodeMemberUsage(openCodeFiles, openCodeIds, sampledAt);
       const openCodeMessages = readOpenCodeMessages(openCodeFiles, openCodeIds, "preview");
-      const liveUsageMembers = openCodeIds.length || agySessions.size || verified.some(codexSessionId)
-        ? verifiedLocalAgentMembers(herdrRows(await run(["--session", "default", "agent", "list"]), "agents")) : [];
+      const liveRawAgents = openCodeIds.length || agySessions.size || agyFallbackSessions.size || verified.some(codexSessionId)
+        ? herdrRows(await run(["--session", "default", "agent", "list"]), "agents") : [];
+      const liveRawByPane = new Map(liveRawAgents.flatMap((agent) =>
+        typeof agent.pane_id === "string" && agent.pane_id ? [[agent.pane_id, agent] as const] : []));
+      const liveUsageMembers = verifiedLocalAgentMembers(liveRawAgents);
       const liveByPane = new Map(liveUsageMembers.map((agent) => [agent.pane_id, agent] as const));
       const sessionTeams = new Map<string, Set<string>>();
       const sessionClaims = new Map<string, number>();
@@ -206,9 +316,10 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         owners.add(String(agent.workspace_id));
         sessionTeams.set(session, owners);
       }
-      const previousBindings: BindingState = bindingStarts ?? await (restoredBindings ??= bindingFile ? restoreBindingStarts(bindingFile) : Promise.resolve<BindingState>({ starts: new Map(), sessionOwners: new Map() }));
+      const previousBindings: BindingState = bindingStarts ?? await (restoredBindings ??= bindingFile ? restoreBindingStarts(bindingFile) : Promise.resolve<BindingState>({ starts: new Map(), sessionOwners: new Map(), seatOwners: new Map() }));
       const nextStarts = new Map<string, number>();
       const nextSessionOwners = new Map<string, string>();
+      const nextSeatOwners = new Map<string, string>();
       const invalidatedKeys = new Set<string>();
       const openCodeUsageByPane = new Map<string, { session: string; usage: ReturnType<NonNullable<ReturnType<typeof openCodeUsage.get>>["usage"]> }>();
       const agyUsageByPane = new Map<string, { session: string; usage: ReturnType<NonNullable<ReturnType<typeof agyObservations.get>>["usage"]> }>();
@@ -221,12 +332,22 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         const sessionId = codexSessionId(agent);
         const occupantId = localAgentOccupantId(agent, id);
         const live = liveByPane.get(id);
+        const liveRaw = liveRawByPane.get(id);
         const sameBinding = current() && live && occupantId && live.agent === agent.agent && live.cwd === agent.cwd &&
           live.terminal_id === agent.terminal_id && localAgentOccupantId(live, id) === occupantId;
         const verifiedCodexMember = sameBinding && verifiedIds.has(id) && sessionId !== null && codexSessionId(live) === sessionId &&
           sessionClaims.get(sessionId) === 1;
         const openCodeSession = sameBinding && openCodeSessionId(live) === openCodeSessions.get(id) ? openCodeSessions.get(id) : undefined;
-        const agySession = sameBinding && agySessionId(live) === agySessions.get(id) ? agySessions.get(id) : undefined;
+        const agyFallbackSession = agyFallbackSessions.get(id);
+        const liveRawAgySession = liveRaw ? agySessionId(liveRaw) : null;
+        const sameFallbackBinding = Boolean(
+          current() && agyFallbackSession && liveRaw &&
+          liveRaw.agent === "agy" && liveRaw.cwd === agent.cwd &&
+          liveRaw.terminal_id === agent.terminal_id && liveRaw.name === agent.name &&
+          (liveRawAgySession === null || liveRawAgySession === agyFallbackSession),
+        );
+        const agySession = (sameBinding && agySessionId(live) === agySessions.get(id) ? agySessions.get(id) : undefined)
+          ?? (sameFallbackBinding ? agyFallbackSession : undefined);
         const openCode = openCodeSession ? openCodeMessages.get(openCodeSession) : undefined;
         const observation = sessionId ? observations.get(sessionId) : null;
         const openCodeEntry = openCodeSession ? openCodeUsage.get(openCodeSession) : undefined;
@@ -235,10 +356,17 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         const memberLastActivity = observation?.lastActivityAt ?? agyEntry?.lastActivityAt ?? null;
         if (memberLastActivity != null) team.lastActivityAt = Math.max(team.lastActivityAt ?? 0, memberLastActivity);
         const boundSession = verifiedCodexMember ? sessionId : openCodeSession ?? agySession;
-        const rawSession = sessionId ?? openCodeSessionId(agent) ?? agySessionId(agent);
-        const binding = boundSession && occupantId ? JSON.stringify([id, agent.agent, occupantId, boundSession, agent.terminal_id]) : null;
+        const rawSession = sessionId ?? openCodeSessionId(agent) ?? agySessionId(agent) ?? agyFallbackSession ?? null;
+        const effectiveOccupant = occupantId ?? (agyFallbackSession && typeof agent.name === "string" && agent.name
+          ? localAgentOccupantId({ ...agent, agent_session: { source: "herdr:antigravity_cli", value: agyFallbackSession } }, id) : null);
+        const binding = boundSession && effectiveOccupant ? JSON.stringify([id, agent.agent, effectiveOccupant, boundSession, agent.terminal_id]) : null;
         const bindingKey = binding && typeof agent.terminal_id === "string" && agent.terminal_id
           ? createHash("sha256").update(binding).digest("hex") : binding;
+        // Key stable seat continuity on `(pane, agent, name, session)` so both Herdr `terminal_id` rotation and
+        // Agy idle `--conversation` fallback (before Herdr re-emits `agent_session`) map to the same seat owner.
+        const seatName = typeof agent.name === "string" && agent.name ? agent.name : effectiveOccupant;
+        const seatOwnerKey = boundSession && seatName
+          ? createHash("sha256").update(JSON.stringify([id, agent.agent, seatName, boundSession])).digest("hex") : null;
         const legacyKey = boundSession && occupantId && typeof agent.terminal_id === "string" && agent.terminal_id
           ? createHash("sha256").update(JSON.stringify([id, agent.agent, occupantId, boundSession, agent.cwd, agent.terminal_id])).digest("hex") : null;
         if (!boundSession && rawSession && occupantId && typeof agent.terminal_id === "string" && agent.terminal_id) {
@@ -252,20 +380,38 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         const savedStart = directStart ?? legacyStart;
         const sessionHash = boundSession ? sessionFingerprint(boundSession) : null;
         const priorOwner = sessionHash ? previousBindings.sessionOwners.get(sessionHash) : undefined;
+        const priorSeatOwner = sessionHash ? previousBindings.seatOwners.get(sessionHash) : undefined;
         const originDir = verifiedCodexMember ? observation?.sessionCwd ?? null
           : openCodeEntry?.sessionDir ?? agyEntry?.sessionDir ?? null;
         const originStartedAt = verifiedCodexMember ? observation?.sessionStartedAt ?? null
           : openCodeEntry?.sessionStartedAt ?? agyEntry?.sessionStartedAt ?? null;
+        // Same-origin continuity: a session started inside the same git repository belongs to this seat when
+        // unclaimed, already owned by this binding, or returning to the exact same `(pane, agent, seatName, session)`
+        // after a Herdr daemon restart rotates `terminal_id`. Cross-pane moves (`priorSeatOwner !== seatOwnerKey`),
+        // missing `priorSeatOwner` on pre-`seats` caches, and non-origin sessions remain strictly gated at `sampledAt`.
+        const sameSeatContinuity = Boolean(
+          !priorOwner
+          || priorOwner === bindingKey
+          || (seatOwnerKey && priorSeatOwner === seatOwnerKey),
+        );
         const sameOrigin = Boolean(
-          bindingKey && (!priorOwner || priorOwner === bindingKey) &&
+          bindingKey && sameSeatContinuity &&
           typeof agent.cwd === "string" && originDir && await sameGitRepository(originDir, agent.cwd),
         );
         let switchedAt = savedStart !== undefined && savedStart <= sampledAt ? savedStart : sampledAt;
-        if (sameOrigin && (directStart === undefined || (legacyStart !== undefined && directStart === undefined))) {
+        // On a one-time upgrade from a pre-`seats` bindings cache where this exact binding already owns the
+        // same-origin session (never moved), lift any old restart-clamped `directStart` back to `originStartedAt`.
+        const upgradePreSeatsOrigin = Boolean(
+          previousBindings.preSeats && priorOwner === bindingKey && originStartedAt !== null && originStartedAt < switchedAt,
+        );
+        if (sameOrigin && (directStart === undefined || upgradePreSeatsOrigin)) {
           switchedAt = originStartedAt !== null && originStartedAt <= sampledAt ? originStartedAt : 0;
         }
         if (bindingKey) nextStarts.set(bindingKey, switchedAt);
-        if (sessionHash) nextSessionOwners.set(sessionHash, bindingKey ?? (priorOwner || "claimed"));
+        if (sessionHash) {
+          nextSessionOwners.set(sessionHash, bindingKey ?? (priorOwner || "claimed"));
+          if (seatOwnerKey) nextSeatOwners.set(sessionHash, seatOwnerKey);
+        }
         const openCodeMemberUsage = openCodeEntry?.usage(switchedAt);
         if (openCodeSession && openCodeMemberUsage) openCodeUsageByPane.set(id, { session: openCodeSession, usage: openCodeMemberUsage });
         const agyMemberUsage = agyEntry?.usage(switchedAt);
@@ -273,13 +419,15 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         const usage = verifiedCodexMember && observation
           ? observation.memberUsage(switchedAt)
           : openCodeMemberUsage ?? agyMemberUsage ?? { tokenUsage24h: unavailableMemberUsage(), tokenUsage7d: unavailableMemberUsage() };
+        const configuredAgy = current() && !agyEntry && agyConfiguredOnly.has(id)
+          ? resolveAgyConfiguredRuntime(home, agyConfiguredOnly.get(id) ?? null) : null;
         const member: LocalAgentMember = {
           id, name: dashboardText(agent.name, 100) || id, kind: dashboardText(agent.agent, 40) || "unknown",
           ...(occupantId ? { occupantId } : {}),
-          role: dashboardText(roles.get(id), 40), model: observation?.model ?? pi?.model ?? openCode?.model ?? agyEntry?.model ?? null,
-          reasoningEffort: observation?.reasoningEffort ?? pi?.reasoningEffort ?? openCode?.reasoningEffort ?? agyEntry?.reasoningEffort ?? null,
+          role: dashboardText(roles.get(id), 40), model: observation?.model ?? pi?.model ?? openCode?.model ?? agyEntry?.model ?? configuredAgy?.model ?? null,
+          reasoningEffort: observation?.reasoningEffort ?? pi?.reasoningEffort ?? openCode?.reasoningEffort ?? agyEntry?.reasoningEffort ?? configuredAgy?.effort ?? null,
           contextUsed: observation?.contextUsed ?? agyEntry?.contextUsed ?? null,
-          contextWindow: observation?.contextWindow ?? (current() ? piContexts.get(id) : undefined) ?? agyEntry?.contextWindow ?? null,
+          contextWindow: observation?.contextWindow ?? (current() ? piContexts.get(id) : undefined) ?? agyEntry?.contextWindow ?? configuredAgy?.contextWindow ?? null,
           state: state(agent.agent_status), taskHint: observation?.taskHint ?? agyEntry?.taskHint ?? null,
           messagePreview: verifiedIds.has(id) ? observation?.messagePreview ?? pi?.preview ?? openCode?.preview ?? agyEntry?.preview ?? null : null,
           tokenUsage24h: usage.tokenUsage24h,
@@ -296,11 +444,17 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
           if (nextSessionOwners.has(sessionHash) || !nextStarts.has(owner)) continue;
           nextSessionOwners.set(sessionHash, owner);
         }
-        bindingStarts = { starts: nextStarts, sessionOwners: nextSessionOwners };
+        for (const [sessionHash, seat] of previousBindings.seatOwners) {
+          if (nextSeatOwners.has(sessionHash) || !nextSessionOwners.has(sessionHash)) continue;
+          nextSeatOwners.set(sessionHash, seat);
+        }
+        bindingStarts = { starts: nextStarts, sessionOwners: nextSessionOwners, seatOwners: nextSeatOwners };
         const bindings = [...nextStarts].filter(([key]) => BINDING_FINGERPRINT.test(key)).sort((a, b) => b[1] - a[1]).slice(0, 200);
         const kept = new Set(bindings.map(([key]) => key));
         const sessions = [...nextSessionOwners].filter(([key, owner]) => BINDING_FINGERPRINT.test(key) && kept.has(owner)).sort().slice(0, 200);
-        try { bindingFile?.write(JSON.stringify({ bindings, sessions })); } catch { /* Keep the in-memory observations. */ }
+        const keptSessions = new Set(sessions.map(([key]) => key));
+        const seats = [...nextSeatOwners].filter(([key, seat]) => keptSessions.has(key) && BINDING_FINGERPRINT.test(seat)).sort().slice(0, 200);
+        try { bindingFile?.write(JSON.stringify({ bindings, sessions, seats })); } catch { /* Keep the in-memory observations. */ }
       }
       for (const team of teams.values()) {
         team.agentCount = team.agents.length;
@@ -345,6 +499,7 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
       if (current()) lastGood = response;
       return response;
     } catch {
+      emitRoster(null);
       return lastGood ? { ...lastGood, status: "stale", teams: lastGood.teams.map((team) => ({ ...team,
         agents: team.agents.map((member) => ({ ...member, role: null, messagePreview: null,
           contextWindow: member.kind === "pi" ? null : member.contextWindow })),
@@ -352,20 +507,82 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
     }
   }
 
+  function startRefresh(): Promise<LocalAgentTeamsResponse> {
+    const request = ++revision;
+    lastAttempt = now();
+    lastFastRoster = null;
+    let resolveRoster!: (roster: LocalAgentTeamsResponse | null) => void;
+    const rosterPromise = new Promise<LocalAgentTeamsResponse | null>((resolve) => { resolveRoster = resolve; });
+    pendingRoster = rosterPromise;
+    const next: Promise<LocalAgentTeamsResponse> = refresh(() => request === revision, resolveRoster).then((value) => {
+      if (request === revision) {
+        lastResult = value;
+        lastAttempt = now();
+        if (value.status !== "ready") lastGood = value.status === "stale" ? lastGood : null;
+      }
+      return value;
+    }).finally(() => {
+      if (pending === next) {
+        pending = null;
+        lastFastRoster = null;
+      }
+      if (pendingRoster === rosterPromise) pendingRoster = null;
+    });
+    pending = next;
+    return next;
+  }
+
+  function raceWithFastRoster(full: Promise<LocalAgentTeamsResponse>, roster: Promise<LocalAgentTeamsResponse | null> | null): Promise<LocalAgentTeamsResponse> {
+    if (fastRosterTimeoutMs <= 0 || !roster) return full;
+    return new Promise<LocalAgentTeamsResponse>((resolve, reject) => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const done = (value: LocalAgentTeamsResponse) => {
+        if (settled) return;
+        settled = true;
+        if (timer !== undefined) clearTimeout(timer);
+        resolve(value);
+      };
+      full.then(done, (error) => {
+        if (settled) return;
+        settled = true;
+        if (timer !== undefined) clearTimeout(timer);
+        reject(error);
+      });
+      timer = setTimeout(() => {
+        void roster.then((fast) => {
+          if (fast && !settled) done(fast);
+        });
+      }, fastRosterTimeoutMs);
+    });
+  }
+
   return {
     get(fresh = false): Promise<LocalAgentTeamsResponse> {
-      if (!fresh && pending) return pending;
+      if (!fresh && pending) {
+        if (fastRosterTimeoutMs > 0) {
+          if (lastResult && lastResult.status === "ready" &&
+              !lastResult.teams.some((team) => team.agents.some((member) => member.kind === "pi" && member.contextWindow !== null))) {
+            return Promise.resolve({ ...lastResult, enriching: true });
+          }
+          if (!lastResult && lastFastRoster) return Promise.resolve(lastFastRoster);
+          if (!lastResult) return raceWithFastRoster(pending, pendingRoster);
+        }
+        return pending;
+      }
       if (!fresh && lastResult && now() - lastAttempt < 1_000 &&
           !lastResult.teams.some((team) => team.agents.some((member) => member.kind === "pi" && member.contextWindow !== null))) {
         return Promise.resolve(lastResult);
       }
-      const request = ++revision;
-      lastAttempt = now();
-      const next: Promise<LocalAgentTeamsResponse> = refresh(() => request === revision).then((value) => {
-        if (request === revision) lastResult = value;
-        return value;
-      }).finally(() => { if (pending === next) pending = null; });
-      pending = next;
+      if (!fresh && fastRosterTimeoutMs > 0 && lastResult && lastResult.status === "ready" &&
+          !lastResult.teams.some((team) => team.agents.some((member) => member.kind === "pi" && member.contextWindow !== null))) {
+        // Stale-while-revalidate: serve the last verified ready snapshot immediately and refresh in the background
+        // so opening or returning to Agent Team never blocks on SQLite/transcript scans.
+        void startRefresh();
+        return Promise.resolve({ ...lastResult, enriching: true });
+      }
+      const next = startRefresh();
+      if (!fresh && !lastResult) return raceWithFastRoster(next, pendingRoster);
       return next;
     },
   };
