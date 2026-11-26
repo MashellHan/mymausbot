@@ -3,12 +3,13 @@
 // authorization, immutable context snapshots, and shared timeline merge helpers.
 
 import { isReadOnlyAgentTool, READ_ONLY_AGENT_TOOL_NAMES } from "./agent-tool-policy.ts";
-import type { SendTurnInput } from "./contracts.ts";
+import type { DriverKind, SendTurnInput } from "./contracts.ts";
 import { floorReading } from "./safety-floor.ts";
 import { safetyFloorBlock, safetyFloorClears, shellCommandOfToolCall } from "./safety-floor-gate.ts";
 import type { FollowUp } from "../shared/follow-up.ts";
 import { connectorCallsIn, isOutboundTool, isReadOnlyTool, KNOWN_READ_SLUGS } from "../shared/outbound.ts";
-import type { ToolScope } from "../shared/tool-scope.ts";
+import { parseToolScope, type ToolScope } from "../shared/tool-scope.ts";
+import { TOOL_SCOPE_SUPPORT } from "../shared/tool-scope-support.ts";
 import type { ReadOnlyWorkerClassification } from "./readonly-worker-timeline.ts";
 
 export {
@@ -66,15 +67,46 @@ export const MAX_READONLY_QUERY_LINES = 12;
 
 export const NATIVE_READ_ONLY_TOOLS: ReadonlySet<string> = new Set(["read", "glob", "grep", "ls", "view", "find", "websearch", "web_search"]);
 
-export function createReadOnlyToolScope(policy: ReadOnlyWorkerPolicy = createReadOnlyWorkerPolicy()): ToolScope {
-  const allow = [
-    ...[...policy.allowedNativeReadTools].map((name) => `native:${name}`),
-    ...(policy.allowedIntegrations.includes("agents") ? [...policy.allowedAgentTools].map((name) => `mcp:agents:${name}`) : []),
-  ];
-  return {
-    allow,
-    deny: ["native:bash", "native:edit", "native:write", "native:ask_user", "mcp:localComputer:*", "mcp:browser:*", "mcp:phone:*", "mcp:device:*", "mcp:email:*", "mcp:data:*", "mcp:dweb:*"],
+const DENIED_MCP_SERVERS: readonly string[] = [
+  "mcp:computer:*",
+  "mcp:browser:*",
+  "mcp:phone:*",
+  "mcp:device:*",
+  "mcp:email:*",
+  "mcp:data:*",
+  "mcp:dweb:*",
+];
+
+/** Builds a valid read-only ToolScope respecting per-engine native vs MCP tool-scope capabilities. */
+export function createReadOnlyToolScope(
+  policy: ReadOnlyWorkerPolicy = createReadOnlyWorkerPolicy(),
+  driver?: DriverKind | string,
+): ToolScope {
+  const support = driver
+    ? TOOL_SCOPE_SUPPORT[driver as keyof typeof TOOL_SCOPE_SUPPORT]
+    : "native-and-mcp";
+  const agentAllows = policy.allowedIntegrations.includes("agents")
+    ? [...policy.allowedAgentTools].map((name) => `mcp:agents:${name}`)
+    : [];
+
+  if (support === "mcp") {
+    // MCP-only engines reject any scope that narrows `native:*`; keep `native:*` and clamp MCP via allow + deny.
+    return {
+      allow: ["native:*", ...agentAllows],
+      deny: [...DENIED_MCP_SERVERS],
+    };
+  }
+
+  const nativeAllows = [...policy.allowedNativeReadTools].map((name) => `native:${name}`);
+  const scope: ToolScope = {
+    allow: [...nativeAllows, ...agentAllows],
+    deny: ["native:bash", "native:edit", "native:write", "native:ask_user", ...DENIED_MCP_SERVERS],
   };
+  const parsed = parseToolScope(scope);
+  if (!parsed.ok || !parsed.scope) {
+    throw new Error(parsed.ok ? "Invalid empty read-only tool scope." : parsed.error);
+  }
+  return parsed.scope;
 }
 
 /** Immutable runtime policy enforced for every concurrent read-only worker. */
@@ -696,6 +728,7 @@ export function authorizeWorkerToolCall(call: {
 export function sanitizeWorkerSendTurnInput(
   input: Omit<SendTurnInput, "threadId"> & { executionThreadId: string },
   policy: ReadOnlyWorkerPolicy = createReadOnlyWorkerPolicy(),
+  driver?: DriverKind | string,
 ): SendTurnInput {
   const safeAgents = policy.allowedIntegrations.includes("agents") ? input.integrations?.agents : undefined;
   const { executionThreadId, videos: _videos, ...rest } = input as Omit<SendTurnInput, "threadId"> & {
@@ -707,7 +740,7 @@ export function sanitizeWorkerSendTurnInput(
     threadId: executionThreadId,
     approvalMode: "ask",
     approvalModeNow: () => "ask",
-    toolScope: createReadOnlyToolScope(policy),
+    toolScope: createReadOnlyToolScope(policy, driver),
     sessionReset: true,
     ephemeral: true,
     resumeCursor: undefined,

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { assertToolScopeSupported } from "../shared/tool-scope-support.ts";
 import type { ProviderAdapter, RequestOutcome, RuntimeEvent, SendTurnInput } from "./contracts.ts";
 import { WriteLockGuard, type TimelineMergeStore, type WorkerMessage } from "./readonly-worker.ts";
 import {
@@ -40,7 +41,7 @@ function makeMemoryTimeline(threadId = "t-1", seed: WorkerMessage[] = []): Timel
 }
 
 class MockReadOnlyAdapter implements Pick<ProviderAdapter, "provider" | "sendTurn" | "interruptTurn" | "respondToRequest" | "onEvent"> {
-  readonly provider = "claude";
+  readonly provider = "claudeAgent";
   readonly sentInputs: SendTurnInput[] = [];
   readonly interrupted: Array<{ threadId: string; turnId?: string }> = [];
   readonly requestResponses: Array<{ threadId: string; requestId: string; behavior: string; message?: string }> = [];
@@ -226,6 +227,7 @@ describe("createReadOnlyWorkerCoordinator & SSE frame isolation", () => {
       resumeCursor: undefined,
       preloadBrowserTools: false,
     });
+    expect(() => assertToolScopeSupported(adapter.provider, adapter.sentInputs[0].toolScope)).not.toThrow();
 
     adapter.emit({
       eventId: "ev-req",

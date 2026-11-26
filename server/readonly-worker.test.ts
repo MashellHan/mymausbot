@@ -25,6 +25,8 @@ import {
 } from "./readonly-worker.ts";
 import { bindSafetyFloor } from "./safety-floor-gate.ts";
 import { Store } from "./store.ts";
+import { allowsTool, narrowsNativeTools, parseToolScope } from "../shared/tool-scope.ts";
+import { assertToolScopeSupported } from "../shared/tool-scope-support.ts";
 
 function makeInMemoryTimelineStore(seed: WorkerMessage[] = []): TimelineMergeStore {
   const byThread = new Map<string, WorkerMessage[]>();
@@ -398,6 +400,25 @@ describe("WriteLockGuard, policy, tool authorization, and TurnInput sanitization
     expect(sanitized.integrations?.agents).toBeDefined();
     expect(sanitized.integrations?.localComputer).toBeUndefined();
     expect(sanitized.integrations?.browser).toBeUndefined();
+
+    // Every generated scope must pass parseToolScope + per-engine assertToolScopeSupported.
+    const nativeScope = sanitizeWorkerSendTurnInput(baseInput, undefined, "piAgent").toolScope;
+    expect(parseToolScope(nativeScope)).toMatchObject({ ok: true });
+    expect(narrowsNativeTools(nativeScope)).toBe(true);
+    expect(() => assertToolScopeSupported("piAgent", nativeScope)).not.toThrow();
+    expect(allowsTool(nativeScope, { kind: "native", name: "read" })).toBe(true);
+    expect(allowsTool(nativeScope, { kind: "native", name: "bash" })).toBe(false);
+    expect(allowsTool(nativeScope, { kind: "mcp", server: "computer", name: "click" })).toBe(false);
+
+    for (const mcpEngine of ["claudeAgent", "codex", "geminiAgent"] as const) {
+      const mcpScope = sanitizeWorkerSendTurnInput(baseInput, undefined, mcpEngine).toolScope;
+      expect(parseToolScope(mcpScope)).toMatchObject({ ok: true });
+      expect(narrowsNativeTools(mcpScope)).toBe(false);
+      expect(() => assertToolScopeSupported(mcpEngine, mcpScope)).not.toThrow();
+      expect(allowsTool(mcpScope, { kind: "mcp", server: "agents", name: "list_bots" })).toBe(true);
+      expect(allowsTool(mcpScope, { kind: "mcp", server: "agents", name: "send_message" })).toBe(false);
+      expect(allowsTool(mcpScope, { kind: "mcp", server: "computer", name: "click" })).toBe(false);
+    }
   });
 });
 

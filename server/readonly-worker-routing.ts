@@ -164,6 +164,7 @@ export function createProviderAdapterWorkerExecutor(options: ProviderAdapterWork
         ...(options.cwd ? { cwd: options.cwd } : {}),
       },
       ctx.policy,
+      adapter.provider,
     );
 
     let accumulated = "";
