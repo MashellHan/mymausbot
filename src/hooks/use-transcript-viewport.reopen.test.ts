@@ -235,7 +235,7 @@ beforeEach(() => {
     disconnect() {}
   });
   vi.stubGlobal("HTMLTextAreaElement", class {});
-  vi.stubGlobal("document", {});
+  vi.stubGlobal("document", { addEventListener: () => {}, removeEventListener: () => {} });
   elements.clear();
   selection = null;
   selectionDropped = 0;

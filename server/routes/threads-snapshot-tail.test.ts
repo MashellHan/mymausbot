@@ -28,12 +28,14 @@ afterEach(async () => {
 });
 
 async function serve(store: Store): Promise<string> {
+  const { messagePage, ...restPages } = messagePages(store, (threadId, id) => store.message(threadId, id));
   const deps = {
     store, viewerFor: () => ({}),
     visibleTo: () => ({ everything: true, bot: () => true, group: () => true, thread: () => true, sections: () => [] }),
     workspaceAccess: () => null, desktopMutationToken: () => undefined, companionMutationToken: () => undefined, cliOwnerToken: () => undefined,
     groupUsageReader: { refresh: () => {} },
-    pageSize, defaultPage: 50, ...messagePages(store),
+    pageSize, defaultPage: 50, ...restPages,
+    messagePage: (threadId: string, limit?: number, before?: string) => messagePage(threadId, limit, before),
     wireBot: (bot: BotRecord) => ({ id: bot.id, threadId: bot.threadId, name: bot.name }),
     publicBotQueuedMessages: () => ({}),
     publicGroupState: () => ({}),
