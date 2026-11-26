@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  FIRST_FRAME_ROWS,
   SELECTION_HOLD_MAX,
   TRANSCRIPT_WINDOW_MAX,
   TRANSCRIPT_WINDOW_SIZE,
   capWindowEnd,
   expandWindowStart,
+  firstFrameRow,
   focusWindowRange,
   followWindowStart,
   holdRows,
@@ -259,5 +261,14 @@ describe("holdRows", () => {
     expect(holdRows({ start: 2_800, end: null }, 3_000, { first: 2_700, last: 2_999 })).toEqual({ start: 2_700, end: null });
     expect(holdRows({ start: 500, end: 740 }, 3_000, { first: 740 + SELECTION_HOLD_MAX, last: 740 + SELECTION_HOLD_MAX })).toBeNull();
     expect(holdRows({ start: 1_000, end: 1_240 }, 3_000, { first: 1_240 - SELECTION_HOLD_MAX, last: 1_000 })).toEqual({ start: 1_240 - SELECTION_HOLD_MAX, end: 1_240 });
+  });
+});
+
+describe("firstFrameRow", () => {
+  it("returns the twentieth newest row id when the window exceeds FIRST_FRAME_ROWS", () => {
+    const items = Array.from({ length: FIRST_FRAME_ROWS }, (_, i) => ({ id: `m${i}` }));
+    expect(firstFrameRow(items)).toBeUndefined();
+    const longer = Array.from({ length: FIRST_FRAME_ROWS + 5 }, (_, i) => ({ id: `m${i}` }));
+    expect(firstFrameRow(longer)).toBe("m5");
   });
 });

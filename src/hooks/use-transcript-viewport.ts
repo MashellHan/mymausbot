@@ -1,4 +1,5 @@
 import {
+  startTransition,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -12,11 +13,13 @@ import {
   type WheelEvent,
 } from "react";
 import { BOTTOM_FOLLOW_THRESHOLD, followBottomGrowth, useBottomFollowResize } from "@/lib/bottom-follow";
+import { afterPaint } from "@/lib/after-paint";
 import { useFocusMessage } from "@/lib/focus-message";
 import {
   TRANSCRIPT_WINDOW_MAX,
   TRANSCRIPT_WINDOW_SIZE,
   capWindowEnd,
+  firstFrameRow,
   focusWindowRange,
   followWindowStart,
   holdRows,
@@ -197,6 +200,36 @@ export function useTranscriptViewport<T extends { id: string; role?: string; liv
     const range = resolveTranscriptWindow(messages, transcriptWindow.start, TRANSCRIPT_WINDOW_SIZE, transcriptWindow.end);
     return { ...range, visible: withRestingCard(messages, range.visible, range.startIndex, rests) };
   }, [messages, transcriptWindow.start, transcriptWindow.end, rests]);
+  // A switch that opens at the end draws the newest rows first; the rows above them follow after that frame is painted.
+  const [firstFrame, setFirstFrame] = useState<{ key: string; from: string } | null>(null);
+  if (switched) {
+    const jumping = Boolean(focusMessage && !focusMessage.consumed && focusMessage.threadId === threadId);
+    const from = current.restore || jumping ? undefined : firstFrameRow(resolveTranscriptWindow(messages, next.start, TRANSCRIPT_WINDOW_SIZE, next.end).visible);
+    if (firstFrame?.key !== transcriptKey || firstFrame.from !== from) setFirstFrame(from ? { key: transcriptKey, from } : null);
+  }
+  const drawFrom = firstFrame?.key === transcriptKey ? firstFrame.from : undefined;
+  const drawFromRef = useRef(drawFrom);
+  drawFromRef.current = drawFrom;
+  const filling = useRef<{ key: string; height: number } | null>(null);
+  const fillNow = useCallback((key: string = followNow.current.key) => {
+    if (followNow.current.key !== key) return;
+    filling.current = { key, height: scrollRef.current?.scrollHeight ?? 0 };
+    setFirstFrame((staged) => staged?.key === key ? null : staged);
+  }, []);
+  useLayoutEffect(() => {
+    const el = scrollRef.current, filled = filling.current;
+    if (!el) return;
+    if (drawFrom) {
+      // Newest rows that do not fill the view would show an empty top for a frame: the rest comes before this paint.
+      if (el.scrollHeight <= el.clientHeight) fillNow(transcriptKey);
+      return;
+    }
+    filling.current = null;
+    if (filled?.key !== transcriptKey) return;
+    el.scrollTop = followRef.current ? el.scrollHeight : el.scrollTop + el.scrollHeight - filled.height;
+    lastTop.current = el.scrollTop;
+  }, [drawFrom, fillNow, transcriptKey]);
+  useEffect(() => drawFrom ? afterPaint(() => startTransition(() => fillNow(transcriptKey))) : undefined, [drawFrom, fillNow, transcriptKey]);
   const windowRef = useRef(transcriptWindow);
   windowRef.current = transcriptWindow;
   const drawnBounds: TranscriptWindowBounds = { start: startIndex, end: laterCount > 0 ? endIndex : null };
@@ -312,6 +345,7 @@ export function useTranscriptViewport<T extends { id: string; role?: string; liv
     const range = focusWindowRange(messages.length, targetIndex);
     followEvent({ type: "navigated" });
     followEvent({ type: "leftEnd" });
+    if (drawFromRef.current) setFirstFrame(null);
     setTranscriptWindow({ key: transcriptKey, first: messages[0]?.id, ...keepSelection(range) });
   }, [threadId, messages, followEvent, focusMessage, transcriptKey]);
   useFocusMessage(threadId, messages.length > 0, transcriptRef);
@@ -450,7 +484,7 @@ export function useTranscriptViewport<T extends { id: string; role?: string; liv
   });
 
   const triggerAutoEarlier = useCallback(() => {
-    if (expandingRef.current) return;
+    if (expandingRef.current || drawFromRef.current) return;
     if (hiddenCount > 0) {
       setBottomFollow(false);
       expandingRef.current = stepWindow(windowEarlier);
@@ -461,7 +495,7 @@ export function useTranscriptViewport<T extends { id: string; role?: string; liv
     }
   }, [hiddenCount, startIndex, laterCount, endIndex, messages.length, hasMore, olderPending, threadId, dispatch, transcriptKey]);
   const triggerAutoLater = () => {
-    if (expandingRef.current || laterCount === 0) return;
+    if (expandingRef.current || drawFromRef.current || laterCount === 0) return;
     expandingRef.current = stepWindow(windowLater);
   };
 
@@ -504,6 +538,7 @@ export function useTranscriptViewport<T extends { id: string; role?: string; liv
   const canScrollUp = () => canScroll() || hiddenCount > 0 || Boolean(hasMore);
   const jumpToLatest = () => {
     setBottomFollow(true);
+    if (drawFromRef.current) setFirstFrame(null);
     setTranscriptWindow({ key: transcriptKey, first: messages[0]?.id, ...keepSelection({ start: tailStart, end: null }) });
     requestAnimationFrame(() => {
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: reducedMotion() ? "auto" : "smooth" });
@@ -584,6 +619,8 @@ export function useTranscriptViewport<T extends { id: string; role?: string; liv
     /** The reader left the end a moment ago and has not come back: offer the way down. */
     showJumpToLatest: wantsJump && jumpShown,
     windowedMessages,
+    /** While a switch draws its first frame: the oldest row drawn. */
+    drawFrom,
     hiddenCount,
     laterCount,
     olderPending,

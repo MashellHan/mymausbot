@@ -84,7 +84,7 @@ vi.mock("@/lib/focus-message", () => ({ useFocusMessage: () => {} }));
 
 import { useTranscriptViewport } from "./use-transcript-viewport";
 import { TRANSCRIPT_WINDOW_MAX } from "@/lib/transcript-window";
-import { forgetTranscriptPositions } from "@/lib/transcript-follow";
+import { forgetTranscriptPositions, rememberTranscriptPosition } from "@/lib/transcript-follow";
 import { noteLiveReplyEvent, resetLiveReplies } from "@/state/live-reply";
 import type { RuntimeEvent } from "../../shared/runtime-events";
 
@@ -162,7 +162,17 @@ function mount(initial: Partial<Props> = {}) {
       react.render(draw, commit);
       flushFrames();
     },
+    unmount,
   };
+}
+
+/** Runs every committed effect's cleanup, as an unmount does. */
+function unmount() {
+  for (const slot of react.runtime.slots) {
+    const cleanup = (slot as { cleanup?: unknown } | undefined)?.cleanup;
+    if (typeof cleanup === "function") cleanup();
+  }
+  react.runtime.slots = [];
 }
 
 beforeEach(() => {
@@ -182,7 +192,9 @@ beforeEach(() => {
     addEventListener: (_: string, listener: (event: Partial<KeyboardEvent>) => void) => keyListeners.add(listener),
     removeEventListener: (_: string, listener: (event: Partial<KeyboardEvent>) => void) => keyListeners.delete(listener),
   });
-  vi.stubGlobal("requestAnimationFrame", (frame: FrameRequestCallback) => frames.push(frame));
+  const requested: FrameRequestCallback[] = [];
+  vi.stubGlobal("requestAnimationFrame", (frame: FrameRequestCallback) => { frames.push(frame); return requested.push(frame); });
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => { frames = frames.filter((frame) => frame !== requested[id - 1]); });
   vi.stubGlobal("ResizeObserver", class {
     constructor(callback: () => void) {
       observers++;
@@ -198,7 +210,10 @@ beforeEach(() => {
   });
   vi.stubGlobal("HTMLTextAreaElement", class {});
   vi.stubGlobal("HTMLInputElement", class {});
-  return () => vi.unstubAllGlobals();
+  return () => {
+    unmount();
+    vi.unstubAllGlobals();
+  };
 });
 
 const press = (key: string, target: unknown = {}) => {
@@ -816,5 +831,58 @@ describe("following a reply and coming back to a conversation", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("a switch draws the newest rows first", () => {
+  it("draws from the twentieth newest row, holds auto-expand, and fills the rest once painted", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const view = mount({ messages: rows(80) });
+      view.rerender({ threadId: "other", messages: rows(80, 500) });
+      expect(view.current.drawFrom).toBe("m560");
+      scroller.scrollTop = 0;
+      view.act(() => view.current.scrollHandlers.onScroll());
+      expect(view.current.windowedMessages).toHaveLength(80);
+      view.act(() => {});
+      expect(view.current.drawFrom, "the frame callback only queues the fill").toBe("m560");
+      vi.advanceTimersByTime(0);
+      view.rerender({});
+      expect(view.current.drawFrom).toBeUndefined();
+      expect(scroller.scrollTop, "still at the end").toBeGreaterThanOrEqual(scroller.bottom);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels and keys the deferred fill across rapid switches and unmount", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const view = mount({ messages: rows(80) });
+      view.rerender({ threadId: "other", messages: rows(80, 500) });
+      expect(view.current.drawFrom).toBe("m560");
+      // Switching to a third thread with the same 20th-newest id cancels the old frame/timer and schedules its own.
+      view.rerender({ threadId: "third", messages: rows(80, 500) });
+      expect(view.current.drawFrom).toBe("m560");
+      expect(frames).toHaveLength(1);
+      expect(vi.getTimerCount()).toBe(1);
+      view.unmount();
+      expect(vi.getTimerCount()).toBe(0);
+      expect(frames).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("draws a short chat, a remembered position restore, or a jump to an older message at once", () => {
+    const view = mount({ messages: rows(80) });
+    view.rerender({ threadId: "other", messages: rows(15, 500) });
+    expect(view.current.drawFrom).toBeUndefined();
+    rememberTranscriptPosition("bot:saved", { atEnd: false, rowId: "m720", offsetWithinRow: 12, windowStart: 700, windowEnd: null });
+    view.rerender({ threadId: "saved", messages: rows(80, 700) });
+    expect(view.current.drawFrom).toBeUndefined();
+    store.state.focusMessage = { threadId: "third", messageId: "m900", nonce: 7, consumed: false };
+    view.rerender({ threadId: "third", messages: rows(80, 900) });
+    expect(view.current.drawFrom).toBeUndefined();
   });
 });
