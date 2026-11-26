@@ -5,25 +5,25 @@ import { reportBackTooLong } from "./too-long.ts";
 describe("conversationAttachments", () => {
   it("lists the person's attached files by the name they gave and the copies shown in the conversation", () => {
     expect(conversationAttachments([
-      { role: "user", text: 'Edit this\n<attached-file path="/data/attachments/a.md" name="chapter.md" />' },
-      { role: "bot", text: "", attachments: [{ kind: "file", path: "/data/attachments/b.csv", mime: "text/csv", name: "table.csv" }] },
-      { role: "bot", text: "", attachments: [{ kind: "audio", path: "/data/attachments/c.m4a", mime: "audio/mp4" } as never] },
+      { kind: "text", role: "user", text: 'Edit this\n<attached-file path="/data/attachments/a.md" name="chapter.md" />' },
+      { kind: "text", role: "bot", text: "", attachments: [{ kind: "file", path: "/data/attachments/b.csv", mime: "text/csv", name: "table.csv" }] },
+      { kind: "text", role: "bot", text: "", attachments: [{ kind: "audio", path: "/data/attachments/c.m4a", mime: "audio/mp4" } as never] },
     ])).toEqual([{ path: "/data/attachments/a.md", name: "chapter.md" }, { path: "/data/attachments/b.csv", name: "table.csv" }]);
   });
 
   it("never reads a tag from a bot's words, another bot's post or a hand-off line", () => {
     const tag = '<attached-file path="/data/attachments/x.md" name="x.md" />';
     expect(conversationAttachments([
-      { role: "bot", text: tag },
-      { role: "user", text: tag, from: { botId: "b", name: "B", color: "green" } },
-      { role: "user", text: tag, roomRequest: { id: "r", phase: "request" } },
+      { kind: "text", role: "bot", text: tag },
+      { kind: "text", role: "user", text: tag, from: { botId: "b", name: "B", color: "green" } },
+      { kind: "text", role: "user", text: tag, roomRequest: { id: "r", phase: "request" } },
     ])).toEqual([]);
   });
 
   it("ignores repeated/same-turn-not-copied files on synthetic or fromTool lines", () => {
     expect(conversationAttachments([
       { role: "user", kind: "inbox" as never, text: '<attached-file path="/data/attachments/y.md" name="y.md" />' },
-      { role: "bot", text: "", attachments: [{ kind: "file", path: "/data/attachments/z.md", mime: "text/markdown", name: "z.md", fromTool: true } as never] },
+      { kind: "text", role: "bot", text: "", attachments: [{ kind: "file", path: "/data/attachments/z.md", mime: "text/markdown", name: "z.md", fromTool: true } as never] },
     ])).toEqual([]);
   });
 });
