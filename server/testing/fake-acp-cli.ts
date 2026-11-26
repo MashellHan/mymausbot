@@ -110,7 +110,7 @@
 //   FAKE_ACP_MODE=grok-steer  Grok's second `session/prompt` with `[ui] follow_up_behavior = "steer"` in GROK_HOME/config.toml: a prompt
 //     during a running one is injected into it and answers {stopReason:"cancelled", _meta:{completionKind:"removedFromQueue"}}
 //     at once; the running prompt then ends with end_turn and every steer it took.
-//   FAKE_ACP_STEERING=off  the two steer modes above report no steering capability.
+//   FAKE_ACP_STEERING=off  the steer modes above report no steering capability.
 //   FAKE_ACP_MODE=grok-complete  grok 1.0.41's `_x.ai/session/prompt_complete`: a prompt says "answered", then sends the
 //     notification {sessionId, promptId: the prompt's _meta.promptId, stopReason: FAKE_ACP_COMPLETE_STOP (end_turn),
 //     agentResult: FAKE_ACP_COMPLETE_RESULT (null)}, then answers per FAKE_ACP_COMPLETE_REPLY: "after" (default) at once
@@ -909,6 +909,17 @@ function gatedPrompt(msg: any) {
   }, 50);
 }
 
+/** OpenCode's `_session/steering`: promptRequired when no turn runs; FAKE_ACP_STEER_FAIL=rpc answers a JSON-RPC error. */
+function sessionSteering(msg: any) {
+  if (process.env.FAKE_ACP_STEER_FAIL === "rpc") {
+    out({ jsonrpc: "2.0", id: msg.id, error: { code: -32603, message: "unsupported_control" } });
+    return;
+  }
+  if (!gatedTurn) return result(msg.id, { outcome: "promptRequired" });
+  const prompt = Array.isArray(msg.params?.prompt) ? msg.params.prompt : [];
+  gatedTurn.steers.push(prompt.map((block: any) => block?.text ?? "").join(""));
+  result(msg.id, { outcome: "steered" });
+}
 let hermesTurn: { steers: string[] } | null = null;
 /** hermes-agent's prompt, `/steer` included, as acp_adapter/server.py and commands.py answer them. */
 function hermesPrompt(msg: any) {
@@ -1014,8 +1025,9 @@ function handle(msg: any) {
         agentInfo: agentName
           ? { name: agentName, version: process.env.FAKE_ACP_AGENT_VERSION ?? "test" }
           : undefined,
-        agentCapabilities: agentName || acceptsImages || mcpTransports.length || closesSessions || deletesSessions
+        agentCapabilities: agentName || acceptsImages || mcpTransports.length || closesSessions || deletesSessions || mode === "devin-steer"
           ? {
+              ...(mode === "devin-steer" && process.env.FAKE_ACP_STEERING !== "off" ? { _meta: { "cognition.ai/midTurnPrompts": true } } : {}),
               ...(agentName ? { loadSession: true, sessionCapabilities: { resume: true }, auth: { logout: true } } : {}),
               ...(closesSessions || deletesSessions
                 ? { sessionCapabilities: { ...(closesSessions ? { close: {} } : {}), ...(deletesSessions ? { delete: {} } : {}),
@@ -1027,6 +1039,7 @@ function handle(msg: any) {
           : undefined,
         _meta: {
           modelState: { currentModelId: "fake-acp-model" },
+          ...(mode === "opencode-steer" && process.env.FAKE_ACP_STEERING !== "off" ? { steering: { supported: true } } : {}),
           ...(process.env.FAKE_ACP_GROK_VERSION ? { grokShell: true, agentVersion: process.env.FAKE_ACP_GROK_VERSION } : {}),
         },
       });
@@ -1891,7 +1904,14 @@ function handle(msg: any) {
       complete();
       break;
     }
+    case "_session/steering":
+      sessionSteering(msg);
+      break;
     case "session/cancel":
+      if (gatedTurn) {
+        for (const id of gatedTurn.pending) result(id, { stopReason: "cancelled", _meta: {} });
+        gatedTurn = null;
+      }
       if (streamingPromptId !== null) {
         result(streamingPromptId, { stopReason: "cancelled", _meta: {} });
         streamingPromptId = null;
