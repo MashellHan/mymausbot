@@ -11954,5 +11954,8 @@
   "geminiServer.getKey": "Get a key in Google AI Studio",
   "geminiServer.key": "Gemini API key",
   "geminiServer.add": "Add Google AI Studio",
+  "decider.provider.line": "Or use a key from another provider for these small models.",
+  "computer.worksOnHintServer": "Choose where this bot works. A computer you share from the {app} desktop app isn't picked here: just ask the bot to use it.",
+  "settings.ai.otherServicesLine": "Keys for voices, computers, apps and helpers, beyond your main models.",
   "shortcuts.dictation-toggle": "Start or stop dictation"
 }

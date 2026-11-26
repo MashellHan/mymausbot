@@ -5,9 +5,10 @@ import { placeLabelKey } from "@/lib/place";
 import { t } from "@/lib/i18n";
 import { CloudBackendPicker } from "./CloudBackendPicker";
 import { WorksOnGrid, type WorksOnMode, type WorksOnOption } from "./WorksOnGrid";
+import type { LocaleKey } from "@/locales";
 
-export function renderAdvancedWorks({ cloudHome, options, selectPlace, livePin, view, placeActionButton, cloudSelected, cloudBackend, onBackend }: {
-  cloudHome?: boolean;
+export function renderAdvancedWorks({ hintKey, options, selectPlace, livePin, view, placeActionButton, cloudSelected, cloudBackend, onBackend }: {
+  hintKey: LocaleKey;
   options: WorksOnOption[];
   selectPlace: (mode: WorksOnMode) => void;
   livePin?: Exclude<WorksOnMode, null>;
@@ -19,7 +20,7 @@ export function renderAdvancedWorks({ cloudHome, options, selectPlace, livePin, 
 }) {
   return <div className="mt-3 rounded-xl bg-card p-4">
     <div className="text-[15px] font-medium text-ink">{t("computer.worksOn")}</div>
-    <p className="mt-1 text-[12px] leading-5 text-ink-secondary">{t(cloudHome ? "computer.worksOnHintCloudHome" : "computer.worksOnHint")}</p>
+    <p className="mt-1 text-[12px] leading-5 text-ink-secondary">{t(hintKey)}</p>
     <WorksOnGrid options={options} onSelect={selectPlace} />
     {livePin && <p className="mt-2 text-[12px] leading-5 text-ink-secondary" data-testid="place-pinned-note">
       {t("place.pinnedNote", { place: t(placeLabelKey(livePin)) })}

@@ -4153,5 +4153,8 @@
   "geminiServer.desc": "Nutze Gemini-Modelle mit einem API-Schlüssel aus Google AI Studio. Die Modelle werden erkannt, nachdem du ihn hinzugefügt hast.",
   "geminiServer.getKey": "Schlüssel in Google AI Studio holen",
   "geminiServer.key": "Gemini-API-Schlüssel",
-  "geminiServer.add": "Google AI Studio hinzufügen"
+  "geminiServer.add": "Google AI Studio hinzufügen",
+  "decider.provider.line": "Oder nutze für diese kleinen Modelle einen Schlüssel eines anderen Anbieters.",
+  "computer.worksOnHintServer": "Wähle, wo dieser Bot arbeitet. Einen Computer, den du aus der {app}-Desktop-App teilst, wählst du nicht hier: Bitte einfach den Bot, ihn zu nutzen.",
+  "settings.ai.otherServicesLine": "Schlüssel für Stimmen, Computer, Apps und Helfer, zusätzlich zu deinen Hauptmodellen."
 }
