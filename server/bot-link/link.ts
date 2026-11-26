@@ -861,16 +861,11 @@ export function createBotLink(deps: BotLinkDeps) {
     dial: () => (state?.role === "dialer" && state.origin && state.token ? { origin: state.origin, token: state.token } : null),
     /** On the Cloud: the computer whose link this session is. */
     peerOfSession: (sessionId: string) => (state?.role === "acceptor" ? Object.entries(state.peers).find(([, known]) => known.sessionId === sessionId)?.[0] ?? null : null),
-    status: () => (state ? { on: true as const, role: state.role, online: [...live.values()].some((one) => one.online), self: state.self,
-      ...(state.role === "dialer" ? { origin: state.origin ?? null, account: state.account ?? null, peer: Object.values(state.peers)[0]?.place ?? null } : {}),
-      peers: Object.entries(state.peers).map(([peer, known]) => ({ ...known.place, online: isOnline(peer), bots: known.bots.length })),
-      bots: Object.values(state.peers).reduce((sum, known) => sum + known.bots.length, 0), waiting: pending.size }
-      : (() => { const ended = [...new Set(readEnded().map((one) => one.origin))]; return { on: false as const, ...(ended.length ? { ended } : {}) }; })()),
+    status: () => (state ? { on: true as const, role: state.role, online: [...live.values()].some((one) => one.online), self: state.self, ...(state.role === "dialer" ? { origin: state.origin ?? null, account: state.account ?? null, peer: Object.values(state.peers)[0]?.place ?? null } : {}), peers: Object.entries(state.peers).map(([peer, known]) => ({ ...known.place, online: isOnline(peer), bots: known.bots.length })), bots: Object.values(state.peers).reduce((sum, known) => sum + known.bots.length, 0), waiting: pending.size } : (() => { const ended = [...new Set(readEnded().map((one) => one.origin))]; return { on: false as const, ...(ended.length ? { ended } : {}) }; })()),
     /** Every bot of every linked place, with its address here. `kind`: what that place is, in the words the sidebar's
      * own rows use for where a bot lives: a computer links to its Cloud, a Cloud to computers. */
     linked: () => Object.entries(state?.peers ?? {}).flatMap(([peer, known]) => known.bots.map((bot) => ({ id: linkedId(peer, bot.id), peer, place: known.place, kind: state!.role === "dialer" ? "cloud" as const : "computer" as const, online: isOnline(peer), bot }))),
-    /** What a bot that named no bot here or there is told past "no such bot" while the link is on: the other places' bots
-     * it can reach through the link, each by the id that reaches it. */
+    /** Other places' bots reachable through the link while online or cached (for message_person tool hints). */
     reachableElsewhere(): string {
       if (!state) return "";
       const far = Object.entries(state.peers).flatMap(([peer, known]) => known.bots.map((bot) => ({ peer, bot })));
@@ -880,19 +875,14 @@ export function createBotLink(deps: BotLinkDeps) {
       return `Through the link to ${places} you can also reach: ${listed}${far.length > 12 ? `, and ${far.length - 12} more` : ""}.`;
     },
     /** Other places' bots as list_bots names them. */
-    agents: () => Object.entries(state?.peers ?? {}).flatMap(([peer, known]) => known.bots.map((bot) => ({ id: linkedId(peer, bot.id), name: bot.name, section: "", model: bot.model ?? "", busy: false,
-      status: isOnline(peer) ? "linked" : "offline", statusText: isOnline(peer) ? `on ${known.place.name}` : `on ${known.place.name}, offline now: work for it waits until it is back`,
-      title: bot.title || undefined, description: bot.description || undefined }))),
-    /** Turned on, on a computer: it keeps the Cloud's address, its sign-in there and the account that was for. */
+    agents: () => Object.entries(state?.peers ?? {}).flatMap(([peer, known]) => known.bots.map((bot) => ({ id: linkedId(peer, bot.id), name: bot.name, section: "", model: bot.model ?? "", busy: false, status: isOnline(peer) ? "linked" : "offline", statusText: isOnline(peer) ? `on ${known.place.name}` : `on ${known.place.name}, offline now: work for it waits until it is back`, title: bot.title || undefined, description: bot.description || undefined }))),
+    /** Turned on on a computer: keep Cloud address, token, and peer. */
     turnOn(input: { self: Place; origin: string; token: string; account?: string; peer: Place }): void {
       const key = peerKey(input.peer.id);
       const kept = state?.role === "dialer" && state.origin === input.origin && state.peers[key] ? state : null;
       if (state && !kept) off(false);
-      state = { v: 2, role: "dialer", self: input.self, origin: input.origin, token: input.token, ...(input.account ? { account: input.account } : {}), ...(kept?.sleeps ? { sleeps: true } : {}),
-        peers: { [key]: { place: input.peer, bots: kept?.peers[key]?.bots ?? [], seenAt: now() } }, threads: kept?.threads ?? {}, work: kept?.work ?? {} };
-      save();
-      deps.kick();
-      deps.directoryChanged?.();
+      state = { v: 2, role: "dialer", self: input.self, origin: input.origin, token: input.token, ...(input.account ? { account: input.account } : {}), ...(kept?.sleeps ? { sleeps: true } : {}), peers: { [key]: { place: input.peer, bots: kept?.peers[key]?.bots ?? [], seenAt: now() } }, threads: kept?.threads ?? {}, work: kept?.work ?? {} };
+      save(); deps.kick(); deps.directoryChanged?.();
     },
     /** On the Cloud: one computer is paired. The session its link used before is returned, for the caller to end; other
      * computers' links are left as they are. Null when no more computers fit. */
