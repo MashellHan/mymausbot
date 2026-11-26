@@ -396,9 +396,10 @@ export class AppTriggerManager {
   /** Brings back one deleted in the last week, with its settings; the service copy is made again. */
   async restore(id: string): Promise<AppTrigger | null> {
     this.assertWritable();
-    return this.exclusive(async () => {
+    let restored: StoredTrigger | null = null;
+    await this.exclusive(async () => {
       const entry = this.deleted.find((candidate) => candidate.trigger.id === id && candidate.at >= this.now() - RESTORE_WINDOW_MS);
-      if (!entry || this.triggers.some((trigger) => trigger.id === id)) return null;
+      if (!entry || this.triggers.some((trigger) => trigger.id === id)) return;
       if (this.options.botState(entry.trigger.botId) === "missing") throw new AppTriggerError("The assigned bot no longer exists.", 410);
       const trigger: StoredTrigger = { ...structuredClone(entry.trigger), remote: { state: "pending" }, updatedAt: this.now() };
       try { await this.bind(trigger); await this.applyEnabled(trigger.remote.triggerId, trigger.enabled); }
@@ -406,10 +407,12 @@ export class AppTriggerManager {
       this.deleted = this.deleted.filter((candidate) => candidate !== entry);
       this.triggers.unshift(trigger);
       this.save();
+      restored = trigger;
     });
-    this.emitTrigger(trigger);
+    if (!restored) return null;
+    this.emitTrigger(restored);
     this.wake();
-    return publicTrigger(trigger);
+    return publicTrigger(restored);
   }
 
   /** A test event marked as one, sent through the service's real queue when the automation has its copy there. */
