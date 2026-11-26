@@ -69,6 +69,7 @@ interface Undoable {
   before: unknown;
   after: unknown;
   target: unknown;
+  person?: string;
 }
 
 export type UndoResult =
@@ -193,7 +194,7 @@ export function createAppSettings(deps: AppSettingsDeps) {
   }
 
   /** Applies the change, posts its applied card with Undo, and logs it in the decision log. */
-  async function apply(turn: Turn, bot: BotRecord, entry: WritableEntry, value: unknown, change?: string) {
+  async function apply(turn: Turn, bot: BotRecord, entry: WritableEntry, value: unknown, change?: string, person?: string) {
     const before = structuredClone(await entry.current(value));
     const was = entry.read();
     const refusal = await entry.write(value);
@@ -209,7 +210,7 @@ export function createAppSettings(deps: AppSettingsDeps) {
       card: { title: serverLine(language, "server.appSettings.changed", { label: entry.label }), subtitle: shown.before === undefined ? shown.after : `${notSet(shown.before)} → ${notSet(shown.after)}`,
         options: [], requestId, tool: TOOL, fixedOptions: true, appSettingRequest, answered: "allow", dismissed: true, autoApplied: true },
     });
-    undoable.set(requestId, { entry, before, after: structuredClone(await entry.current(value)), target: value });
+    undoable.set(requestId, { entry, before, after: structuredClone(await entry.current(value)), target: value, ...(person ? { person } : {}) });
     appendDecision(deps.dataDir, { threadId: turn.threadId, requestId, botId: turn.botId, botName: bot.name, tool: TOOL, summary: `${entry.id}: ${said(shown)}`, decision: "auto-approved", source: "app-settings" });
     const done = change === undefined ? `Changed ${entry.label} from ${text(was)} to ${text(after)}.` : `Done: ${change}. ${entry.label} now: ${text(after)}.`;
     return reply(200, { text: `${done} The user can undo it from the card in the conversation.` });
@@ -264,13 +265,13 @@ export function createAppSettings(deps: AppSettingsDeps) {
     return "refusal" in taken ? taken : { value: { ...rest, avatarUrl: taken.avatarUrl }, stored: taken.avatarUrl };
   }
 
-  /** A theme is the person's whose own message began the work, never a teammate's or a guest's. */
+  /** A theme is the person's whose own message began the work, never a teammate's, an automated run's or a guest's. */
   async function theme(turn: Turn, body: Record<string, unknown>) {
     const themes = deps.themes;
     if (!themes) return refuse(404, "Themes are not available on this server.");
     const bot = store.bot(turn.botId);
     if (!bot) return refuse(404, "This bot no longer exists.");
-    const person = deps.guestDriven(turn.threadId) ? null : themes.person(turn);
+    const person = deps.guestDriven(turn.threadId) || deps.automated?.(turn) ? null : themes.person(turn);
     if (!person) return refuse(403, "A theme changes only for the person who asked, in their own conversation. This turn was not started by them here, so nothing changed.");
     if (body.action === "theme") return themes.overview(person, body.id);
     if (body.action === "theme_history") return themes.history(person);
@@ -278,7 +279,7 @@ export function createAppSettings(deps: AppSettingsDeps) {
     if (asked && "error" in asked) return refuse(400, asked.error);
     const budget = spendWrite(turn);
     if (budget) return refuse(429, budget);
-    return asked ? apply(turn, bot, themes.entry(person), asked.wear, asked.change) : themes.addAsset(turn, person, body);
+    return asked ? apply(turn, bot, themes.entry(person), asked.wear, asked.change, person) : themes.addAsset(turn, person, body);
   }
 
   /** Shows a setting's own control in the conversation. Security invariant: the reply and the row carry fixed words and
@@ -299,6 +300,7 @@ export function createAppSettings(deps: AppSettingsDeps) {
 
   return {
     async handle(body: Record<string, unknown>, turn: Turn, ended?: AbortSignal): Promise<{ status: number; body: Record<string, unknown> }> {
+      if (typeof body.action === "string" && THEME_ACTIONS.includes(body.action)) return theme(turn, body);
       if (deps.guestDriven(turn.threadId) || deps.turnOwner(turn) === null) return refuse(403, "Settings are available only in the owner's own conversation.");
       if (body.action === "find") {
         const query = typeof body.query === "string" ? body.query : "";
@@ -320,8 +322,11 @@ export function createAppSettings(deps: AppSettingsDeps) {
       }
       if (body.action === "set") return set(turn, body, ended);
       if (body.action === "show_card") return showCard(turn, body);
-      if (typeof body.action === "string" && THEME_ACTIONS.includes(body.action)) return theme(turn, body);
       return refuse(400, `action must be find, get, set, show_card, places, ${THEME_ACTIONS.join(", ")}.`);
+    },
+
+    undoPerson(requestId: string): string | undefined {
+      return undoable.get(requestId)?.person;
     },
 
     /** The person's answer to a "Change X?" card; Allow counts only from an owner's review. */
