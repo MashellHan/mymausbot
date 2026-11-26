@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DATA_DIR } from "../config.ts";
 import type { ModelSelection } from "../contracts.ts";
 import { json, readBody } from "../harness/http.ts";
+import { readMessage } from "../message-db.ts";
 import { messagePages, pageSize } from "../host/message-pages.ts";
 import { closeMessageDb } from "../message-db.ts";
 import type { RequestAuth } from "../request-auth.ts";
@@ -28,7 +29,7 @@ afterEach(async () => {
 });
 
 async function serve(store: Store): Promise<string> {
-  const { messagePage, ...restPages } = messagePages(store, (threadId, id) => store.message(threadId, id));
+  const { messagePage, ...restPages } = messagePages(store, readMessage);
   const deps = {
     store, viewerFor: () => ({}),
     visibleTo: () => ({ everything: true, bot: () => true, group: () => true, thread: () => true, sections: () => [] }),
