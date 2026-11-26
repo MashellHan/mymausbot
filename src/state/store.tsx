@@ -47,8 +47,7 @@ import type { Routine, RoutineInput, RoutineRun, RoutineRunStatusFilter } from "
 import type { WebhookAttempt, WebhookIngressStatus, WebhookTrigger } from "@/lib/webhooks";
 import { duplicateBotProfile, restrictedCopyRequest } from "@/lib/bot-duplicate";
 import { markVisibleBotThreadsRead, markVisibleGroupThreadsRead } from "./read-visible";
-import { applyWindowPref, reportWindowPrefs } from "@/lib/window-prefs";
-import { applyThemeFrame } from "@/lib/theme/runtime";
+import { applyWindowPref, reportWindowPrefs } from "@/lib/window-prefs"; import { applyThemeFrame } from "@/lib/theme/runtime"; import { appCatalogAnnounced } from "@/lib/app-catalog-signal";
 import { placeUnreadDivider, threadOpensUnread, threadReadCursor, unreadDividerFor, type UnreadDivider } from "@/lib/unread-divider";
 import type { ComputerStart } from "@/lib/computer-start";
 import { parseComputerHelp } from "@/lib/computer-control";
@@ -3196,12 +3195,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
           break;
         }
-        case "window-pref":
-          applyWindowPref(frame);
-          break;
-        case "theme":
-          applyThemeFrame(frame);
-          break;
+        case "window-pref": applyWindowPref(frame); break;
+        case "theme": applyThemeFrame(frame); break; case "apps-catalog": appCatalogAnnounced(); break;
         case "config":
           rawDispatch({
             type: "configStatus",
