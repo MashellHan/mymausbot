@@ -1,6 +1,7 @@
 // A send shows at once as an optimistic user message; the server's copy, which carries the same sendId, replaces it.
 import { ApiError } from "./api";
 import type { Message } from "./store";
+import type { MessageIntake } from "@/lib/progressive-intake-ui";
 
 export const optimisticMessageId = (sendId: string): string => `optimistic-${sendId}`;
 
@@ -17,7 +18,7 @@ export function optimisticUserMessage(
   replyToId?: string,
   parentId?: string | null,
   channelMode?: "chat" | "goal",
-  options?: { liveSendNonce?: number; outboxRestored?: boolean },
+  options?: { liveSendNonce?: number; outboxRestored?: boolean; intake?: MessageIntake },
 ): Message {
   return {
     id: optimisticMessageId(sendId),
@@ -31,6 +32,7 @@ export function optimisticUserMessage(
     channelMode,
     ...(options?.liveSendNonce !== undefined ? { liveSendNonce: options.liveSendNonce } : {}),
     ...(options?.outboxRestored ? { outboxRestored: true } : {}),
+    ...(options?.intake ? { intake: options.intake } : {}),
   };
 }
 

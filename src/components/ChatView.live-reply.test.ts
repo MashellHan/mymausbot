@@ -209,3 +209,64 @@ describe("a conversation that streamed while nobody had it open", () => {
     expect(occurrences("Background reply")).toBe(0);
   });
 });
+
+describe("concurrent primary and read-only worker streaming in one conversation", () => {
+  it("streams main and concurrent worker replies side by side anchored to their user messages", () => {
+    const u1: Message = { id: "u1", role: "user", kind: "text", at: started, text: "Refactor the parser" };
+    const u2: Message = {
+      id: "u2",
+      role: "user",
+      kind: "text",
+      at: started + 1000,
+      text: "What tests cover this?",
+      intake: { mode: "readonly-concurrent", state: "processing", workerTurnId: "t-worker", updatedAt: started + 1000 },
+    };
+    const worker = { workerId: "cw-1", readOnly: true as const, parentTurnId: "t-main" };
+
+    engine({ type: "turn.started", turnId: "t-main", replyToId: "u1" } as Partial<RuntimeEvent>);
+    engine({ type: "turn.started", turnId: "t-worker", replyToId: "u2", concurrentWorker: worker } as Partial<RuntimeEvent>);
+    render(bot([u1, u2]));
+
+    engine({ type: "content.delta", streamKind: "assistant_text", turnId: "t-main", itemId: "m-main", delta: "Updating parser first. ", replyToId: "u1" } as Partial<RuntimeEvent>);
+    engine({ type: "content.delta", streamKind: "assistant_text", turnId: "t-worker", itemId: "m-worker", delta: "Parser tests live in parser.test.ts. ", replyToId: "u2", concurrentWorker: worker } as Partial<RuntimeEvent>);
+
+    expect(liveRows()).toHaveLength(2);
+    const [mainRow, workerRow] = liveRows();
+    expect(mainRow!.textContent).toContain("Refactor the parser");
+    expect(mainRow!.textContent).toContain("Updating parser first.");
+    expect(mainRow!.querySelector("[data-concurrent-worker]")).toBeNull();
+
+    expect(workerRow!.querySelector('[data-concurrent-worker="cw-1"]')?.textContent).toBe("Parallel answer");
+    expect(workerRow!.textContent).toContain("What tests cover this?");
+    expect(workerRow!.textContent).toContain("Parser tests live in parser.test.ts.");
+
+    const savedWorker = {
+      id: "saved-w1",
+      role: "bot",
+      kind: "text",
+      at: started + 4000,
+      text: "Parser tests live in parser.test.ts.",
+      turnId: "t-worker",
+      itemId: "m-worker",
+      replyToId: "u2",
+      concurrentWorker: worker,
+    } as Message;
+    engine({
+      type: "item.completed",
+      itemType: "assistant_text",
+      turnId: "t-worker",
+      itemId: "m-worker",
+      text: savedWorker.text!,
+      replyToId: "u2",
+      concurrentWorker: worker,
+    } as Partial<RuntimeEvent>);
+    act(() => noteLiveReplyMessage(THREAD, savedWorker));
+    engine({ type: "turn.completed", ok: true, turnId: "t-worker" } as Partial<RuntimeEvent>);
+
+    render(bot([u1, u2, savedWorker]));
+    expect(liveRows()).toHaveLength(1);
+    expect(occurrences("Parser tests live in parser.test.ts.")).toBe(1);
+    expect(rowOf("saved-w1")?.querySelector('[data-concurrent-worker="cw-1"]')?.textContent).toBe("Parallel answer");
+    expect(rowOf("u2")?.textContent).toContain("Replied directly");
+  });
+});
