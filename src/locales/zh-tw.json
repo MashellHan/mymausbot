@@ -3128,7 +3128,6 @@
   "cloudWelcome.engine.connected": "已連線",
   "cloudWelcome.engine.credit": "你有 {amount} 的 Claude 額度，因此你的機器人現在就能開始。準備好時再登入即可。",
   "cloudWelcome.engine.creditPlain": "你的試用版附有 Claude 額度，因此你的機器人現在就能開始。準備好時再登入即可。",
-  "cloudWelcome.engine.sub": "你的機器人會使用你自己的 Claude 或 ChatGPT 方案思考。在 {name} 上登入一次即可。",
   "cloudWelcome.engine.useCredit": "暫時使用我的額度",
   "cloudWelcome.files.apps": "連線應用程式",
   "cloudWelcome.files.appsAction": "連線應用程式",

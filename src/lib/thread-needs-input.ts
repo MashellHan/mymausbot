@@ -11,26 +11,26 @@ export function useThreadNeedsInputStop(
   stoppedAt: number | undefined,
 ): boolean {
   const key = `${botId}:${threadId}:${activity ?? ""}:${stoppedAt ?? ""}`;
-  const [answer, setAnswer] = useState<{ key: string; waiting: boolean }>();
+  const [waitingKey, setWaitingKey] = useState<string>();
 
   useEffect(() => {
     if (!enabled) {
-      setAnswer(undefined);
+      setWaitingKey((prev) => (prev === undefined ? prev : undefined));
       return;
     }
     const controller = new AbortController();
     void api<JobAnswer>(`/api/threads/${threadId}/job?since=0`, { signal: controller.signal, background: true })
       .then(({ needsInput }) => {
-        if (!controller.signal.aborted) setAnswer({
-          key,
-          waiting: Array.isArray(needsInput) && needsInput.some((item) => item.botId === botId && item.threadId === threadId),
-        });
+        if (controller.signal.aborted) return;
+        const waiting = Array.isArray(needsInput) && needsInput.some((item) => item.botId === botId && item.threadId === threadId);
+        const next = waiting ? key : undefined;
+        setWaitingKey((prev) => (prev === next ? prev : next));
       })
       .catch(() => {
-        if (!controller.signal.aborted) setAnswer({ key, waiting: false });
+        if (!controller.signal.aborted) setWaitingKey((prev) => (prev === undefined ? prev : undefined));
       });
     return () => controller.abort();
   }, [botId, enabled, key, threadId]);
 
-  return enabled && answer?.key === key && answer?.waiting === true;
+  return enabled && waitingKey === key;
 }

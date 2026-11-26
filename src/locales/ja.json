@@ -2384,7 +2384,6 @@
   "cloudWelcome.engine.connected": "接続済み",
   "cloudWelcome.engine.credit": "{amount}分のClaudeクレジットがあるため、ボットはすぐに使い始められます。サインインは準備ができたときで構いません。",
   "cloudWelcome.engine.creditPlain": "トライアルにはClaudeクレジットが含まれているため、ボットはすぐに使い始められます。サインインは準備ができたときで構いません。",
-  "cloudWelcome.engine.sub": "ボットは、お客様ご自身のClaudeまたはChatGPTのプランで思考します。{name}で一度サインインしてください。",
   "cloudWelcome.engine.useCredit": "当面はクレジットを使う",
   "cloudWelcome.files.apps": "アプリを接続",
   "cloudWelcome.files.appsAction": "アプリを接続",

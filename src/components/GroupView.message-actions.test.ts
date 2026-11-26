@@ -24,6 +24,7 @@ vi.mock("@/lib/analytics", () => ({ track: vi.fn() }));
 vi.mock("@/lib/cloud-guest", () => ({ useCanWriteIn: () => fixture.canWrite, useReactor: () => "user" }));
 
 const { Transcript } = await import("./GroupView");
+const { MESSAGE_ROW } = await import("./MessageActions");
 const { MessageBoundary } = await import("./ChatView");
 
 const lead = { id: "lead", name: "Lead", color: "blue", voice: "verse" } as Bot;
@@ -38,11 +39,17 @@ const text = (id: string, role: "user" | "bot", body: string): Message => ({
   ...(role === "bot" ? { from: { botId: "lead", name: "Lead", color: "blue" as const } } : {}),
 });
 
+/** The room as drawn with the pointer over each message, which is when a message's own buttons mount. */
 const markup = (messages: Message[]) => {
-  const group = { ...room, messages };
-  return renderToStaticMarkup(createElement(Transcript, {
-    group, members: [lead], locale: "en", messages, transcript: messages, onReply: () => {},
-  }));
+  vi.unstubAllGlobals();
+  flushSync(() => root.render(createElement(Transcript, {
+    group: { ...room, messages }, members: [lead], locale: "en", messages, transcript: messages, onReply: () => {},
+  })));
+  hover();
+  return host.innerHTML;
+};
+const hover = () => {
+  for (const row of host.querySelectorAll(`[${MESSAGE_ROW}]`)) flushSync(() => row.dispatchEvent(new PointerEvent("pointerenter", { pointerType: "mouse" })));
 };
 
 function Boom(): ReactNode {
@@ -96,6 +103,7 @@ describe("room message actions", () => {
     flushSync(() => root.render(createElement(Transcript, {
       group: { ...room, messages }, members: [lead], locale: "en", messages, transcript: messages, onReply: () => {},
     })));
+    hover();
     flushSync(() => host.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!.click());
     const items = [...host.querySelectorAll<HTMLButtonElement>("[role=menuitem]")];
     expect(items.map((item) => item.textContent)).toEqual(expect.arrayContaining(["Read this aloud", "Show raw markdown", "Pin message", "Copy message ID"]));
@@ -112,6 +120,7 @@ describe("room message actions", () => {
     flushSync(() => root.render(createElement(Transcript, {
       group: { ...room, messages }, members: [lead], locale: "en", messages, transcript: messages, onReply: () => {},
     })));
+    hover();
     const bar = host.querySelector('[data-testid="message-actions"]')!;
     const button = bar.querySelector<HTMLButtonElement>('button[aria-label="Read this aloud"]');
     expect(button?.disabled).toBe(false);
