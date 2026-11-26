@@ -5,7 +5,7 @@ import { api } from "@/state/store";
 import { intlLocale, t } from "@/lib/i18n";
 import { randomUuid } from "@/lib/random-uuid";
 import { serverErrorText } from "@/lib/server-error";
-import { applyWorkspaceClientState, collectWorkspaceClientState, WORKSPACE_RESTORE_MARKER } from "@/lib/workspace-backup-client";
+import { collectWorkspaceClientState, WORKSPACE_RESTORE_MARKER } from "@/lib/workspace-backup-client";
 import { LearnMore, SETTINGS_INPUT, SettingRow, SettingsField, SettingsRows } from "./SettingsPrimitives";
 import { SettingsDialog } from "./settings/SettingsDialog";
 import { WorkspaceBackupRestartNotice, type BackupStatus } from "./WorkspaceBackupRecovery";

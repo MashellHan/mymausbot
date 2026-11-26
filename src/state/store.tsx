@@ -3200,7 +3200,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "window-pref": applyWindowPref(frame); break;
-        case "theme": applyThemeFrame(frame); break; case "apps-catalog": appCatalogAnnounced(); break;
+        case "theme": applyThemeFrame(frame); break;
         case "config": forgetSharedSession();
           rawDispatch({
             type: "configStatus",
