@@ -502,6 +502,23 @@ describe("persistent Mini Apps", () => {
     await expect(apps.dashboardRead(owner, app.id, { resource: "activity", ...base })).rejects.toMatchObject({ status: 409 });
   });
 
+  it("uses fast getRoster() when available so detail reads do not trigger full transcript/SQLite refreshes", async () => {
+    const getRoster = vi.fn(async () => teamsSnapshot);
+    const readers = { ...dashboardProviders(), agents: { get: vi.fn(async () => teamsSnapshot), getRoster } };
+    const { apps } = fixture(undefined, readers);
+    const { app } = await apps.publish(owner, publication({ bindings: [], dashboardKind: "agent-team", html: reviewedHtml }), undefined, true);
+    expect(await apps.dashboardRead(owner, app.id, { resource: "team-rules", expectedRevision: 1, teamId: "w6" }))
+      .toMatchObject({ resource: "team-rules", snapshot: teamRulesSnapshot });
+    expect(getRoster).toHaveBeenCalledTimes(2);
+    expect(readers.agents.get).not.toHaveBeenCalled();
+    getRoster.mockResolvedValueOnce(teamsSnapshot).mockResolvedValueOnce({
+      ...teamsSnapshot,
+      teams: [{ ...teamsSnapshot.teams[0]!, agents: [{ ...teamsSnapshot.teams[0]!.agents[0]!, occupantId: "o0000000000000000" }] }],
+    });
+    await expect(apps.dashboardRead(owner, app.id, { resource: "activity", expectedRevision: 1, agentId: "w6:p1", occupantId }))
+      .rejects.toMatchObject({ status: 409 });
+  });
+
   it("drops a pending snapshot after a revision change, archive or owner revocation", async () => {
     const readers = dashboardProviders();
     const { apps } = fixture(undefined, readers);
