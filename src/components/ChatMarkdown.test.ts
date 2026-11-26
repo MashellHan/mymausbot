@@ -31,6 +31,7 @@ import { StreamingReplyContext } from "@/state/live-reply";
 import { setLocale } from "@/lib/i18n";
 import { ThreadRefsContext } from "./ThreadRefs";
 import * as AttachmentPreview from "./AttachmentPreview";
+import * as OutsideWorkspaceProbe from "./outside-workspace-probe";
 import { messageReferencesFile } from "../../server/message-file";
 
 // Most of this file pins Advanced mode's chrome; the Simple code block has its own tests below.
@@ -940,10 +941,16 @@ describe("ChatMarkdown attachments", () => {
 
   describe("a file link outside the conversation's workspace", () => {
     const filePath = "C:\\Users\\Maus\\_draft\\ollama-gen.js";
-    const render = (outsideWorkspace: boolean, href = filePath) => {
+    const render = (
+      outsideWorkspace: boolean,
+      href = filePath,
+      probedOutside: boolean | null = outsideWorkspace ? true : false,
+      saveFailed = outsideWorkspace,
+    ) => {
+      const probe = vi.spyOn(OutsideWorkspaceProbe, "useMessageFileOutsideWorkspace").mockReturnValue(probedOutside);
       const save = vi.spyOn(AttachmentPreview, "useLocalFileSave").mockReturnValue({
-        state: "failed",
-        reason: "the linked file is outside this conversation's workspace",
+        state: saveFailed ? "failed" : "idle",
+        reason: outsideWorkspace ? "the linked file is outside this conversation's workspace" : "",
         savedTo: "",
         outsideWorkspace,
         retryable: !outsideWorkspace,
@@ -956,17 +963,19 @@ describe("ChatMarkdown attachments", () => {
         }));
       } finally {
         save.mockRestore();
+        probe.mockRestore();
       }
     };
     const revealInFolder = vi.fn(async () => "shown" as const);
 
-    it("offers Show in folder in the local desktop app, without printing the path", () => {
+    it("reveals the host path on the first click in the local desktop app when the probe already refused it", () => {
       vi.stubGlobal("window", { ogb: { revealInFolder, remoteClient: { active: false } } });
       try {
-        const html = render(true);
-        expect(html).toContain("This file is outside this chat&#x27;s working folder, so it can&#x27;t be saved from here");
+        const html = render(false, filePath, true);
+        expect(html).not.toContain("This file is outside this chat&#x27;s working folder, so it can&#x27;t be saved from here");
         expect(html).not.toContain("the linked file is outside");
-        expect(html).toContain("Show in folder");
+        expect(html).toContain('title="Show in folder"');
+        expect(html).toContain("lucide-folder-open");
         expect(html).not.toContain("<code");
       } finally {
         vi.unstubAllGlobals();
@@ -976,8 +985,8 @@ describe("ChatMarkdown attachments", () => {
     it("shows the full path as selectable text to a remote client instead", () => {
       vi.stubGlobal("window", { ogb: { revealInFolder, remoteClient: { active: true } } });
       try {
-        const html = render(true);
-        expect(html).not.toContain("Show in folder");
+        const html = render(true, filePath, null);
+        expect(html).not.toContain('title="Show in folder"');
         expect(html).toMatch(/<code[^>]*select-all[^>]*>C:\\Users\\Maus\\_draft\\ollama-gen\.js<\/code>/);
       } finally {
         vi.unstubAllGlobals();
@@ -985,24 +994,49 @@ describe("ChatMarkdown attachments", () => {
     });
 
     it("does not offer a retry for a refusal that happens on every try", () => {
-      expect(render(true)).not.toContain("lucide-rotate-ccw");
-      expect(render(true, "file:///Users/maus/Desktop/designs/Posts/2026-10-08_News")).not.toContain("lucide-rotate-ccw");
-      expect(render(false)).toContain("lucide-rotate-ccw");
+      vi.stubGlobal("window", { ogb: { revealInFolder, remoteClient: { active: false } } });
+      try {
+        expect(render(false, filePath, true)).not.toContain("lucide-rotate-ccw");
+        expect(render(false, "file:///Users/maus/Desktop/designs/Posts/2026-10-08_News", true)).not.toContain("lucide-rotate-ccw");
+        expect(render(false, filePath, false, true)).toContain("lucide-rotate-ccw");
+      } finally {
+        vi.unstubAllGlobals();
+      }
     });
 
     it("shows the path in a browser, which has no desktop bridge", () => {
-      expect(render(true)).toContain(`>${filePath}</code>`);
+      expect(render(true, filePath, null)).toContain(`>${filePath}</code>`);
+    });
+
+    it("keeps the link usable in a browser, where nothing probes it", () => {
+      const html = render(false, filePath, null);
+      expect(html).not.toContain("animate-spin");
+      expect(html).not.toContain('disabled=""');
     });
 
     it("leaves other failures alone", () => {
       vi.stubGlobal("window", { ogb: { revealInFolder, remoteClient: { active: false } } });
+      const probe = vi.spyOn(OutsideWorkspaceProbe, "useMessageFileOutsideWorkspace").mockReturnValue(false);
+      const save = vi.spyOn(AttachmentPreview, "useLocalFileSave").mockReturnValue({
+        state: "failed",
+        reason: "the linked file is outside this conversation's workspace",
+        savedTo: "",
+        outsideWorkspace: false,
+        retryable: true,
+        folder: null,
+        save: vi.fn(async () => undefined),
+      });
       try {
-        const html = render(false);
+        const html = renderToStaticMarkup(createElement(ChatMarkdown, {
+          text: `[ollama-gen.js](${filePath})`, message: { threadId: "thread-1", messageId: "message-1" },
+        }));
         expect(html).toContain("the linked file is outside this conversation&#x27;s workspace");
-        expect(html).not.toContain("Show in folder");
+        expect(html).not.toContain('title="Show in folder"');
         expect(html).not.toContain(filePath);
       } finally {
         vi.unstubAllGlobals();
+        save.mockRestore();
+        probe.mockRestore();
       }
     });
   });
