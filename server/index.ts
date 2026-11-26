@@ -15312,7 +15312,7 @@ server.listen(PORT, listenHost(server), async () => {
   drainQueuedSends();
   drainQueuedChannelSends();
   void cloudComputerPower.armRunning();
-  startUpkeep({ bots: () => store.bots, retentionDays: () => threadEventLogRetentionDays(cfg), busy: threadBusy, openDirectHandoff: (threadId) => coordinator.activeDirect(threadId) });
+  startUpkeep({ bots: () => store.bots, retentionDays: () => threadEventLogRetentionDays(cfg), busy: threadBusy, openDirectHandoff: (threadId) => coordinator.activeDirect(threadId), ...(CLOUD_TEAM ? {} : { keptAttachments }) });
   if (enginesRead) {
     await enginesRead;
     if (companyShutdown) return;

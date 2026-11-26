@@ -244,6 +244,74 @@ export function offerAttachmentClear(offered: boolean): void {
 
 /** A file this new may still be on its way into a message or a turn, so a clear leaves it. */
 export const ATTACHMENT_CLEAR_MIN_AGE_MS = 10 * 60 * 1000;
+/** Automatic upkeep trims oldest non-kept attachments only when they are at least this old. */
+export const ATTACHMENT_AUTO_PRUNE_MIN_AGE_MS = 24 * 60 * 60 * 1000;
+/** Automatic upkeep starts trimming when committed usage exceeds this fraction of ATTACHMENTS_MAX_BYTES. */
+export const ATTACHMENT_AUTO_PRUNE_TRIGGER_RATIO = 0.8;
+/** Automatic upkeep trims down to this fraction of ATTACHMENTS_MAX_BYTES to leave headroom for new uploads. */
+export const ATTACHMENT_AUTO_PRUNE_TARGET_RATIO = 0.6;
+
+/** Reclaim oldest non-kept attachments once storage exceeds the high-water mark, never deleting recent uploads or kept assets. */
+export function pruneOldAttachments(
+  kept: ReadonlySet<string>,
+  options: {
+    now?: number;
+    maxBytes?: number;
+    triggerBytes?: number;
+    targetBytes?: number;
+    minAgeMs?: number;
+  } = {},
+): { removed: number; freedBytes: number; failed: number } {
+  ensureAttachmentsDir();
+  const now = options.now ?? Date.now();
+  const maxBytes = options.maxBytes ?? ATTACHMENTS_MAX_BYTES;
+  const triggerBytes = options.triggerBytes ?? Math.floor(maxBytes * ATTACHMENT_AUTO_PRUNE_TRIGGER_RATIO);
+  const targetBytes = options.targetBytes ?? Math.floor(maxBytes * ATTACHMENT_AUTO_PRUNE_TARGET_RATIO);
+  const minAgeMs = options.minAgeMs ?? ATTACHMENT_AUTO_PRUNE_MIN_AGE_MS;
+
+  let totalBytes = 0;
+  const candidates: Array<{ name: string; path: string; mtimeMs: number; size: number }> = [];
+  for (const entry of readdirSync(ATTACHMENTS_DIR, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const path = join(ATTACHMENTS_DIR, entry.name);
+    try {
+      const { mtimeMs, size } = statSync(path);
+      totalBytes += size;
+      if (PARTIAL_NAME.test(entry.name) || kept.has(entry.name)) continue;
+      if (now - mtimeMs < minAgeMs) continue;
+      candidates.push({ name: entry.name, path, mtimeMs, size });
+    } catch {
+      // File disappeared concurrently; ignore.
+    }
+  }
+  if (totalBytes <= triggerBytes || !candidates.length) {
+    return { removed: 0, freedBytes: 0, failed: 0 };
+  }
+
+  candidates.sort((a, b) => a.mtimeMs - b.mtimeMs || b.size - a.size);
+  let removed = 0;
+  let freedBytes = 0;
+  let failed = 0;
+  const gone: string[] = [];
+  let remaining = totalBytes;
+  for (const item of candidates) {
+    if (remaining <= targetBytes) break;
+    try {
+      unlinkSync(item.path);
+      gone.push(item.name);
+      removed += 1;
+      freedBytes += item.size;
+      remaining -= item.size;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") failed += 1;
+    }
+  }
+  if (gone.length) {
+    dropBoxUploadCopies(gone);
+    invalidateAttachmentAccounting();
+  }
+  return { removed, freedBytes, failed };
+}
 
 /** The person's Clear in Settings: every stored file older than a few minutes goes, except the ones `kept` holds
  * (pictures, routine files). A message that showed a removed file shows it missing. */
