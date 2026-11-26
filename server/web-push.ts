@@ -14,7 +14,6 @@ import {
   WEB_PUSH_LABEL_MAX,
   normalizeWebPushPreferences,
   type PublicWebPushSubscription,
-  type WebPushActivityPhase,
   type WebPushPayload,
   type WebPushPreferences,
   type WebPushSubscriptionInput,
@@ -46,7 +45,6 @@ import {
   FAILURE_NOTIFY_SET,
   SAFE_ID,
   URGENT_NOTIFY_SET,
-  activityDetailSignature,
   buildActivityPayload,
   buildNotificationPayload,
   buildRedactedActivityPayload,
@@ -54,7 +52,6 @@ import {
   buildTestPayload,
   clipText,
   notifyOf,
-  parseRuntimeActivityEvent,
   preferenceEnabledForKind,
   type WebPushActivityDetail,
   type WebPushNotificationInput,
@@ -280,9 +277,6 @@ export class WebPushService {
   private readonly focusedByKey = new Map<string, FocusRecord>();
   private readonly outbox = new Map<string, QueuedJob>();
   private readonly lastSentBySlot = new Map<string, number>();
-  private readonly lastActivityByThread = new Map<string, number>();
-  private readonly lastPhaseByThread = new Map<string, WebPushActivityPhase>();
-  private readonly lastActivityDetailByThread = new Map<string, string>();
   private readonly seenNotifyIds = new Set<string>();
   private readonly recentNotifySignatures = new Map<string, number>();
   private readonly sentTimestampsByDevice = new Map<string, number[]>();
@@ -463,23 +457,8 @@ export class WebPushService {
   offerBroadcast(payload: Record<string, unknown>, reaches: (key: string) => boolean): void {
     try {
       if (!this.subscriptions.length || !this.isEnabled() || !this.vapid) return;
-      const frameKind = String(payload.kind ?? "");
-      if (frameKind === "notify") {
+      if (String(payload.kind ?? "") === "notify") {
         this.offerNotifyFrame(payload.notification, reaches);
-        return;
-      }
-      if (frameKind === "bot") {
-        const botId = typeof (payload.bot as Record<string, unknown> | undefined)?.id === "string"
-          ? String((payload.bot as Record<string, unknown>).id)
-          : null;
-        if (botId) this.offerActivityState(botId, undefined, reaches);
-        return;
-      }
-      if (frameKind === "runtime") {
-        const parsed = parseRuntimeActivityEvent(payload.event);
-        if (!parsed) return;
-        const botId = this.options.botOfThread?.(parsed.threadId);
-        if (botId) this.offerActivityState(botId, parsed.phase, reaches, parsed.threadId, parsed.detail);
       }
     } catch (error) {
       this.log(`[web-push] could not queue push: ${error instanceof Error ? error.message : String(error)}`);
@@ -530,8 +509,6 @@ export class WebPushService {
     const isSpend = notification.kind === "spend";
     const urgency: QueuedJob["urgency"] = isUrgent ? "high" : isActivityNotify ? "low" : "normal";
     const immediate = isUrgent || isFailure || notification.kind === "done";
-    const lastAct = this.lastActivityByThread.get(notification.threadId);
-    const hadRecentActivity = lastAct !== undefined && now - lastAct < WEB_PUSH_MAX_AGE_MS;
 
     let enqueued = false;
     for (const sub of this.subscriptions) {
@@ -546,7 +523,6 @@ export class WebPushService {
         ts: now,
         room,
         unreadCount: this.options.unreadCount?.(sub.key),
-        replaceActivity: sub.preferences.liveActivities || hadRecentActivity,
       });
       if (!payload) continue;
 
@@ -556,7 +532,6 @@ export class WebPushService {
 
       if (idKey) this.rememberNotifyId(idKey);
       this.rememberNotifySignature(sigKey, now);
-      this.outbox.delete(`${sub.key}|${sub.endpoint}|${notification.threadId}|activity`);
 
       this.enqueueJob({
         slot: `${sub.key}|${sub.endpoint}|${notification.threadId}|${notification.kind}`,
@@ -572,84 +547,6 @@ export class WebPushService {
       enqueued = true;
     }
     if (enqueued) this.kick();
-  }
-
-  private offerActivityState(
-    botId: string,
-    phaseHint: WebPushActivityPhase | undefined,
-    reaches: (key: string) => boolean,
-    threadHint?: string,
-    detail?: WebPushActivityDetail,
-  ): void {
-    const bot = this.options.bot?.(botId);
-    if (!bot) return;
-    const threadId = threadHint && SAFE_ID.test(threadHint) ? threadHint : bot.threadId;
-    if (!SAFE_ID.test(threadId)) return;
-    const prev = this.lastPhaseByThread.get(threadId);
-    const phase: WebPushActivityPhase | undefined =
-      phaseHint ??
-      (bot.hasOpenAsk
-        ? "waiting"
-        : bot.busy
-          ? prev && prev !== "done" && prev !== "failed"
-            ? "working"
-            : "started"
-          : prev && prev !== "done" && prev !== "failed"
-            ? "done"
-            : undefined);
-    if (!phase) return;
-
-    const detailKey = phase === "working" ? activityDetailSignature(detail) : "";
-    const prevDetail = this.lastActivityDetailByThread.get(threadId) ?? "";
-    if (prev === phase && (phase !== "working" || !detailKey || detailKey === prevDetail)) return;
-
-    const now = this.now();
-    const urgent = phase === "done" || phase === "failed" || phase === "waiting";
-    if (!urgent && now - (this.lastActivityByThread.get(threadId) ?? -Infinity) < WEB_PUSH_ACTIVITY_MIN_INTERVAL_MS) return;
-
-    this.lastPhaseByThread.set(threadId, phase);
-    if (this.lastPhaseByThread.size > 1_000) this.lastPhaseByThread.clear();
-    this.lastActivityDetailByThread.set(threadId, detailKey);
-    if (this.lastActivityDetailByThread.size > 1_000) this.lastActivityDetailByThread.clear();
-
-    const id = `wp_act_${now}_${++this.seq}`;
-    let enqueued = false;
-    for (const sub of this.subscriptions) {
-      const activitySlot = `${sub.key}|${sub.endpoint}|${threadId}|activity`;
-      if (
-        (phase === "done" && sub.preferences.finished) ||
-        (phase === "failed" && sub.preferences.failures) ||
-        (phase === "waiting" && sub.preferences.urgent)
-      ) {
-        this.outbox.delete(activitySlot);
-        continue;
-      }
-      if (!preferenceEnabledForKind(sub.preferences, "activity") || !reaches(sub.key)) continue;
-      if (phase !== "waiting" && this.isDeviceFocusedOnThread(sub.key, threadId)) continue;
-      const payload = buildActivityPayload(
-        { id: bot.id, name: bot.name, threadId, ...(bot.group ? { room: bot.group } : {}) },
-        phase,
-        { id, ts: now, unreadCount: this.options.unreadCount?.(sub.key), detail },
-      );
-      if (!payload) continue;
-      this.enqueueJob({
-        slot: activitySlot,
-        key: sub.key,
-        endpoint: sub.endpoint,
-        payload,
-        urgency: phase === "waiting" ? "high" : "low",
-        topic: payload.topic,
-        immediate: urgent,
-        isActivity: true,
-        queuedAt: now,
-      });
-      enqueued = true;
-    }
-    if (enqueued) {
-      this.lastActivityByThread.set(threadId, now);
-      if (this.lastActivityByThread.size > 1_000) this.lastActivityByThread.clear();
-      this.kick();
-    }
   }
 
   private enqueueJob(job: Omit<QueuedJob, "notBefore" | "attempts">): void {
