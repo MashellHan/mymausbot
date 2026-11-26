@@ -83,6 +83,8 @@ import { ELEVATED_CONTROL } from "./elevated";
 export { TeamMenuItems };
 import { SidebarResizeHandle, useSidebarWidth } from "./SidebarResizeHandle";
 import { PHONE_TOP_BUTTON, SIMPLE_CORNER_BUTTON, SIMPLE_ROW_FOCUS, SIMPLE_TOP_BUTTON, SidebarSearchPill, SidebarSearchToggle } from "./SidebarSimpleTop";
+import { NotificationBell } from "./NotificationsPanel";
+import { isRemotePwaMode } from "@/lib/pwa-transport";
 import { isSidebarToggle } from "@/lib/keyboard-shortcuts";
 import { SidebarRailSeparator, SimpleRailFooter } from "./SidebarSimpleRail";
 import { useShowThreads } from "@/lib/thread-preferences";
@@ -1299,6 +1301,13 @@ export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = 
           </button>}
           {advanced && inboxSupport === "no" && <SidebarActiveThreads entries={attention} icons={density === "icons"} phone={phone} dispatch={dispatch} />}
           {phone && <SidebarInboxRow compactIcon icons={false} large={false} running={attentionHasRunningWork(attention)} hideEmpty={raw} onOpened={onClose} />}
+          {phone && isRemotePwaMode() && (
+            <NotificationBell
+              bar={PHONE_TOP_BUTTON}
+              iconSize={18}
+              badgeClassName="-right-1 -top-1 min-w-4 h-4 px-1 text-[10px] font-semibold tabular-nums ring-2 ring-app"
+            />
+          )}
           {plusControl}
         </div>}
       </div>

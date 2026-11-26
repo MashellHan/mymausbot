@@ -75,6 +75,7 @@ import { useColorUserBubbles } from "@/lib/user-bubble-preference";
 import { userBubbleStyle } from "@/lib/user-bubble-tone";
 import { ToolActivity } from "./ToolActivity";
 import { DataResultChip } from "./DataResultChip"; import { PublishedPageCard } from "./PublishedPageCard"; import { TemplateChatCard } from "./TemplateCard"; import { PublishedSiteCards } from "./published-apps/PublishedSiteCards"; import { isRemoteClientSession, isRemotePwaMode } from "@/lib/pwa-transport";
+import { NotificationBell } from "./NotificationsPanel";
 import { ThreadRefText } from "./ThreadRefs"; import { WatchScreenButton } from "./WatchScreenButton";
 import { optionsCardRow } from "./OptionsCardRow";
 import { MessageBoundary } from "./MessageBoundary";
@@ -1106,7 +1107,13 @@ export const ChatView = memo(function ChatView({ bot: profile, inForkPanel = fal
             onUnpin={remoteClient ? undefined : () => dispatch({ type: "updateTask", botId: bot.id, threadId: bot.threadId, patch: { pinnedMessageId: "" } })}
           />
           {computerButton}
-          <PwaPinBotButton botId={bot.id} /><HeaderShare bot={bot} />{!inForkPanel && (!raw || remoteClient) && bot.yourAccess !== "view" && <NewThreadHeaderButton botId={bot.id} />}{phoneMenu ? <ChatMoreMenu bot={bot} phoneHeader /> : (advanced || remoteClient) && <ChatHeaderMenu key={`menu:${bot.threadId}`} bot={bot} />}
+          <PwaPinBotButton botId={bot.id} /><HeaderShare bot={bot} />{!inForkPanel && (!raw || remoteClient) && bot.yourAccess !== "view" && <NewThreadHeaderButton botId={bot.id} />}{phone && isRemotePwaMode() && !inForkPanel && (
+            <NotificationBell
+              bar="flex size-9 shrink-0 items-center justify-center rounded-full border border-hairline bg-card text-ink hover:bg-raised active:scale-95"
+              iconSize={16}
+              badgeClassName="-right-1 -top-1 min-w-4 h-4 px-1 text-[10px] font-semibold tabular-nums ring-2 ring-app"
+            />
+          )}{phoneMenu ? <ChatMoreMenu bot={bot} phoneHeader /> : (advanced || remoteClient) && <ChatHeaderMenu key={`menu:${bot.threadId}`} bot={bot} />}
         </div>
         </div>
       </div>

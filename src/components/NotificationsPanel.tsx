@@ -5,6 +5,7 @@ import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import { setNotificationTrayPinned } from "@/lib/notification-preferences";
 import { useShowThreads } from "@/lib/thread-preferences";
+import { PHONE_LAYOUT, useMediaQuery } from "@/lib/use-media-query";
 import type { LocaleKey } from "@/locales";
 import { BotAvatar, type BotAvatarProps } from "./Avatar";
 import { threadUpdatedLabel } from "./SidebarThreadRow";
@@ -67,7 +68,7 @@ export function filterNotifications<T extends { botId: string }>(entries: T[], b
 }
 
 /** `bar` is the top bar's button class, which also selects the top-bar layout. */
-export function NotificationBell({ bar }: { bar?: string }) {
+export function NotificationBell({ bar, badgeClassName, iconSize }: { bar?: string; badgeClassName?: string; iconSize?: number }) {
   const { state, dispatch } = useStore();
   const unread = state.notifications.reduce((count, n) => count + (n.read ? 0 : 1), 0);
   return (
@@ -80,9 +81,9 @@ export function NotificationBell({ bar }: { bar?: string }) {
       aria-pressed={state.notificationsOpen}
       className={cn("relative", bar ?? "flex size-8 items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink", bar && state.notificationsOpen && "text-accent hover:text-accent")}
     >
-      <Bell size={bar ? 15 : 17} strokeWidth={bar ? 1.75 : undefined} aria-hidden="true" />
+      <Bell size={iconSize ?? (bar ? 15 : 17)} strokeWidth={bar ? 1.75 : undefined} aria-hidden="true" />
       {unread > 0 && (
-        <span className={cn("absolute flex items-center justify-center rounded-full bg-accent font-semibold text-accent-ink", bar ? "-right-1 -top-0.5 h-[13px] min-w-[13px] px-0.5 text-[9px]" : "-right-0.5 -top-0.5 h-[15px] min-w-[15px] px-1 text-[10px]")}>
+        <span className={cn("absolute flex items-center justify-center rounded-full bg-accent font-semibold tabular-nums text-accent-ink", badgeClassName ?? (bar ? "-right-1 -top-0.5 h-[13px] min-w-[13px] px-0.5 text-[9px]" : "-right-0.5 -top-0.5 h-[15px] min-w-[15px] px-1 text-[10px]"))}>
           {unread > 99 ? "99+" : unread}
         </span>
       )}
@@ -95,7 +96,7 @@ export function NotificationRail() {
   const { state } = useStore();
   if (state.notificationsOpen) return null;
   return (
-    <aside aria-label={t("notifications.title")} className="absolute right-0 top-1/2 z-20 -translate-y-1/2 rounded-l-lg border border-r-0 border-hairline/40 bg-panel p-1 shadow-sm">
+    <aside aria-label={t("notifications.title")} className="max-md:hidden absolute right-0 top-1/2 z-20 -translate-y-1/2 rounded-l-lg border border-r-0 border-hairline/40 bg-panel p-1 shadow-sm">
       <NotificationBell />
     </aside>
   );
@@ -120,6 +121,7 @@ export async function postNotificationRead(path: string, dispatch: (action: Acti
 export function NotificationsPanel() {
   const { state, dispatch } = useStore();
   const showThreads = useShowThreads();
+  const phone = useMediaQuery(PHONE_LAYOUT, false);
   const [now, setNow] = useState(() => Date.now());
   const [botFilter, setBotFilter] = useState(ALL_BOTS);
   const bots = notificationBots(state.notifications);
@@ -131,13 +133,15 @@ export function NotificationsPanel() {
     return () => clearInterval(timer);
   }, []);
 
+  const close = () => dispatch({ type: "toggleNotifications", open: false });
+
   const openRow = (entry: NotificationLogEntry) => {
     if (!entry.read) {
       dispatch({ type: "notificationRead", id: entry.id });
       void postNotificationRead(`/api/notifications/${entry.id}/read`, dispatch);
     }
     openThread(dispatch, { botId: entry.botId, threadId: entry.threadId }, state, showThreads);
-    if (!state.notificationsPinned) dispatch({ type: "toggleNotifications", open: false });
+    if (!state.notificationsPinned || phone) close();
   };
 
   const togglePinned = () => {
@@ -152,65 +156,73 @@ export function NotificationsPanel() {
   };
 
   return (
-    <aside
-      aria-label={t("notifications.title")}
-      className="animate-panel-in flex h-full w-[300px] max-w-full shrink-0 flex-col border-l border-hairline/40 bg-panel max-md:absolute max-md:inset-y-0 max-md:right-0 max-md:z-30"
-    >
-      <div className="flex items-center gap-1.5 border-b border-hairline/40 px-3.5 py-2.5">
-        <span className="flex-1 text-[13px] font-medium text-ink">
-          {t("notifications.title")}
-          {unreadCount > 0 && <span className="ml-1.5 text-[12px] font-normal text-accent">· {t("notifications.unread", { count: unreadCount })}</span>}
-        </span>
-        <button type="button" onClick={markAllRead} className="shrink-0 whitespace-nowrap text-[12px] text-accent hover:underline">
-          {t("notifications.markAllRead")}
-        </button>
-        <button
-          type="button"
-          onClick={togglePinned}
-          aria-label={state.notificationsPinned ? t("notifications.unpin") : t("notifications.pin")}
-          aria-pressed={state.notificationsPinned}
-          title={state.notificationsPinned ? t("notifications.unpin") : t("notifications.pin")}
-          className={cn(
-            "flex size-[26px] shrink-0 items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink",
-            state.notificationsPinned && "text-accent",
+    <>
+      <div
+        aria-hidden
+        onClick={close}
+        className="hidden max-md:fixed max-md:inset-0 max-md:z-[35] max-md:block max-md:bg-black/50"
+      />
+      <aside
+        aria-label={t("notifications.title")}
+        className="animate-panel-in motion-reduce:animate-none flex h-full w-[300px] max-w-full shrink-0 flex-col border-l border-hairline/40 bg-panel max-md:fixed max-md:inset-x-0 max-md:top-[calc(env(safe-area-inset-top,0px)+2.25rem)] max-md:bottom-0 max-md:z-[45] max-md:h-auto max-md:w-full max-md:rounded-t-[18px] max-md:border-t max-md:border-l-0 max-md:border-hairline/50 max-md:animate-sheet-in max-md:pb-[env(safe-area-inset-bottom,0px)]"
+      >
+        <span aria-hidden className="hidden max-md:mx-auto max-md:mt-2 max-md:block max-md:h-1 max-md:w-8 max-md:rounded-full max-md:bg-ink/15" />
+        <div className="flex items-center gap-1.5 border-b border-hairline/40 px-3.5 py-2.5 max-md:py-2">
+          <span className="flex-1 text-[13px] font-medium text-ink max-md:text-[15px] max-md:font-semibold">
+            {t("notifications.title")}
+            {unreadCount > 0 && <span className="ml-1.5 text-[12px] font-normal text-accent">· {t("notifications.unread", { count: unreadCount })}</span>}
+          </span>
+          <button type="button" onClick={markAllRead} className="shrink-0 whitespace-nowrap text-[12px] text-accent hover:underline max-md:min-h-11 max-md:px-2">
+            {t("notifications.markAllRead")}
+          </button>
+          <button
+            type="button"
+            onClick={togglePinned}
+            aria-label={state.notificationsPinned ? t("notifications.unpin") : t("notifications.pin")}
+            aria-pressed={state.notificationsPinned}
+            title={state.notificationsPinned ? t("notifications.unpin") : t("notifications.pin")}
+            className={cn(
+              "flex size-[26px] shrink-0 items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink max-md:hidden",
+              state.notificationsPinned && "text-accent",
+            )}
+          >
+            <Pin size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={close}
+            aria-label={t("notifications.close")}
+            title={t("notifications.close")}
+            className="flex size-[26px] shrink-0 items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink max-md:size-10 max-md:rounded-full"
+          >
+            <X size={14} className="max-md:size-[18px]" />
+          </button>
+        </div>
+        <div className="border-b border-hairline/40 px-3.5 py-2">
+          <Select size="sm" className="w-full"
+            aria-label={t("notifications.filter")}
+            value={activeFilter}
+            onChange={(event) => setBotFilter(event.target.value)}
+          >
+            <option value={ALL_BOTS}>{t("notifications.allBots")}</option>
+            {bots.map((bot) => (
+              <option key={bot.id} value={bot.id}>{bot.name}</option>
+            ))}
+          </Select>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {visible.length === 0 && (
+            <div className="px-3.5 py-6 text-[13px] text-ink-secondary">{state.notifications.length === 0 ? t("notifications.empty") : t("notifications.emptyForBot")}</div>
           )}
-        >
-          <Pin size={14} />
-        </button>
-        <button
-          type="button"
-          onClick={() => dispatch({ type: "toggleNotifications", open: false })}
-          aria-label={t("notifications.close")}
-          title={t("notifications.close")}
-          className="flex size-[26px] shrink-0 items-center justify-center rounded-md text-ink-secondary hover:bg-raised hover:text-ink"
-        >
-          <X size={14} />
-        </button>
-      </div>
-      <div className="border-b border-hairline/40 px-3.5 py-2">
-        <Select size="sm" className="w-full"
-          aria-label={t("notifications.filter")}
-          value={activeFilter}
-          onChange={(event) => setBotFilter(event.target.value)}
-        >
-          <option value={ALL_BOTS}>{t("notifications.allBots")}</option>
-          {bots.map((bot) => (
-            <option key={bot.id} value={bot.id}>{bot.name}</option>
+          {visible.map((entry) => (
+            <NotificationRow key={entry.id} entry={entry} title={entry.title} now={now} bot={notificationBotForAvatar(entry, state.bots)} threadName={notificationThreadName(entry, state)} onOpen={() => openRow(entry)} />
           ))}
-        </Select>
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {visible.length === 0 && (
-          <div className="px-3.5 py-6 text-[13px] text-ink-secondary">{state.notifications.length === 0 ? t("notifications.empty") : t("notifications.emptyForBot")}</div>
-        )}
-        {visible.map((entry) => (
-          <NotificationRow key={entry.id} entry={entry} title={entry.title} now={now} bot={notificationBotForAvatar(entry, state.bots)} threadName={notificationThreadName(entry, state)} onOpen={() => openRow(entry)} />
-        ))}
-      </div>
-      <div className="border-t border-hairline/40 px-3.5 py-2 text-center text-[12px] text-ink-tertiary">
-        {t("notifications.retention")}
-      </div>
-    </aside>
+        </div>
+        <div className="border-t border-hairline/40 px-3.5 py-2 text-center text-[12px] text-ink-tertiary">
+          {t("notifications.retention")}
+        </div>
+      </aside>
+    </>
   );
 }
 
@@ -222,7 +234,7 @@ function NotificationRow({ entry, title, now, bot, threadName, onOpen }: { entry
       onClick={onOpen}
       title={title}
       className={cn(
-        "flex w-full gap-2.5 border-b border-hairline/20 px-3.5 py-2.5 text-left hover:bg-raised/60",
+        "flex w-full gap-2.5 border-b border-hairline/20 px-3.5 py-2.5 text-left hover:bg-raised/60 max-md:min-h-11 max-md:py-3",
         !entry.read && "bg-accent/5",
       )}
     >

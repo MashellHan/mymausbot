@@ -228,7 +228,7 @@ export const SETTINGS_INDEX: readonly SettingsIndexEntry[] = [
   { id: "language", page: "general", anchor: "typing", labelKey: "settings.language.title", simple: { page: "app", anchor: "typing" }, synonyms: ["language", "translate"] },
   { id: "send-key", page: "general", anchor: "typing", labelKey: "settings.sendKey.title", synonyms: ["enter", "return", "shift+enter", "new line", "keyboard"] },
   { id: "talk", page: "general", anchor: "typing", labelKey: "settings.search.talk", when: desk, topFor: ["voice", "microphone", "mic", "dictation", "talk"] },
-  { id: "notifications", page: "general", anchor: "notifications", labelKey: "notifications.title", simple: { page: "app", anchor: "typing" }, topFor: ["notifications", "notify", "alerts", "sounds"], synonyms: ["mute", "silent", "chime", "feed"] },
+  { id: "notifications", page: "general", anchor: "notifications", labelKey: "notifications.title", simple: { page: "app", anchor: "typing" }, topFor: ["notifications", "notify", "alerts", "sounds"], synonyms: ["mute", "silent", "chime", "feed", "web push", "push", "live activities", "lock screen", "badge", "推送", "实时活动", "锁屏"] },
   { id: "startup", page: "general", anchor: "startup", labelKey: "settings.general.startup", when: desk, synonyms: ["open at login", "startup", "launch"] },
   { id: "analytics", page: "general", anchor: "privacy", labelKey: "settings.general.privacy", synonyms: ["analytics", "usage analytics", "privacy", "telemetry"] },
   { id: "light-dark", page: "appearance", anchor: "look", labelKey: "settings.theme.lightOrDark", topFor: ["dark mode", "night mode", "light mode"], synonyms: ["dark", "light", "system"] },

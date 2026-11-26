@@ -10,7 +10,8 @@ vi.mock("react", async (original) => ({
 }));
 vi.mock("@/lib/thread-preferences", () => ({ useShowThreads: () => fixture.showThreads }));
 
-import { useDesktopNotificationOpens, useExternalChatLinks } from "./use-external-chat-links";
+import { setActivePwaAuth } from "@/lib/pwa-transport";
+import { openPwaNotificationTarget, useDesktopNotificationOpens, useExternalChatLinks, useSwNotificationOpens } from "./use-external-chat-links";
 
 const scout: Bot = {
   id: "scout", threadId: "scout-main", name: "Scout", title: "", description: "", notifications: true,
@@ -148,5 +149,76 @@ describe("useDesktopNotificationOpens", () => {
     const dispatch = vi.fn();
     expect(opens(ready, dispatch)[0]).toBeUndefined();
     expect(dispatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("useSwNotificationOpens", () => {
+  const work = { ...scout, tasks: [...scout.tasks!, { threadId: "scout-work", title: "Work", createdAt: 2 }] };
+  const room = { id: "room-1", name: "Ops", threadId: "room-main", createdAt: 1, members: ["scout"], messages: [], tasks: [{ threadId: "room-side", title: "Side", createdAt: 2 }] };
+  const ready: AppState = {
+    ...initialState,
+    bots: [work],
+    groups: [room] as never,
+    selectedId: "scout",
+    hydrated: true,
+    notifications: [{ id: "n1", at: 1, read: false, kind: "done", botId: "scout", botName: "Scout", threadId: "scout-work", title: "Done", body: "" }],
+  };
+
+  afterEach(() => {
+    setActivePwaAuth(null);
+  });
+
+  const runHook = (state: AppState, dispatch: (action: Action) => void, onAfterOpen?: () => void) => {
+    fixture.effects = [];
+    useSwNotificationOpens(state, dispatch, onAfterOpen);
+    return fixture.effects.map((effect) => effect());
+  };
+
+  it("opens query-param targets and SW notificationclick messages in remote PWA mode and marks the notification read", () => {
+    setActivePwaAuth({
+      ownerKey: "https://relay.mxhan.com::env::s1",
+      relayUrl: "https://relay.mxhan.com",
+      token: "omb_sess_1",
+      deviceId: "d1",
+      environmentId: "env",
+      sessionId: "s1",
+      serverName: "Mac",
+      scopes: ["client"],
+      pairedAt: 1,
+    });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+    const replaceState = vi.fn();
+    let onMessage: ((event: MessageEvent) => void) | undefined;
+    const sw = {
+      addEventListener: vi.fn((type: string, fn: (event: MessageEvent) => void) => { if (type === "message") onMessage = fn; }),
+      removeEventListener: vi.fn(),
+    };
+    vi.stubGlobal("window", { location: { pathname: "/", search: "?bot=scout&thread=scout-work&notificationId=n1", hash: "" }, history: { replaceState } });
+    vi.stubGlobal("navigator", { serviceWorker: sw });
+
+    const dispatch = vi.fn();
+    const afterOpen = vi.fn();
+    runHook(loading, dispatch, afterOpen);
+    expect(replaceState).toHaveBeenCalledWith(null, "", "/");
+    expect(dispatch).not.toHaveBeenCalled();
+
+    runHook(ready, dispatch, afterOpen);
+    expect(dispatch).toHaveBeenCalledWith({ type: "notificationRead", id: "n1" });
+    expect(dispatch).toHaveBeenCalledWith({ type: "switchTask", botId: "scout", threadId: "scout-work" });
+    expect(dispatch).toHaveBeenCalledWith({ type: "revealThread", threadId: "scout-work" });
+    expect(afterOpen).toHaveBeenCalledTimes(1);
+
+    dispatch.mockClear();
+    onMessage?.({ data: { type: "omb:notification-click", target: { groupId: "room-1", threadId: "room-side" } } } as MessageEvent);
+    runHook(ready, dispatch, afterOpen);
+    expect(dispatch).toHaveBeenCalledWith({ type: "select", id: "room-1" });
+    expect(dispatch).toHaveBeenCalledWith({ type: "switchGroupTask", groupId: "room-1", threadId: "room-side" });
+  });
+
+  it("navigates to bot when only botId is provided", () => {
+    const dispatch = vi.fn();
+    openPwaNotificationTarget(dispatch, { botId: "scout" }, ready, true);
+    expect(dispatch).toHaveBeenCalledWith({ type: "select", id: "scout" });
   });
 });
