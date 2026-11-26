@@ -17,7 +17,6 @@ type Env = Record<string, string | undefined>;
 
 /** Where defaultDataDir looks: the home the folder goes under and the account's own home. Tests give both. */
 export interface DataHomes { under?: () => string; realHome?: () => string | null }
-
 /** What marks this process as a test or a benchmark, if anything does. */
 export function testRunSignal(env: Env): string | null {
   if (env.VITEST !== undefined) return "VITEST";
