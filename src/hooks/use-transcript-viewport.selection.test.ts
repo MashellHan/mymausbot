@@ -214,7 +214,7 @@ describe("useTranscriptViewport cross-line selection retention", () => {
     store.state.focusMessage = { threadId: "thread-1", messageId: "m200", nonce: 1, consumed: false };
     render({ messages });
 
-    expect(container.querySelector('[data-mid="m200\"]')).not.toBeNull();
+    expect(container.querySelector('[data-mid="m200"]')).not.toBeNull();
     expect(document.getSelection()!.isCollapsed).toBe(true);
 
     // Jumping back to latest restores the set-aside selection once m1180..m1182 return.
