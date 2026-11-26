@@ -506,6 +506,10 @@ describe("pwa-cache", () => {
     const sw = readFileSync(new URL("../../public/sw.js", import.meta.url), "utf8");
     const listeners = new Map<string, (event: any) => void>();
     const showNotification = vi.fn(async () => {});
+    const priorClose = vi.fn();
+    const getNotifications = vi.fn(async ({ tag }: { tag?: string }) =>
+      tag === "omb:activity:thread-9" ? [{ tag, close: priorClose }] : [],
+    );
     const subscribe = vi.fn(async () => ({
       endpoint: "https://push.example/new",
       toJSON: () => ({ endpoint: "https://push.example/new", keys: { p256dh: "p256-new", auth: "auth-new" } }),
@@ -523,6 +527,7 @@ describe("pwa-cache", () => {
       location: { origin: "https://mausbot.mxhan.com" },
       navigator: { setAppBadge, clearAppBadge },
       registration: {
+        getNotifications,
         showNotification,
         pushManager: { subscribe },
       },
@@ -585,7 +590,35 @@ describe("pwa-cache", () => {
         url: "https://mausbot.mxhan.com/?bot=scout&thread=thread-9&notificationId=act-1",
       }),
     }));
+    expect(getNotifications).toHaveBeenCalledWith({ tag: "omb:activity:thread-9" });
+    expect(priorClose).toHaveBeenCalledTimes(1);
     expect(setAppBadge).toHaveBeenCalledWith(3);
+
+    // Final "done" notification reusing the activity tag closes the prior progress banner and sets renotify: true so iOS alerts the user.
+    const donePushPromises: Promise<unknown>[] = [];
+    listeners.get("push")!({
+      data: {
+        json: () => ({
+          version: 1,
+          id: "done-9",
+          kind: "done",
+          title: "Scout",
+          body: "All checks passed.",
+          tag: "omb:activity:thread-9",
+          botId: "scout",
+          threadId: "thread-9",
+          ts: 2000,
+        }),
+      },
+      waitUntil: (p: Promise<unknown>) => donePushPromises.push(p),
+    });
+    await Promise.all(donePushPromises);
+    expect(priorClose).toHaveBeenCalledTimes(2);
+    expect(showNotification).toHaveBeenLastCalledWith("Scout", expect.objectContaining({
+      body: "All checks passed.",
+      tag: "omb:activity:thread-9",
+      renotify: true,
+    }));
 
     // Malformed payload still degrades gracefully without throwing and clears badge when unreadCount is 0.
     const badPushPromises: Promise<unknown>[] = [];

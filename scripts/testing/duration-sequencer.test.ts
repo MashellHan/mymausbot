@@ -190,7 +190,7 @@ describe("vitest shard balance", () => {
 
 describe("update-shard-weights", () => {
   it("recognizes current all-mode and historical shard job names", () => {
-    expect(VITEST_JOB.exec("vitest (macos-latest, all shard 5/10)")?.[1]).toBe("macos-latest");
+    expect(VITEST_JOB.exec("vitest (macos-latest, all shard 5/11)")?.[1]).toBe("macos-latest");
     expect(VITEST_JOB.exec("vitest (macos-latest, shard 5/8)")?.[1]).toBe("macos-latest");
     expect(VITEST_JOB.exec("renderer smoke (control-omb ui, macOS)")).toBeNull();
   });
