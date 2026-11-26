@@ -55,4 +55,25 @@ describe("start-up upkeep", () => {
     await vi.advanceTimersByTimeAsync(THREAD_LOG_RETENTION_SWEEP_MS);
     expect(swept).toEqual([7]);
   });
+
+  it("auto-prunes old attachments on startup and daily when keptAttachments is ready, skipping when unavailable", async () => {
+    vi.useFakeTimers();
+    let kept: Set<string> | null = null;
+    const prunedWith: number[] = [];
+    startUpkeep({
+      bots: () => [],
+      retentionDays: () => null,
+      busy: () => false,
+      openDirectHandoff: () => false,
+      cleanupPartials: () => 0,
+      keptAttachments: () => kept,
+      pruneAttachments: (names) => { prunedWith.push(names.size); return { removed: 1, freedBytes: 2 * 1024 * 1024, failed: 0 }; },
+      sweepLogs: () => 0,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(prunedWith).toEqual([]);
+    kept = new Set(["avatar.png"]);
+    await vi.advanceTimersByTimeAsync(THREAD_LOG_RETENTION_SWEEP_MS);
+    expect(prunedWith).toEqual([1]);
+  });
 });

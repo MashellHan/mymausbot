@@ -44,6 +44,7 @@ const {
   ATTACHMENTS_DIR,
   ATTACHMENTS_MAX_BYTES,
   ATTACHMENT_CLEAR_MIN_AGE_MS,
+  ATTACHMENT_AUTO_PRUNE_MIN_AGE_MS,
   ATTACHMENT_PARTIAL_MAX_AGE_MS,
   DEFAULT_ATTACHMENTS_MAX_BYTES,
   FILE_MAX_BYTES,
@@ -53,6 +54,7 @@ const {
   attachmentStorageUsage,
   attachmentsMaxBytes,
   clearAttachments,
+  pruneOldAttachments,
   keptAttachmentNames,
   offerAttachmentClear,
   cleanupStaleAttachmentPartials,
@@ -797,5 +799,31 @@ describe("clearing attachments from Settings", () => {
 
     expect(clearAttachments(new Set())).toEqual({ removed: 0, freedBytes: 0, failed: 0 });
     expect(existsSync(partial)).toBe(true);
+  });
+
+  it("auto-prunes oldest non-kept attachments past 24h when usage exceeds 80%, trimming down to 60%", () => {
+    const oldest = saveImage(Buffer.from("oldest"), "image/png");
+    const middle = saveImage(Buffer.from("middle"), "image/png");
+    const kept = saveImage(Buffer.from("avatar"), "image/png");
+    const fresh = saveImage(Buffer.from("fresh"), "image/png");
+    truncateSync(oldest.path, 400);
+    truncateSync(middle.path, 350);
+    truncateSync(kept.path, 150);
+    truncateSync(fresh.path, 100);
+    age(oldest.path, ATTACHMENT_AUTO_PRUNE_MIN_AGE_MS + 10_000);
+    age(middle.path, ATTACHMENT_AUTO_PRUNE_MIN_AGE_MS + 5_000);
+    age(kept.path, ATTACHMENT_AUTO_PRUNE_MIN_AGE_MS + 20_000);
+
+    // Below 80% of 1500 (1200): total is 1000 -> no pruning.
+    expect(pruneOldAttachments(new Set([nameOf(kept.path)]), { maxBytes: 1500 })).toEqual({ removed: 0, freedBytes: 0, failed: 0 });
+    expect(existsSync(oldest.path)).toBe(true);
+
+    // Above 80% of 1000 (800): total is 1000, target 60% = 600 -> removes oldest (400B -> remaining 600B), keeps middle, kept, and fresh.
+    const pruned = pruneOldAttachments(new Set([nameOf(kept.path)]), { maxBytes: 1000 });
+    expect(pruned).toEqual({ removed: 1, freedBytes: 400, failed: 0 });
+    expect(existsSync(oldest.path)).toBe(false);
+    expect(existsSync(middle.path)).toBe(true);
+    expect(existsSync(kept.path)).toBe(true);
+    expect(existsSync(fresh.path)).toBe(true);
   });
 });
