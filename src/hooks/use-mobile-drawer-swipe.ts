@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Touch, type TouchEventHandler, type TouchList } from "react";
 
 const IGNORE_TARGET_SELECTOR =
-  'input, textarea, select, [contenteditable="true"], [data-swipe-ignore], [data-swipe-action], [role="slider"]';
+  'input, textarea, select, pre, table, [contenteditable="true"], [data-swipe-ignore], [data-swipe-action], [data-no-drawer-swipe], [role="slider"]';
 const SWIPE_ROW_ACTIVE_SELECTOR = "[data-swipe-row-open], [data-swipe-row-dragging]";
 
 const AXIS_LOCK_PX = 10;
