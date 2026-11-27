@@ -7,6 +7,7 @@ import { setLocale } from "@/lib/i18n";
 import type { SidebarDensity } from "@/lib/sidebar-preferences";
 import { StoreProvider } from "@/state/store";
 import { RawPresentation } from "@/lib/raw-presentation";
+import { setActivePwaAuth } from "@/lib/pwa-transport";
 import { setInboxSupport } from "@/state/inbox";
 
 const fixture = vi.hoisted(() => ({
@@ -59,6 +60,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setActivePwaAuth(null);
   setInboxSupport("unknown");
   vi.unstubAllGlobals();
   setLocale("en");
@@ -398,10 +400,21 @@ describe("sidebar foot in Simple mode", () => {
 });
 
 describe("phone sidebar header, mobile cards, and drawer compositor props", () => {
-  it("puts the compact Inbox icon button inside data-sidebar-top-buttons to the left of + and removes max-md:h-16", () => {
+  it("omits the compact Inbox icon on the phone top bar while keeping MobilePwaNotificationBell to the left of + and removes max-md:h-16", () => {
     fixture.phone = true;
     fixture.advanced = false;
     setInboxSupport("yes");
+    setActivePwaAuth({
+      ownerKey: "https://relay.mxhan.com::env::s1",
+      relayUrl: "https://relay.mxhan.com",
+      token: "omb_sess_1",
+      deviceId: "d1",
+      environmentId: "env",
+      sessionId: "s1",
+      serverName: "Mac",
+      scopes: ["client"],
+      pairedAt: 1,
+    });
     vi.stubGlobal("window", { innerWidth: 390, location: { protocol: "http:", search: "" } });
     const html = render();
     const topRowMatch = html.match(/data-sidebar-top-row="true" class="([^"]*)"/);
@@ -411,10 +424,13 @@ describe("phone sidebar header, mobile cards, and drawer compositor props", () =
     const buttonsStart = html.indexOf("data-sidebar-top-buttons");
     const buttonsEnd = html.indexOf("data-sidebar-top-slot") > buttonsStart ? html.length : html.indexOf("</div", html.indexOf('aria-label="New or share"'));
     const topButtons = html.slice(buttonsStart, buttonsEnd);
-    expect(topButtons).toContain("data-sidebar-inbox=");
+    expect(topButtons).not.toContain("data-sidebar-inbox=");
+    expect(html).not.toContain("data-sidebar-inbox=");
+    expect(topButtons).toContain("data-notification-bell");
     expect(topButtons).toContain("rounded-full");
-    expect(topButtons.indexOf("data-sidebar-inbox=")).toBeLessThan(topButtons.indexOf('aria-label="New or share"'));
-    expect(html.match(/data-sidebar-inbox=/g)).toHaveLength(1);
+    expect(topButtons.indexOf("data-notification-bell")).toBeLessThan(topButtons.indexOf('aria-label="New or share"'));
+    expect(html.slice(html.indexOf("data-sidebar-top-row"), buttonsStart)).toContain("lucide-user-round");
+    expect(html.slice(html.indexOf("data-sidebar-top-row"), buttonsStart)).not.toContain(">?<");
   });
 
   it("sets inert and compositor-layer classes on the closed mobile drawer and activates translate-x-0 when open", () => {
