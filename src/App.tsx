@@ -3,18 +3,11 @@ import { ChevronLeft, Loader2, Menu } from "lucide-react";
 import { CLOUD_LINK_SETTINGS, openBot, StoreProvider, useStore } from "@/state/store";
 import { nextShortcutBot, shortcutBots, shownBotIds } from "@/lib/sidebar-shortcut-order";
 import { useShowThreads } from "@/lib/thread-preferences";
-import { useWelcomeViewer, WelcomeGate } from "@/components/onboarding/WelcomeGate";
-import { MausBotWelcome } from "@/components/MausBotWelcome";
+import { useWelcomeViewer } from "@/components/onboarding/WelcomeGate";
 import { NewBotNameHost } from "@/components/NewBotName";
 import { MemberApps } from "@/components/MemberApps";
-import { CloudTimeZoneSync } from "@/components/CloudTimeZone";
-import { cloudSignInDue, spotlightsQuiet, type WelcomeViewer } from "@/lib/onboarding";
-import { FirstConversationTour } from "@/components/onboarding/FirstConversationTour";
-import { GuidedTour } from "@/components/onboarding/GuidedTour";
-import { LiveCallHost } from "@/components/LiveCallHost";
+import { cloudSignInDue, type WelcomeViewer } from "@/lib/onboarding";
 import { ThreadRefsProvider } from "@/components/ThreadRefs";
-import { MiniAppDefaultsBootstrap } from "@/components/mini-apps/MiniAppDefaultsBootstrap";
-import { MiniAppsHost } from "@/components/mini-apps/MiniAppsHost";
 import { initAnalytics } from "@/lib/analytics";
 import { parseComputerHelp } from "@/lib/computer-control";
 import { COMPUTER_PANEL_DEFAULT_WIDTH } from "@/components/computer-panel-resize";
@@ -25,17 +18,43 @@ import { Sidebar } from "@/components/Sidebar";
 import { ChatView } from "@/components/ChatView";
 import { HandoffExchangeHost } from "@/components/HandoffExchange";
 import { GroupView } from "@/components/GroupView";
-import { ForkPanel } from "@/components/ForkPanel";
 import { SIDEBAR_AND_PANEL_FIT, SIDEBAR_INLINE, TWO_SIDE_PANELS_FIT, useMediaQuery } from "@/lib/use-media-query";
 import { preloadConnectedApps } from "@/lib/connected-apps";
 import {
   ActivityPanel, AnnouncementsPage, BotSettingsDialog, CloudAddDialog, ComputerPanel, FilesView, GroupComputerPanel, InboxPanel, InspectorPanel, KeyboardShortcutsModal, LocalVmWorkspace,
   PluginsPanel, preloadScreens, PublishedAppsPage, RemoteAgentSettingsPanel, RemoteDesktopPanel, RoomPanel, SettingsModal, TeamFilesPage, TeamMapPage, TriggersPage,
 } from "@/components/lazy-screens";
+import {
+  DesktopAndCloudHosts,
+  LazyAppPreviewPanel,
+  LazyCloudEngineSignIn,
+  LazyCloudHowTo,
+  LazyCloudIntent,
+  LazyCloudSetup,
+  LazyCloudWelcome,
+  LazyCommandPalette,
+  LazyConversationShareDialogs,
+  LazyEmptyChatShell,
+  LazyForkPanel,
+  LazyMiniAppsHost,
+  LazyNewLocalFromMenu,
+  LazyPlacesRail,
+  LazyTeamWelcome,
+  LazyWebPanelPage,
+  LazyWelcomeKeeper,
+  LazyWindowCaptionButtons,
+  LazyWindowFrameBar,
+  LazyWorkspaceBackupRecovery,
+} from "@/components/DesktopAndCloudChrome";
+import {
+  shouldMountAppPreviewPanel,
+  shouldMountDesktopCloudChrome,
+  shouldMountDesktopRecoveryWrapper,
+  shouldMountPlacesRail,
+} from "@/lib/pwa-shell-gate";
 import { useInterfaceMode } from "@/lib/interface-mode";
 import { RawPresentation } from "@/lib/raw-presentation";
 import { useRoomPanelShown } from "@/lib/room-panel";
-import { WorkspaceBackupRecovery } from "@/components/WorkspaceBackupRecovery";
 import { NotificationBell, NotificationRail, NotificationsPanel } from "@/components/NotificationsPanel";
 import { useNotificationFeed } from "@/lib/notification-preferences";
 import { PwaNotificationBanner } from "@/components/PwaNotificationBanner";
@@ -55,27 +74,13 @@ import { needsYouVersion, useTeamPeopleLoader } from "@/state/team-people";
 import { newChatBot } from "@/state/new-chat";
 import { useTeamPresence } from "@/state/team-presence";
 import { inboxVersion, useInboxLoader, useInboxPanel, useInboxReady } from "@/state/inbox";
-import { PlacesRail } from "@/components/PlacesRail";
-import { NewLocalFromMenu } from "@/components/PlaceAddSheet";
-import { CloudHowTo } from "@/components/CloudHowTo";
 import { DesktopCapabilitiesProvider, useCaptionChrome, useDesktopCapabilities, WindowDragStrip, windowFramed } from "@/components/DesktopCapabilities";
-import { WindowCaptionButtons } from "@/components/WindowCaptionButtons";
-import { WindowFrameBar } from "@/components/WindowFrameBar";
 import { cn } from "@/lib/cn";
 import { NoEngines } from "@/components/NoEngines";
-import { CloudEngineSignIn } from "@/components/CloudEngineSignIn";
-import { CloudIntent } from "@/components/CloudIntent";
 import { cloudIntentDue, cloudIntentShown, useCloudIntent } from "@/lib/cloud-intent";
-import { CloudSetup } from "@/components/CloudSetup";
-import { CloudWelcome } from "@/components/cloud-welcome/CloudWelcome";
-import { TeamWelcome } from "@/components/TeamWelcome";
-import { ConversationShareDialogs } from "@/components/conversation-share/ConversationShareDialogs";
 import { invitedToTeam, teamWelcomeDue, useTeamWelcomeRecord } from "@/lib/team-welcome";
-import { WelcomeKeeper } from "@/components/cloud-welcome/WelcomeKeeper";
-import { EmptyChatShell } from "@/components/onboarding/EmptyChatShell";
 import { cloudFirstRun, cloudWelcomeVisible, useCloudWelcome } from "@/lib/cloud-welcome";
 import { engineReady } from "@/components/EngineLibrary";
-import { CommandPalette } from "@/components/CommandPalette";
 import { t } from "@/lib/i18n";
 import { botCycleStep, isNewThreadShortcut, shouldOpenKeyboardShortcuts } from "@/lib/keyboard-shortcuts";
 import { effectiveLanguage, useLanguageChoice, usePageLanguage } from "@/lib/language-preference";
@@ -96,8 +101,6 @@ import { useAiSwitchKeeper } from "@/lib/ai-switch";
 import { useChiefStepOpen } from "@/lib/default-bot";
 import { useSessionEnded } from "@/lib/session-ended";
 import { PairPage } from "./pair/PairPage";
-import { WebPanelPage } from "@/components/WebPanelPage";
-import { AppPreviewPanel } from "@/components/published-apps/AppPreviewPanel";
 import { refreshPublishedApps } from "@/lib/own-published-apps";
 import { isRemoteClientSession, isRemotePwaMode } from "@/lib/pwa-transport";
 
@@ -381,6 +384,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
     });
   }, [dispatch]);
 
+  const desktopCloudChrome = shouldMountDesktopCloudChrome({ remotePwa });
   const framed = windowFramed(capabilities);
   // The sidebar is on screen, so its update button is too. In Simple that button is the one; the top bar leaves its own out.
   const sidebarShown = !calendarFocus && (sidebarInline || drawerOpen);
@@ -393,13 +397,11 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
     <HomeLine />
     <AppNotices quiet={paletteOpen || drawerOpen || Boolean(localVmWorkspaceBotId)} viewer={viewer} />
   </>;
-  return (
-    <RawPresentation value={interfaceMode === "raw"}>
-    <MiniAppsHost enabled={state.computerOpen && (!!bot || !!group) && !remoteClient}>
+  const shellBody = (
     <div data-look="app" data-interface-mode={interfaceMode} data-raw-mac-frame={interfaceMode === "raw" && framed && capabilities.windowChrome === "mac-inset" ? "" : undefined} className={cn("flex h-full flex-col", framed && "bg-frame")} onClickCapture={drawerOpen ? noteDrawerAction : undefined} onKeyDownCapture={drawerOpen ? noteDrawerAction : undefined}>
-      <WindowFrameBar notifications={notificationTray} sidebarUpdate={!advanced && sidebarShown} />
+      {desktopCloudChrome && <LazyWindowFrameBar notifications={notificationTray} sidebarUpdate={!advanced && sidebarShown} />}
       <BotLimitPopup />
-      <ConversationShareDialogs />
+      {desktopCloudChrome && <LazyConversationShareDialogs />}
       {!framed && strips}
       <div className="relative flex min-h-0 flex-1 overflow-x-clip" {...drawerSwipe.touchHandlers}>
       {!calendarFocus && <button
@@ -425,8 +427,8 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
           )}
         />
       )}
-      {!calendarFocus && interfaceMode !== "raw" && <PlacesRail />}
-      <NewLocalFromMenu />
+      {shouldMountPlacesRail({ remotePwa, remoteClient, calendarFocus, interfaceMode }) && <LazyPlacesRail />}
+      {desktopCloudChrome && <LazyNewLocalFromMenu />}
       {/* A framed window shows the app, its sidebar and the chat or page, in a rounded card under the top bar and beside
           the window's rail: its top corners and its bottom-left corner are round, and it runs to the window's right and
           bottom edges. */}
@@ -449,7 +451,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
       ) : state.activeView === "files" ? (
         <FilesView />
       ) : state.activeView === "web-panel" ? (
-        <WebPanelPage />
+        <LazyWebPanelPage />
       ) : !remoteClient && state.activeView === "published-apps" ? (
         <PublishedAppsPage />
       ) : state.activeView === "announcements" ? (
@@ -466,15 +468,15 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
           onOpenComputer={openComputerFromWorkspace}
         />
       ) : teamWelcomeOn && team ? (
-        <TeamWelcome team={team} invitedBy={teamWelcomeRecord?.invitedBy ?? null} />
+        <LazyTeamWelcome team={team} invitedBy={teamWelcomeRecord?.invitedBy ?? null} />
       ) : firstRun === "welcome" ? (
-        <CloudWelcome />
+        <LazyCloudWelcome />
       ) : firstRun === "intent" ? (
-        <CloudIntent />
+        <LazyCloudIntent />
       ) : firstRun === "sign-in" ? (
-        <CloudEngineSignIn />
+        <LazyCloudEngineSignIn />
       ) : chiefStep ? (
-        <EmptyChatShell />
+        <LazyEmptyChatShell />
       ) : group ? (
         <GroupView key={group.id} group={group} />
       ) : bot ? (
@@ -525,8 +527,8 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
           onOpenVmWorkspace={openLocalVmWorkspace}
         />
       )}
-      {!remoteClient && <AppPreviewPanel />}
-      {state.forkPanel && sidebarInline && <ForkPanel />}
+      {shouldMountAppPreviewPanel({ remoteClient, remotePwa }) && <LazyAppPreviewPanel />}
+      {desktopCloudChrome && state.forkPanel && sidebarInline && <LazyForkPanel />}
       {!state.forkPanel && roomPanelOpen && group && (
         <RoomPanel key={`room:${group.id}`} group={group} overlay={notificationFeed && state.notificationsOpen && !twoSidePanelsFit} />
       )}
@@ -556,9 +558,9 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
       </div>
       {state.appSettingsOpen && <SettingsModal />}
       {cloudAddOpened.current && <CloudAddDialog />}
-      <CloudHowTo />
-      <CloudSetup viewer={viewer} welcomeShown={welcomeOnScreen} />
-      <WelcomeKeeper viewer={viewer} />
+      {desktopCloudChrome && <LazyCloudHowTo />}
+      {desktopCloudChrome && <LazyCloudSetup viewer={viewer} welcomeShown={welcomeOnScreen} />}
+      {desktopCloudChrome && <LazyWelcomeKeeper viewer={viewer} />}
       {state.pluginsOpen && (team && viewer?.canSave === false ? <MemberApps /> : <PluginsPanel />)}
       <AppGrantNotice />
       {state.shortcutsOpen && (
@@ -568,7 +570,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
         />
       )}
       {/* After the modals: same z-50 tier, so DOM order keeps the palette on top. */}
-      <CommandPalette onOpenChange={setPaletteOpen} />
+      {desktopCloudChrome && <LazyCommandPalette onOpenChange={setPaletteOpen} />}
       {/* Blink resolves -webkit-app-region in DOM order, so this no-drag twin after the headers cuts the drawer button back out. */}
       {!calendarFocus && <span
         aria-hidden
@@ -578,16 +580,28 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
       />}
       </div>
       {/* Last child on purpose: Blink resolves -webkit-app-region in DOM order, so no-drag buttons must follow every drag region. */}
-      <WindowCaptionButtons
-        visible={capabilities.windowChrome === "win-caption" && Boolean(window.ogb?.windowControls)}
-      />
+      {desktopCloudChrome && (
+        <LazyWindowCaptionButtons
+          visible={capabilities.windowChrome === "win-caption" && Boolean(window.ogb?.windowControls)}
+        />
+      )}
     </div>
-    </MiniAppsHost>
+  );
+  return (
+    <RawPresentation value={interfaceMode === "raw"}>
+    {desktopCloudChrome ? (
+      <LazyMiniAppsHost enabled={state.computerOpen && (!!bot || !!group) && !remoteClient}>
+        {shellBody}
+      </LazyMiniAppsHost>
+    ) : (
+      shellBody
+    )}
     </RawPresentation>
   );
 }
 
 function Application() {
+  const remotePwa = isRemotePwaMode();
   useEffect(() => {
     initAnalytics();
   }, []);
@@ -595,17 +609,11 @@ function Application() {
   return (
     <DesktopCapabilitiesProvider>
       <StoreProvider>
-        <MiniAppDefaultsBootstrap />
         <ThreadRefsProvider>
           <Shell viewer={viewer} />
         </ThreadRefsProvider>
-        <WelcomeGate viewer={viewer} />
-        <MausBotWelcome viewer={viewer} />
         <NewBotNameHost />
-        <CloudTimeZoneSync viewer={viewer} />
-        <GuidedTour />
-        <LiveCallHost />
-        <FirstConversationTour quiet={spotlightsQuiet(viewer)} />
+        {shouldMountDesktopCloudChrome({ remotePwa }) && <DesktopAndCloudHosts viewer={viewer} />}
       </StoreProvider>
     </DesktopCapabilitiesProvider>
   );
@@ -614,5 +622,8 @@ function Application() {
 export default function App() {
   const ended = useSessionEnded();
   if (ended) return <PairPage initialCode={null} reason={t("pair.sessionEnded")} />;
-  return <WorkspaceBackupRecovery><Application /></WorkspaceBackupRecovery>;
+  if (!shouldMountDesktopRecoveryWrapper({ remotePwa: isRemotePwaMode() })) {
+    return <Application />;
+  }
+  return <LazyWorkspaceBackupRecovery><Application /></LazyWorkspaceBackupRecovery>;
 }

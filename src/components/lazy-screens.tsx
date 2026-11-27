@@ -1,6 +1,7 @@
 import { useEffect, useState, type ComponentType, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { t } from "@/lib/i18n";
+import { isRemotePwaMode } from "@/lib/pwa-transport";
 
 // Not React.lazy: it suspends on every first render even with the chunk loaded (React holds a commit after a fallback
 // up to 300 ms) and rethrows a failed import on every render. Chromium keeps a failed import() in its module map and
@@ -113,13 +114,46 @@ if (typeof location !== "undefined" && new URLSearchParams(location.search).has(
 }
 
 const LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+const SLOW_NETWORK_TYPES = new Set(["slow-2g", "2g", "3g"]);
 const REMOTE_PRELOAD_AFTER_MS = 5_000;
+
+export interface BackgroundPreloadEnv {
+  hostname: string;
+  remotePwa: boolean;
+  saveData?: boolean;
+  effectiveType?: string;
+  coarsePointer?: boolean;
+}
+
+export function shouldPreloadBackgroundScreens(env: BackgroundPreloadEnv): boolean {
+  if (LOCAL_HOSTS.has(env.hostname)) return false;
+  if (env.remotePwa) return false;
+  if (env.saveData) return false;
+  if (env.effectiveType && SLOW_NETWORK_TYPES.has(env.effectiveType.toLowerCase())) return false;
+  if (env.coarsePointer) return false;
+  return true;
+}
+
+function detectBackgroundPreloadEnv(hostname: string): BackgroundPreloadEnv {
+  const nav = typeof navigator !== "undefined" ? (navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }) : undefined;
+  const coarsePointer = typeof window !== "undefined" && typeof window.matchMedia === "function"
+    ? window.matchMedia("(pointer: coarse)").matches
+    : false;
+  return {
+    hostname,
+    remotePwa: isRemotePwaMode(),
+    saveData: Boolean(nav?.connection?.saveData),
+    effectiveType: nav?.connection?.effectiveType,
+    coarsePointer,
+  };
+}
 
 // On this machine a first open costs 8-28 ms, and fetching every screen during launch held the first paint back by a
 // quarter, so a local page fetches each when it opens. Over a network a first open takes up to a second, so a Cloud page
-// still fetches them, once launch is over and one per idle moment.
+// still fetches them, once launch is over and one per idle moment. Remote PWA and constrained mobile links skip this
+// background prefetch and load screens on demand instead.
 export function preloadScreens(hostname = location.hostname): () => void {
-  if (LOCAL_HOSTS.has(hostname)) return () => {};
+  if (!shouldPreloadBackgroundScreens(detectBackgroundPreloadEnv(hostname))) return () => {};
   let stopped = false;
   let cancelWait = () => {};
   const whenIdle = (run: () => void) => {

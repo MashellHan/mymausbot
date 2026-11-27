@@ -1,16 +1,58 @@
 const CACHE_PREFIX = "omb-pwa-shell-";
-const CACHE_NAME = `${CACHE_PREFIX}v5`;
+const CACHE_NAME = `${CACHE_PREFIX}v6`;
+const ASSET_CACHE_PREFIX = "omb-pwa-assets-";
+const ASSET_CACHE_NAME = `${ASSET_CACHE_PREFIX}v1`;
+const MAX_CACHED_ASSETS = 96;
 const NAV_NETWORK_TIMEOUT_MS = 2_000;
 const STALE_ASSET_HEAL_COOLDOWN_MS = 10_000;
 let lastStaleAssetHealAt = 0;
+let assetPruneInFlight = null;
 const APP_SHELL_URLS = [
   "/",
+  "/boot-theme.js",
   "/manifest.webmanifest",
   "/app-icon.svg",
   "/app-icon-192.png",
   "/app-icon-512.png",
   "/apple-touch-icon.png",
 ];
+
+function isFontAssetPath(rawPathname) {
+  return /\.(?:woff2|woff|ttf|otf)$/i.test(String(rawPathname || ""));
+}
+
+function pruneAssetCache(cache) {
+  if (!cache || typeof cache.keys !== "function" || typeof cache.delete !== "function") {
+    return Promise.resolve();
+  }
+  if (assetPruneInFlight) return assetPruneInFlight;
+  assetPruneInFlight = cache
+    .keys()
+    .then(async (requests) => {
+      const overflow = requests.length - MAX_CACHED_ASSETS;
+      if (overflow <= 0) return;
+      const nonFonts = [];
+      const fonts = [];
+      for (const req of requests) {
+        const pathname = (() => {
+          try {
+            return new URL(req.url).pathname;
+          } catch {
+            return String(req.url || "");
+          }
+        })();
+        if (isFontAssetPath(pathname)) fonts.push(req);
+        else nonFonts.push(req);
+      }
+      const evictOrder = nonFonts.concat(fonts).slice(0, overflow);
+      await Promise.all(evictOrder.map((req) => cache.delete(req).catch(() => false)));
+    })
+    .catch(() => {})
+    .finally(() => {
+      assetPruneInFlight = null;
+    });
+  return assetPruneInFlight;
+}
 
 function isHtmlResponse(response) {
   const contentType = response && response.headers ? response.headers.get("content-type") || "" : "";
@@ -61,7 +103,7 @@ self.addEventListener("install", (event) => {
   event.waitUntil(precacheShell().then(() => self.skipWaiting()));
 });
 
-// Only prune old shell caches; never touch IndexedDB (omb-pwa-v1).
+// Only prune old shell caches and obsolete asset cache versions; preserve current immutable assets & IndexedDB (omb-pwa-v1).
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches
@@ -69,7 +111,11 @@ self.addEventListener("activate", (event) => {
       .then((keys) =>
         Promise.all(
           keys
-            .filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME)
+            .filter(
+              (key) =>
+                (key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME) ||
+                (key.startsWith(ASSET_CACHE_PREFIX) && key !== ASSET_CACHE_NAME),
+            )
             .map((key) => caches.delete(key)),
         ),
       )
@@ -118,14 +164,15 @@ self.addEventListener("fetch", (event) => {
 
   if (url.pathname.startsWith("/assets/")) {
     event.respondWith(
-      caches.open(CACHE_NAME).then(async (cache) => {
-        const cached = await cache.match(request);
+      caches.open(ASSET_CACHE_NAME).then(async (assetCache) => {
+        const cached = await assetCache.match(request);
         if (cached && !isHtmlResponse(cached)) return cached;
         const response = await fetch(request);
         // Cloudflare Pages returns 200 text/html (SPA fallback) for pruned /assets/* hashes;
         // never cache it under an asset URL, drop stale cached "/", and notify/reload clients so the fresh shell takes over.
         if (isHtmlResponse(response)) {
-          if (typeof cache.delete === "function") await cache.delete("/");
+          const shellCache = await caches.open(CACHE_NAME);
+          if (typeof shellCache.delete === "function") await shellCache.delete("/");
           const now = Date.now();
           if (
             now - lastStaleAssetHealAt > STALE_ASSET_HEAL_COOLDOWN_MS &&
@@ -152,7 +199,11 @@ self.addEventListener("fetch", (event) => {
           return new Response("", { status: 404, statusText: "Not Found" });
         }
         if (response && response.ok && response.type === "basic" && !response.redirected) {
-          void cache.put(request, response.clone());
+          const putAndPrune = assetCache
+            .put(request, response.clone())
+            .then(() => pruneAssetCache(assetCache))
+            .catch(() => {});
+          event.waitUntil(putAndPrune);
         }
         return response;
       }),

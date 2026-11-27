@@ -5,6 +5,8 @@ import { openPwaNotificationTarget } from "@/hooks/use-external-chat-links";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import { turnNowPhrases } from "@/lib/live-activity";
+import { useMacOffline } from "@/lib/pwa-connection";
+import { resolveMobileTopChromeMode } from "@/lib/pwa-top-chrome";
 import { lastNonReceipt } from "@/lib/receipts";
 import { roomThreadSpeakerId, roomThreadWorking } from "@/lib/room-threads";
 import { useShowThreads } from "@/lib/thread-preferences";
@@ -124,12 +126,24 @@ function LiveEntryTrayChip({ entry }: { entry: LiveActivityEntry }) {
 export function PwaLiveActivityBar({ onJump }: { onJump?: () => void }) {
   const { state, dispatch } = useStore();
   const showThreads = useShowThreads();
+  const macOffline = useMacOffline();
   const [expanded, setExpanded] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
 
-  const entries = useMemo(
+  const rawEntries = useMemo(
     () => selectLiveActivityEntries(state.bots, state.groups, state.pendingQueued),
     [state.bots, state.groups, state.pendingQueued],
+  );
+  const chromeMode = resolveMobileTopChromeMode({
+    connected: state.connected,
+    cachedHydrated: Boolean(state.cachedHydrated),
+    online: typeof navigator === "undefined" || navigator.onLine !== false,
+    macOffline,
+    hasWaitingActivity: rawEntries.some((entry) => entry.priority === "waiting"),
+  });
+  const entries = useMemo(
+    () => (chromeMode.suppressWorkingActivity ? rawEntries.filter((entry) => entry.priority === "waiting") : rawEntries),
+    [chromeMode.suppressWorkingActivity, rawEntries],
   );
 
   const waitingKeys = useMemo(
@@ -159,7 +173,7 @@ export function PwaLiveActivityBar({ onJump }: { onJump?: () => void }) {
     }
   }, [entries.length, expanded]);
 
-  if (entries.length === 0) return null;
+  if (chromeMode.hideActivityBar || entries.length === 0) return null;
 
   const primary = entries[0]!;
   const anyWaiting = waitingKeys.length > 0;
