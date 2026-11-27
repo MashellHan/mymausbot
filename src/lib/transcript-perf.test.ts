@@ -24,7 +24,7 @@ describe("transcript-perf content-visibility & mobile media sizing", () => {
     expect(estimateRowIntrinsicBlockSize({ kind: "text", text: "a".repeat(600) })).toBe(180);
     expect(estimateRowIntrinsicBlockSize({ kind: "text", text: "```ts\nconst x = 1;\n```" })).toBe(240);
     expect(estimateRowIntrinsicBlockSize({ kind: "text", text: "| A | B |\n|---|---|\n| 1 | 2 |" })).toBe(260);
-    expect(estimateRowIntrinsicBlockSize({ kind: "text", text: "Look", attachments: [{ path: "/a.png", kind: "image" }] })).toBe(220);
+    expect(estimateRowIntrinsicBlockSize({ kind: "text", text: "Look", attachments: [{ path: "/a.png", kind: "image", mime: "image/png" }] })).toBe(220);
     expect(transcriptRowPerfStyle({ kind: "text", text: "Hi" }, false)).toBeUndefined();
     expect(transcriptRowPerfStyle({ kind: "text", text: "Hi" }, true)).toEqual({ containIntrinsicSize: "auto 88px" });
   });
