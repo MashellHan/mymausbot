@@ -458,7 +458,10 @@ posixOnly("mid-turn steering e2e", () => {
           type: "image",
           source: { type: "base64", media_type: "image/png", data: "[image data: 16 base64 chars]" },
         },
-        { type: "text", text: "look at this\n\n\n\nand this\n\n" },
+        {
+          type: "text",
+          text: `${firstAttachedText.replace("<attached-image", "<attached-file")}\n\n${secondAttachedText.replace("<attached-image", "<attached-file")}`,
+        },
       ]);
     } finally {
       await api("PATCH", "/api/config", { threads: { maxConcurrentPerBot: previousLimit } });
@@ -494,7 +497,7 @@ posixOnly("mid-turn steering e2e", () => {
     expect(steered.steered).toBe(true);
     const replies = bot.messages.filter((m: any) => m.role === "bot" && m.kind === "text" && m.text.startsWith("reply to:"));
     expect(replies).toHaveLength(1);
-    expect(withoutTurnClock(replies[0].text)).toBe("reply to: first + steered: [image] and look at this");
+    expect(withoutTurnClock(replies[0].text)).toBe(`reply to: first + steered: [image] ${imageText.replace("<attached-image", "<attached-file")}`);
 
     const nativeRows = readFileSync(join(home, ".openmausbot", "native", `${created.threadId}.ndjson`), "utf8")
       .trim().split("\n").map((line) => JSON.parse(line));
@@ -504,7 +507,7 @@ posixOnly("mid-turn steering e2e", () => {
     expect(steerRow.uuid).toEqual(expect.any(String));
     expect(steerRow.message.content).toEqual([
       { type: "image", source: { type: "base64", media_type: "image/png", data: "[image data: 16 base64 chars]" } },
-      { type: "text", text: "and look at this\n\n" },
+      { type: "text", text: imageText.replace("<attached-image", "<attached-file") },
     ]);
   }, 40_000);
 
@@ -997,16 +1000,16 @@ posixOnly("mid-turn steering e2e", () => {
     const getGroup = async () =>
       (await api("GET", "/api/bots?messages=30")).body.groups.find((g: any) => g.id === room.id);
 
+    const attachments = join(home, ".openmausbot", "attachments");
+    mkdirSync(attachments, { recursive: true });
+    const imagePath = join(attachments, "123e4567-e89b-42d3-a456-426614174007.png");
+    writeFileSync(imagePath, "room steer png");
+    const imageText = `what about this one\n\n<attached-image path="${imagePath}" name="room.png" />`;
     try {
       expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "start the room" })).status).toBe(202);
       await waitFor(async () => (await getGroup())?.busyBotId === created.id, "the room turn to start");
       await waitFor(async () => (await getGroup())?.messages.some((m: any) => m.kind === "activity" && m.tool?.name === "Bash"), "the room tool chip");
 
-      const attachments = join(home, ".openmausbot", "attachments");
-      mkdirSync(attachments, { recursive: true });
-      const imagePath = join(attachments, "123e4567-e89b-42d3-a456-426614174007.png");
-      writeFileSync(imagePath, "room steer png");
-      const imageText = `what about this one\n\n<attached-image path="${imagePath}" name="room.png" />`;
       const person = await asPairedPerson();
       const queued = await person("POST", `/api/groups/${room.id}/messages`, { text: imageText });
       expect(queued.body).toMatchObject({ ok: true, queued: true });
@@ -1037,7 +1040,7 @@ posixOnly("mid-turn steering e2e", () => {
     expect(steerRow.uuid).toEqual(expect.any(String));
     expect(steerRow.message.content).toEqual([
       { type: "image", source: { type: "base64", media_type: "image/png", data: "[image data: 20 base64 chars]" } },
-      { type: "text", text: "what about this one\n\n" },
+      { type: "text", text: imageText.replace("<attached-image", "<attached-file") },
     ]);
   }, 40_000);
 
