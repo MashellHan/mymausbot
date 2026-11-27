@@ -59,6 +59,7 @@ export interface AcpOneShotInput {
   /** Picked through this session config option when the session offers it; otherwise the session's own model runs. */
   model?: { configId: string; id: string } | undefined;
   pickAuthMethod: (methods: Array<{ id?: string }>) => string | null;
+  authMeta?: Record<string, unknown>;
   authRequired: boolean | "if-requested";
   loginNote: string;
   clientCapabilitiesMeta?: Record<string, unknown>;
@@ -194,7 +195,7 @@ export function runAcpOneShot(input: AcpOneShotInput): Promise<string> {
       const methodId = input.pickAuthMethod(methods);
       if (methodId) {
         try {
-          await request("authenticate", { methodId });
+          await request("authenticate", { methodId, ...(input.authMeta ? { _meta: input.authMeta } : {}) });
         } catch {
           if (input.authRequired) throw new Error(input.loginNote);
         }
