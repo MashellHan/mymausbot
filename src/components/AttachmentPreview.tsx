@@ -78,9 +78,9 @@ export function previewKeyAction(key: string, count: number): PreviewKeyAction {
 }
 
 export function imageGalleryLayout(count: number): string {
-  if (count <= 1) return "w-[min(32rem,70vw)] grid-cols-1";
-  if (count === 2) return "w-[min(36rem,70vw)] grid-cols-2";
-  return "w-[min(38rem,70vw)] grid-cols-2 sm:grid-cols-3";
+  if (count <= 1) return "w-[min(32rem,70vw)] max-md:w-full max-md:max-w-[22rem] grid-cols-1";
+  if (count === 2) return "w-[min(36rem,70vw)] max-md:w-full max-md:max-w-[22rem] grid-cols-2";
+  return "w-[min(38rem,70vw)] max-md:w-full max-md:max-w-[22rem] grid-cols-2 sm:grid-cols-3";
 }
 
 import { canonicalDownloadFilename, contentDispositionFilename, safeDownloadFilename } from "@/lib/attachment-filename";
@@ -646,6 +646,7 @@ export function AttachmentThumbnail({
             key={`${remoteImage.url}:${attempt}`}
             src={remoteImage.url}
             alt={image.name}
+            decoding="async"
             loading={eager ? "eager" : "lazy"}
             fetchPriority={eager ? "high" : undefined}
             onLoad={(event) => {
