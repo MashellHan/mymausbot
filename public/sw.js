@@ -1,6 +1,6 @@
 const CACHE_PREFIX = "omb-pwa-shell-";
-const CACHE_NAME = `${CACHE_PREFIX}v4`;
-const NAV_NETWORK_TIMEOUT_MS = 400;
+const CACHE_NAME = `${CACHE_PREFIX}v5`;
+const NAV_NETWORK_TIMEOUT_MS = 2_000;
 const STALE_ASSET_HEAL_COOLDOWN_MS = 10_000;
 let lastStaleAssetHealAt = 0;
 const APP_SHELL_URLS = [
@@ -123,7 +123,7 @@ self.addEventListener("fetch", (event) => {
         if (cached && !isHtmlResponse(cached)) return cached;
         const response = await fetch(request);
         // Cloudflare Pages returns 200 text/html (SPA fallback) for pruned /assets/* hashes;
-        // never cache it under an asset URL, drop stale cached "/", and trigger one reload so the fresh shell takes over.
+        // never cache it under an asset URL, drop stale cached "/", and notify/reload clients so the fresh shell takes over.
         if (isHtmlResponse(response)) {
           if (typeof cache.delete === "function") await cache.delete("/");
           const now = Date.now();
@@ -138,9 +138,12 @@ self.addEventListener("fetch", (event) => {
                 .matchAll({ type: "window" })
                 .then((clients) =>
                   Promise.all(
-                    clients.map((client) =>
-                      typeof client.navigate === "function" ? client.navigate(client.url).catch(() => null) : null,
-                    ),
+                    clients.map((client) => {
+                      if (typeof client.postMessage === "function") {
+                        try { client.postMessage({ type: "omb:stale-asset-reload" }); } catch {}
+                      }
+                      return typeof client.navigate === "function" ? client.navigate(client.url).catch(() => null) : null;
+                    }),
                   ),
                 )
                 .catch(() => {}),

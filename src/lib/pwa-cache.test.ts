@@ -411,7 +411,7 @@ describe("pwa-cache", () => {
     const precachedPaths = mockFetch.mock.calls.map((call) => String(call[0]));
     expect(precachedPaths).toContain("/");
     expect(precachedPaths).not.toContain("/index.html");
-    expect(cacheEntries.has("omb-pwa-shell-v4")).toBe(true);
+    expect(cacheEntries.has("omb-pwa-shell-v5")).toBe(true);
 
     const activatePromises: Promise<unknown>[] = [];
     listeners.get("activate")!({ waitUntil: (p: Promise<unknown>) => activatePromises.push(p) });
@@ -421,7 +421,7 @@ describe("pwa-cache", () => {
     // Online navigation serves fresh HTML within timeout (never stale cached "/") and strips `.redirected`.
     const poisoned = new Response("<html>poisoned</html>", { status: 200 });
     Object.defineProperty(poisoned, "redirected", { value: true });
-    cacheEntries.get("omb-pwa-shell-v4")!.set("/", poisoned);
+    cacheEntries.get("omb-pwa-shell-v5")!.set("/", poisoned);
 
     let navResponsePromise!: Promise<Response>;
     const bgPromises: Promise<unknown>[] = [];
@@ -436,7 +436,7 @@ describe("pwa-cache", () => {
     await Promise.all(bgPromises);
 
     // Offline navigation falls back to cached "/" and still strips `.redirected`.
-    cacheEntries.get("omb-pwa-shell-v4")!.set("/", poisoned);
+    cacheEntries.get("omb-pwa-shell-v5")!.set("/", poisoned);
     mockFetch.mockRejectedValueOnce(new Error("offline"));
     let offlineNavPromise!: Promise<Response>;
     const offlineBg: Promise<unknown>[] = [];
@@ -461,12 +461,12 @@ describe("pwa-cache", () => {
     const staleAsset = await staleAssetPromise;
     await Promise.all(staleWait);
     expect(staleAsset.status).toBe(404);
-    expect(cacheEntries.get("omb-pwa-shell-v4")!.has("/assets/App-stale.js")).toBe(false);
-    expect(cacheEntries.get("omb-pwa-shell-v4")!.has("/")).toBe(false);
+    expect(cacheEntries.get("omb-pwa-shell-v5")!.has("/assets/App-stale.js")).toBe(false);
+    expect(cacheEntries.get("omb-pwa-shell-v5")!.has("/")).toBe(false);
     expect(navigate).toHaveBeenCalledWith("https://mausbot.mxhan.com/");
 
     // Cold cache redirected navigation (e.g. /legacy/) must also resolve with redirected === false.
-    cacheEntries.get("omb-pwa-shell-v4")!.delete("/");
+    cacheEntries.get("omb-pwa-shell-v5")!.delete("/");
     let coldNavPromise!: Promise<Response>;
     listeners.get("fetch")!({
       request: { method: "GET", mode: "navigate", url: "https://mausbot.mxhan.com/legacy/" },
@@ -478,7 +478,7 @@ describe("pwa-cache", () => {
     expect(await coldNav.text()).toBe("<html>/legacy/</html>");
 
     // Non-HTML navigation response must not overwrite cached "/", and uppercase /API/ paths are bypassed by isApiOrDynamicPath.
-    cacheEntries.get("omb-pwa-shell-v4")!.delete("/");
+    cacheEntries.get("omb-pwa-shell-v5")!.delete("/");
     const nonHtmlRes = new Response("{\"not\":\"html\"}", { status: 200, headers: { "content-type": "application/json" } });
     Object.defineProperty(nonHtmlRes, "type", { value: "basic" });
     Object.defineProperty(nonHtmlRes, "redirected", { value: false });
@@ -491,7 +491,7 @@ describe("pwa-cache", () => {
     });
     const nonHtmlNav = await nonHtmlNavPromise;
     expect(await nonHtmlNav.text()).toBe("{\"not\":\"html\"}");
-    expect(cacheEntries.get("omb-pwa-shell-v4")!.has("/")).toBe(false);
+    expect(cacheEntries.get("omb-pwa-shell-v5")!.has("/")).toBe(false);
 
     let apiHandled = false;
     listeners.get("fetch")!({
