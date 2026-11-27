@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
-import { CaptureBuffer, captureItemLimit, capturePrompt, captureSize, newCandidates, parseCandidates, statedInConversation, worthCapturing, type Candidate, type CaptureBatch, type CaptureTurn } from "./memory-capture.ts";
+import { CaptureBuffer, captureItemLimit, capturePrompt, captureSize, matchedTopicExcerpts, newCandidates, parseCandidates, statedInConversation, strikeSupersededLine, worthCapturing, type Candidate, type CaptureBatch, type CaptureTurn } from "./memory-capture.ts";
 import { DREAM_FIRST_LOOKBACK_MS, DREAM_MIN_CONVERSATIONS, dreamPrompt, parseDream, type DreamConversation } from "./memory-dream.ts";
 import { checkDreamFacts } from "./memory-fact-checks.ts";
 import { factIdentity, isExpired, lineFactIdentity, notebookIdentities, parseMemoryEntries } from "./memory-entries.ts";
@@ -349,6 +349,7 @@ export function createMemoryUpkeep(deps: UpkeepDeps): MemoryUpkeep {
     const archiveBefore = readRaw(botId, ARCHIVE_PATH);
     const fresh = newCandidates(candidates, before ?? "").filter((candidate) => !isForgotten(candidate.text));
     const { source, via, threadId } = filed;
+    const today = memoryDate(now());
     const kept: { text: string; where: string }[] = [];
     let added = 0;
     const byTopic = new Map<string, Candidate[]>();
@@ -357,7 +358,21 @@ export function createMemoryUpkeep(deps: UpkeepDeps): MemoryUpkeep {
         byTopic.set(candidate.topic, [...(byTopic.get(candidate.topic) ?? []), candidate]);
         continue;
       }
-      if (updateMemory(botId, { action: "append", text: candidate.text, ...(candidate.until ? { until: candidate.until } : {}) }, { source, now: now() }).ok) {
+      const entryOpts = {
+        source,
+        now: now(),
+        ...(candidate.validFrom ? { validFrom: candidate.validFrom } : {}),
+        ...(candidate.until ? { until: candidate.until } : {}),
+      };
+      if (candidate.supersedes) {
+        const matched = parseMemoryEntries(readRaw(botId, "MEMORY.md") ?? "").find((entry) => !entry.struck && factIdentity(entry.body) === factIdentity(candidate.supersedes!));
+        if (matched && updateMemory(botId, { action: "supersede", oldText: matched.raw, text: candidate.text, ...(candidate.until ? { until: candidate.until } : {}) }, entryOpts).ok) {
+          added += 1;
+          kept.push({ text: candidate.text, where: "MEMORY.md" });
+          continue;
+        }
+      }
+      if (updateMemory(botId, { action: "append", text: candidate.text, ...(candidate.until ? { until: candidate.until } : {}) }, entryOpts).ok) {
         added += 1;
         kept.push({ text: candidate.text, where: "MEMORY.md" });
       }
@@ -372,14 +387,25 @@ export function createMemoryUpkeep(deps: UpkeepDeps): MemoryUpkeep {
       const path = `memory/${name}`;
       const current = readRaw(botId, path);
       if (current !== null && Buffer.byteLength(current, "utf8") > TOPIC_MAX_BYTES) continue;
+      let baseText = current;
       const seen = notebookIdentities(current ?? "");
       const unseen = group.filter((candidate) => !seen.has(factIdentity(candidate.text)));
-      const lines = unseen.map((candidate) => memoryEntry(candidate.text, { source, now: now(), ...(candidate.until ? { until: candidate.until } : {}) }));
+      for (const candidate of unseen) {
+        if (!candidate.supersedes || baseText === null) continue;
+        const struck = strikeSupersededLine(baseText, candidate.supersedes, today, candidate.text, path);
+        if (struck.struck) baseText = struck.next;
+      }
+      const lines = unseen.map((candidate) => memoryEntry(candidate.text, {
+        source,
+        now: now(),
+        ...(candidate.validFrom ? { validFrom: candidate.validFrom } : {}),
+        ...(candidate.until ? { until: candidate.until } : {}),
+      }));
       if (!lines.length) continue;
       const title = name.replace(/\.md$/, "").replace(/-/g, " ");
       const aliases = [...new Set(group.flatMap((candidate) => candidate.topicAliases ?? []))];
       try {
-        writeMemoryTopic(botId, name, mergeTopicText(current, { title, aliases, lines }));
+        writeMemoryTopic(botId, name, mergeTopicText(baseText, { title, aliases, lines }));
       } catch {
         continue;
       }
@@ -443,6 +469,14 @@ export function createMemoryUpkeep(deps: UpkeepDeps): MemoryUpkeep {
       notebook: readRaw(id, "MEMORY.md") ?? "",
       today,
       topics: memoryTopicIndex(id),
+      topicExcerpts: matchedTopicExcerpts({
+        dir: join(workspaceDir(id), "memory"),
+        topics: listMemoryTopics(id),
+        read: (relativePath) => readRaw(id, relativePath),
+        conversations,
+        today,
+        archiveTopic: ARCHIVE_TOPIC,
+      }),
     }));
     if (started !== generation) return { ...off, note: "upkeep stopped" };
     if (answer === null) {
