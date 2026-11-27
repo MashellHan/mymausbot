@@ -105,7 +105,7 @@ function createSwHarness(fetchImpl: (req: Request | string) => Promise<Response>
     await Promise.all(waits);
   }
 
-  async function dispatchFetch(request: Request) {
+  async function dispatchFetch(request: Request): Promise<Response | null> {
     const waits: Promise<unknown>[] = [];
     let responsePromise: Promise<Response> | null = null;
     for (const cb of listeners.get("fetch") ?? []) {
