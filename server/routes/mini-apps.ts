@@ -41,6 +41,7 @@ const HONGGUO_MEDIA = /^\/api\/mini-apps\/([0-9a-f-]{36})\/hongguo\/media\/([A-Z
 const HONGGUO_COVER = /^\/api\/mini-apps\/([0-9a-f-]{36})\/hongguo\/cover$/;
 const GITHUB_ACTIVITY_MEDIA = /^\/api\/mini-apps\/([0-9a-f-]{36})\/github-activity\/media$/;
 const SOURCE = z.object({ botId: z.string().regex(/^[\w-]{1,128}$/) }).strict();
+const ORDER_BODY = z.object({ appIds: z.array(z.string().min(1).max(128)).max(256) }).strict();
 const INTERNAL_ID = z.object({ app_id: z.uuid() }).strict();
 const CONNECT = z.object({}).strict();
 const SOURCE_PAGE = /^\/api\/mini-apps\/sources\/([0-9a-f-]{36})\/page$/;
@@ -313,6 +314,12 @@ export function createMiniAppRoutes(deps: MiniAppRouteDeps): RouteHandler {
           assertOwner();
           return json(res, 200, { dataset: await datasetInfo(deps.data, result.datasetId) });
         }
+      }
+      if (path === `${ROOT}/order`) {
+        if (method !== "PUT") throw appFailure(405, "Method not allowed.");
+        const parsed = ORDER_BODY.safeParse(await readBody(req, 16_384));
+        if (!parsed.success) throw appFailure(400, "Pass appIds as a list of Mini App ids.");
+        return json(res, 200, { apps: deps.apps.reorder(owner, parsed.data.appIds) });
       }
       if (path === ROOT) {
         if (method === "GET") return json(res, 200, { apps: deps.apps.list(owner) });

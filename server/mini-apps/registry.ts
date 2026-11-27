@@ -55,6 +55,7 @@ export function ensureMiniApps(db: DatabaseSync): void {
       responsible_bot_id TEXT, capabilities TEXT NOT NULL DEFAULT '[]',
       release_provenance TEXT,
       icon TEXT,
+      sort_order INTEGER,
       UNIQUE(owner_id, slug)
     );
     CREATE TABLE IF NOT EXISTS mini_app_versions (
@@ -135,6 +136,7 @@ export function ensureMiniApps(db: DatabaseSync): void {
   if (!columns.some(({ name }) => name === "capabilities")) db.exec("ALTER TABLE mini_apps ADD COLUMN capabilities TEXT NOT NULL DEFAULT '[]'");
   if (!columns.some(({ name }) => name === "release_provenance")) db.exec("ALTER TABLE mini_apps ADD COLUMN release_provenance TEXT");
   if (!columns.some(({ name }) => name === "icon")) db.exec("ALTER TABLE mini_apps ADD COLUMN icon TEXT");
+  if (!columns.some(({ name }) => name === "sort_order")) db.exec("ALTER TABLE mini_apps ADD COLUMN sort_order INTEGER");
   if (!versionColumns.some(({ name }) => name === "release_provenance")) db.exec("ALTER TABLE mini_app_versions ADD COLUMN release_provenance TEXT");
   if (!versionColumns.some(({ name }) => name === "icon")) db.exec("ALTER TABLE mini_app_versions ADD COLUMN icon TEXT");
   ensureMiniAppDevelopment(db);
@@ -340,8 +342,25 @@ export class MiniApps {
 
   list(actor: MiniAppActor): MiniAppSummary[] {
     this.authorize(actor);
-    return (this.db().prepare("SELECT * FROM mini_apps WHERE owner_id = ? ORDER BY created_at, id").all(MINI_APPS_OWNER) as unknown as AppRow[])
+    return (this.db().prepare("SELECT * FROM mini_apps WHERE owner_id = ? ORDER BY COALESCE(sort_order, 2147483647), created_at, id").all(MINI_APPS_OWNER) as unknown as AppRow[])
       .map(summary).filter((app) => !actor.botId || app.publisherBotIds.includes(actor.botId));
+  }
+
+  reorder(actor: MiniAppActor, rawIds: readonly string[]): MiniAppSummary[] {
+    this.authorize(actor, undefined, true);
+    if (actor.botId) throw appFailure(403, "Only the workspace owner can reorder Mini Apps.");
+    const requested = rawIds.filter((id, index) => typeof id === "string" && id.length > 0 && rawIds.indexOf(id) === index);
+    return this.access.write((db) => {
+      const current = (db.prepare("SELECT id FROM mini_apps WHERE owner_id = ? ORDER BY COALESCE(sort_order, 2147483647), created_at, id").all(MINI_APPS_OWNER) as Array<{ id: string }>)
+        .map((row) => row.id);
+      const currentSet = new Set(current);
+      const ordered = requested.filter((id) => currentSet.has(id));
+      const seen = new Set(ordered);
+      for (const id of current) if (!seen.has(id)) ordered.push(id);
+      const update = db.prepare("UPDATE mini_apps SET sort_order = ? WHERE owner_id = ? AND id = ?");
+      ordered.forEach((id, index) => { update.run(index, MINI_APPS_OWNER, id); });
+      return (db.prepare("SELECT * FROM mini_apps WHERE owner_id = ? ORDER BY COALESCE(sort_order, 2147483647), created_at, id").all(MINI_APPS_OWNER) as unknown as AppRow[]).map(summary);
+    });
   }
 
   developedBy(botId: string): Set<string> {
