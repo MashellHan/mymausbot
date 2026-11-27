@@ -14,7 +14,7 @@ import { githubMediaUrlAllowed, isEligibleGithubActivityDocument, parseGithubSel
 import { isManagedHongguoDocument, mountManagedHongguoFrame } from "./hongguo-frame-host";
 import { AgentRoleEditor, type AgentRoleEditorSelection } from "./AgentRoleEditor";
 import { MiniAppSiteOverlay } from "./MiniAppSiteOverlay";
-import { miniAppFrameDocument } from "./mini-app-document";
+import { isCustomLocalMiniApp, miniAppFrameDocument } from "./mini-app-document";
 import { createMiniAppSitePresentation, managedMiniAppSite, type MiniAppSite, type MiniAppSiteView } from "./mini-app-site";
 import { miniAppNativeFrameGuard } from "./native-frame-guard";
 
@@ -398,6 +398,11 @@ export function mountMiniAppFrame(options: {
       openLink: async (url) => {
         if (!active || !frameDocument.can.openLinks || state.status !== "active" || !miniAppNativeFrameGuard() || !window.ogb?.openExternal)
           throw new Error("Links are unavailable from this Mini App.");
+        if (isCustomLocalMiniApp(document.app)) {
+          let parsed: URL;
+          try { parsed = new URL(url); } catch { throw new Error("Only HTTPS links can be opened from this Mini App."); }
+          if (parsed.protocol !== "https:") throw new Error("Only HTTPS links can be opened from this Mini App.");
+        }
         if (!await window.ogb.openExternal(url)) throw new Error("The source link could not be opened.");
       },
       setContext: async () => { throw new Error("Model context is unavailable from a Mini App."); },

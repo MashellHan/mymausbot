@@ -209,6 +209,10 @@ function buildMiniAppSdkSource(githubActivity: boolean, managedRelease: boolean,
 })();`;
 }
 
+export function isCustomLocalMiniApp(app: Pick<MiniAppDocument["app"], "dashboardIdentity" | "nativeIdentity" | "shippedTemplateKind">): boolean {
+  return !app.dashboardIdentity && !app.nativeIdentity && !app.shippedTemplateKind;
+}
+
 export function miniAppFrameDocument(document: MiniAppDocument, desktopOpenerAvailable: boolean, scope: { site?: MiniAppSite; hongguo?: boolean; roleEditor?: boolean } = {}): AppDocument {
   const managedRelease = document.app.status === "active" && Boolean((document.app as { release?: unknown }).release);
   const sdk = buildMiniAppSdkSource(isEligibleGithubActivityDocument(document), managedRelease, scope.site, scope.hongguo === true, scope.roleEditor === true);
@@ -224,7 +228,8 @@ export function miniAppFrameDocument(document: MiniAppDocument, desktopOpenerAva
       openLinks: desktopOpenerAvailable && document.app.status === "active"
         && (document.app.shippedTemplateKind === "x_ai_digest"
           || document.app.shippedTemplateKind === "github_activity"
-          || (document.app.dashboardIdentity === "agent-team" && document.app.dashboard?.kind === "agent-team" && document.app.dashboard.renderer === "html")),
+          || (document.app.dashboardIdentity === "agent-team" && document.app.dashboard?.kind === "agent-team" && document.app.dashboard.renderer === "html")
+          || isCustomLocalMiniApp(document.app)),
       modelContext: false },
   };
 }
