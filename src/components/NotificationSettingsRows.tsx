@@ -14,11 +14,12 @@ import { SettingRow, Switch } from "./SettingsPrimitives";
 import { WebPushSettingsSection } from "./WebPushSettingsSection";
 
 export function NotificationRows({ simple = false }: { simple?: boolean }) {
+  const remotePwa = isRemotePwaMode();
   return (
     <>
-      {isRemotePwaMode() ? <WebPushSettingsSection simple={simple} /> : <DeviceNotificationsRow simple={simple} />}
+      {remotePwa ? <WebPushSettingsSection simple={simple} /> : <DeviceNotificationsRow simple={simple} />}
       <NotificationSoundsRow simple={simple} />
-      <NotificationFeedRow simple={simple} />
+      {!remotePwa && <NotificationFeedRow simple={simple} />}
     </>
   );
 }

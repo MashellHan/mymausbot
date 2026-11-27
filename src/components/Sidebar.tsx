@@ -1296,7 +1296,7 @@ export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = 
             <Search size={20} strokeWidth={1.5} />
           </button>}
           {advanced && inboxSupport === "no" && <SidebarActiveThreads entries={attention} icons={density === "icons"} phone={phone} dispatch={dispatch} />}
-          {phone && <SidebarInboxRow compactIcon icons={false} large={false} running={attentionHasRunningWork(attention)} hideEmpty={raw} onOpened={onClose} />}<MobilePwaNotificationBell show={phone} bar={PHONE_TOP_BUTTON} iconSize={18} />
+          <MobilePwaNotificationBell show={phone} bar={PHONE_TOP_BUTTON} iconSize={18} />
           {plusControl}
         </div>}
       </div>

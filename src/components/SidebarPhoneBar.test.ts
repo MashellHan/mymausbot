@@ -7,6 +7,7 @@ const fixture = vi.hoisted(() => {
   vi.stubGlobal("window", {});
   return {
     items: [] as SidebarMenuItem[],
+    menuRendered: false,
     activeView: "chat" as string,
     pluginsOpen: false,
     filesReady: false,
@@ -36,6 +37,7 @@ vi.mock("./UpdateIndicator", () => ({ UpdateIndicator: () => null }));
 vi.mock("@/lib/cloud-files", () => ({ useCloudFilesReady: () => fixture.filesReady }));
 vi.mock("./SidebarPopoverMenu", () => ({
   SidebarPopoverMenu: (props: { items: SidebarMenuItem[]; renderTrigger: (s: { open: boolean }) => unknown }) => {
+    fixture.menuRendered = true;
     fixture.items = props.items;
     return props.renderTrigger({ open: false }) as ReturnType<typeof createElement>;
   },
@@ -51,6 +53,7 @@ afterAll(() => {
 
 beforeEach(() => {
   fixture.items = [];
+  fixture.menuRendered = false;
   fixture.activeView = "chat";
   fixture.pluginsOpen = false;
   fixture.filesReady = false;
@@ -59,12 +62,14 @@ beforeEach(() => {
 });
 
 describe("SidebarPhoneBar", () => {
-  it("shows published-apps and apps in normal mode", () => {
-    renderToStaticMarkup(createElement(SidebarPhoneBar, { query: "", onQuery: () => {} }));
+  it("shows the tools popover trigger with published-apps and apps in normal mode", () => {
+    const html = renderToStaticMarkup(createElement(SidebarPhoneBar, { query: "", onQuery: () => {} }));
+    expect(fixture.menuRendered).toBe(true);
+    expect(html).toContain("lucide-layout-grid");
     expect(fixture.items.map((item) => item.key)).toEqual(["automations", "team-map", "published-apps", "apps"]);
   });
 
-  it("hides published-apps and apps in remote PWA mode while keeping automations and team-map", () => {
+  it("omits the LayoutGrid tools menu trigger in remote PWA mode and keeps the full-width search pill", () => {
     setActivePwaAuth({
       ownerKey: "https://relay.mxhan.com::env::s1",
       relayUrl: "https://relay.mxhan.com",
@@ -76,8 +81,12 @@ describe("SidebarPhoneBar", () => {
       scopes: ["client"],
       pairedAt: 1,
     });
-    renderToStaticMarkup(createElement(SidebarPhoneBar, { query: "", onQuery: () => {} }));
-    expect(fixture.items.map((item) => item.key)).toEqual(["automations", "team-map"]);
+    const html = renderToStaticMarkup(createElement(SidebarPhoneBar, { query: "", onQuery: () => {} }));
+    expect(fixture.menuRendered).toBe(false);
+    expect(fixture.items).toEqual([]);
+    expect(html).not.toContain("lucide-layout-grid");
+    expect(html).toContain("lucide-search");
+    expect(html).toContain("<input");
   });
 
   it("calls onOpened on every tool selection, including when already on that view", () => {

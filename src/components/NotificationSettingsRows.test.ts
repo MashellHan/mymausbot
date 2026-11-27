@@ -111,11 +111,13 @@ it("ignores hidden pages and stops listening once unmounted", async () => {
   expect(readPermission).not.toHaveBeenCalled();
 });
 
-it("renders WebPushSettingsSection only in paired remote PWA mode and falls back to DeviceNotificationsRow locally", async () => {
+it("renders WebPushSettingsSection only in paired remote PWA mode and hides the desktop NotificationFeedRow there", async () => {
   setActivePwaAuth(null);
   await act(async () => root!.render(createElement(StrictMode, null, createElement(NotificationRows))));
   expect(container.querySelector("[data-web-push-section]")).toBeNull();
   expect(container.textContent).toContain("Notifications on this device");
+  expect(container.textContent).toContain("Notification feed");
+  expect(container.querySelector('[aria-label="Show the notification feed"]')).not.toBeNull();
 
   setActivePwaAuth({
     ownerKey: "https://relay.mxhan.com::env::s1",
@@ -130,4 +132,6 @@ it("renders WebPushSettingsSection only in paired remote PWA mode and falls back
   });
   await act(async () => root!.render(createElement(StrictMode, null, createElement(NotificationRows))));
   expect(container.querySelector("[data-web-push-section]")).not.toBeNull();
+  expect(container.textContent).not.toContain("Notification feed");
+  expect(container.querySelector('[aria-label="Show the notification feed"]')).toBeNull();
 });

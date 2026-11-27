@@ -29,3 +29,19 @@ it.each([false, true])("retains error attention when no separate update button i
   expect(html).toContain("bg-danger");
   if (!iconOnly) expect(html).toContain('aria-label="Fixture update failed"');
 });
+
+it("renders a UserRound icon instead of ? when the profile has no name or email in iconOnly circle and full modes", () => {
+  const circleHtml = renderToStaticMarkup(createElement(SidebarProfileMenu, { iconOnly: true, circle: true }));
+  expect(circleHtml).toContain("lucide-user-round");
+  expect(circleHtml).toContain('width="18"');
+  expect(circleHtml).not.toContain(">?<");
+
+  const iconHtml = renderToStaticMarkup(createElement(SidebarProfileMenu, { iconOnly: true }));
+  expect(iconHtml).toContain("lucide-user-round");
+  expect(iconHtml).toContain('width="16"');
+  expect(iconHtml).not.toContain(">?<");
+
+  const fullHtml = renderToStaticMarkup(createElement(SidebarProfileMenu, {}));
+  expect(fullHtml).toContain("lucide-user-round");
+  expect(fullHtml).not.toContain(">?<");
+});
