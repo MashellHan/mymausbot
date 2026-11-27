@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
-import { factIdentity, isExpired, isMemoryDate, lineFactIdentity, notebookIdentities, parseMemoryEntries, withoutExpired } from "./memory-entries.ts";
+import { factIdentity, isActiveEntry, isExpired, isFuture, isMemoryDate, lineFactIdentity, notebookIdentities, parseMemoryEntries, withoutExpired } from "./memory-entries.ts";
 import { parseTopicHeader, renderTopicIndex, TOPIC_INDEX_MAX_TOPICS } from "./memory-topics.ts";
 import { closeMessageDb } from "./message-db.ts";
 import { ensureWorkspace, loadMemory, memorySystemPrompt, searchMemoryFiles, updateMemory, writeMemoryFile, writeMemoryTopic, WORKSPACES_DIR } from "./workspace.ts";
@@ -55,6 +55,34 @@ describe("memory entry grammar", () => {
     expect(isMemoryDate("2026-02-30")).toBe(false);
     expect(isMemoryDate("next week")).toBe(false);
     expect(isMemoryDate(20260930)).toBe(false);
+  });
+
+  it("parses bi-temporal validFrom, supersededBy lineage, and deterministic ids", () => {
+    const text = [
+      "- 2026-04-17 · from Travel Chat · Working from Tokyo · from 2026-05-01 · until 2026-05-14",
+      "- 2026-01-10 · from Setup · ~~Uses npm for frontend builds~~ · superseded 2026-04-17 by 2026-04-17#pnpm",
+    ].join("\n");
+    const entries = parseMemoryEntries(text, "memory/work.md");
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({
+      date: "2026-04-17",
+      validFrom: "2026-05-01",
+      until: "2026-05-14",
+      body: "Working from Tokyo",
+      struck: false,
+    });
+    expect(entries[0]!.id).toMatch(/^[0-9a-f]{10}$/);
+    expect(isFuture(entries[0]!, "2026-04-20")).toBe(true);
+    expect(isActiveEntry(entries[0]!, "2026-04-20")).toBe(false);
+    expect(isActiveEntry(entries[0]!, "2026-05-05")).toBe(true);
+    expect(isActiveEntry(entries[0]!, "2026-05-15")).toBe(false);
+    expect(entries[1]).toMatchObject({
+      body: "Uses npm for frontend builds",
+      struck: true,
+      supersededAt: "2026-04-17",
+      supersededBy: "2026-04-17#pnpm",
+    });
+    expect(isActiveEntry(entries[1]!, "2026-04-20")).toBe(false);
   });
 });
 

@@ -3,9 +3,9 @@ import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, open
 import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
-import { alwaysCore, isExpired, isMemoryDate, parseMemoryEntries, untilMark, withoutExpired, withoutSuperseded, type MemoryEntryLine } from "./memory-entries.ts";
+import { alwaysCore, isExpired, isFuture, isMemoryDate, parseMemoryEntries, untilMark, validFromMark, withoutExpired, type MemoryEntryLine } from "./memory-entries.ts";
 import { parseTopicHeader, readTopicHead, renderTopicIndex } from "./memory-topics.ts";
-import { indexMemoryFile, indexedMemoryFiles, recallMemory, removeMemoryFile, type MemoryHit, type SearchMode } from "./message-db.ts";
+import { indexMemoryFile, indexedMemoryFiles, recallMemory, recallMemoryEntries, removeMemoryFile, type MemoryEntryHit, type MemoryEntryRecord, type MemoryHit, type SearchMode } from "./message-db.ts";
 import { redactSecretsInText } from "./redact.ts";
 
 import { DATA_DIR } from "./config.ts";
@@ -208,7 +208,8 @@ function indexWrittenMemoryFile(botId: string, relativePath: string): void {
   try {
     const path = join(workspaceDir(botId), relativePath);
     const stat = statSync(path);
-    indexMemoryFile(botId, relativePath, searchableMemoryText(relativePath, readMemoryText(path)), { mtimeMs: stat.mtimeMs, bytes: stat.size });
+    const raw = readMemoryText(path);
+    indexMemoryFile(botId, relativePath, searchableMemoryText(relativePath, raw), { mtimeMs: stat.mtimeMs, bytes: stat.size }, memoryEntryRecords(relativePath, raw));
   } catch {
   }
 }
@@ -232,10 +233,41 @@ export function memoryFilesOnDisk(botId: string): Array<{ path: string; mtimeMs:
 
 const memoryIndexDates = new Map<string, string>();
 
+function memoryEntryRecords(path: string, raw: string): MemoryEntryRecord[] {
+  if (path === "MEMORY.md" && isMemorySeed(raw)) return [];
+  if (path.startsWith(`memory/${MEMORY_LOG_DIR}/`)) return [];
+  const entries = parseMemoryEntries(raw, path);
+  const lines = raw.split("\n").map((line) => line.replace(/\r$/, ""));
+  const records: MemoryEntryRecord[] = entries.map((entry) => {
+    const detailLines = lines.slice(entry.line + 1, entry.end).map((line) => line.trim()).filter(Boolean);
+    const text = detailLines.length ? `${entry.body} ${detailLines.join(" ")}` : entry.body;
+    return {
+      entryId: entry.id,
+      lineNo: entry.line,
+      text,
+      recordedDate: entry.date,
+      validFrom: entry.validFrom,
+      validUntil: entry.until,
+      supersededAt: entry.supersededAt ?? null,
+      supersededBy: entry.supersededBy ?? null,
+      struck: entry.struck,
+    };
+  });
+  return records;
+}
+
 function searchableMemoryText(path: string, text: string): string {
   if (path === "MEMORY.md" && isMemorySeed(text)) return "";
   if (path === "memory/archive.md" || path.startsWith(`memory/${MEMORY_LOG_DIR}/`)) return text;
-  return withoutSuperseded(withoutExpired(text, memoryDate()).text);
+  const today = memoryDate();
+  const dropped = new Set<number>();
+  for (const entry of parseMemoryEntries(text, path)) {
+    if (entry.struck || isExpired(entry, today) || isFuture(entry, today)) {
+      for (let line = entry.line; line < entry.end; line++) dropped.add(line);
+    }
+  }
+  if (!dropped.size) return text;
+  return text.split("\n").filter((_, index) => !dropped.has(index)).join("\n");
 }
 
 export function syncMemoryIndex(botId: string): void {
@@ -249,7 +281,7 @@ export function syncMemoryIndex(botId: string): void {
     if (!dateChanged && known && known.bytes === file.bytes && known.mtimeMs === Math.trunc(file.mtimeMs)) continue;
     try {
       const text = readMemoryText(join(workspaceDir(botId), file.path));
-      indexMemoryFile(botId, file.path, searchableMemoryText(file.path, text), file);
+      indexMemoryFile(botId, file.path, searchableMemoryText(file.path, text), file, memoryEntryRecords(file.path, text));
     } catch {
     }
   }
@@ -262,6 +294,21 @@ export function searchMemoryFiles(botId: string, query: string, limit = 12, mode
   return recallMemory(query, botId, limit, mode);
 }
 
+export function searchMemoryEntries(
+  botId: string,
+  query: string,
+  options: { limit?: number; mode?: SearchMode; includeHistorical?: boolean; includeUpcomingDays?: number; today?: string } = {},
+): MemoryEntryHit[] {
+  syncMemoryIndex(botId);
+  return recallMemoryEntries(query, botId, {
+    limit: options.limit,
+    mode: options.mode,
+    includeHistorical: options.includeHistorical,
+    includeUpcomingDays: options.includeUpcomingDays,
+    today: options.today ?? memoryDate(),
+  });
+}
+
 export interface MemoryUpdate {
   action: "append" | "replace" | "remove" | "supersede";
   text?: string;
@@ -272,6 +319,7 @@ export interface MemoryUpdate {
 export interface MemoryUpdateOptions {
   source?: string;
   now?: Date;
+  validFrom?: string;
   until?: string;
 }
 
@@ -312,7 +360,10 @@ const SOURCE_NAME_MAX = 60;
 
 export function memoryEntry(text: string, opts: MemoryUpdateOptions = {}): string {
   const source = cleanSource(opts.source);
-  return `- ${memoryDate(opts.now)}${SEP}${source ? `from ${source}${SEP}` : ""}${normaliseEntryText(text).replace(/ · until \d{4}-\d{2}-\d{2}$/, "")}${untilMark(opts.until)}`;
+  const body = normaliseEntryText(text)
+    .replace(/ · from \d{4}-\d{2}-\d{2}(?= · |$)/, "")
+    .replace(/ · until \d{4}-\d{2}-\d{2}$/, "");
+  return `- ${memoryDate(opts.now)}${SEP}${source ? `from ${source}${SEP}` : ""}${body}${validFromMark(opts.validFrom)}${untilMark(opts.until)}`;
 }
 
 function parseEntry(line: string): { prefix: string; body: string } | null {
