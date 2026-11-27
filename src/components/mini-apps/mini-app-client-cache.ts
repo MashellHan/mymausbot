@@ -52,16 +52,16 @@ export class MiniAppClientCache {
   }
 
   invalidateApp(appId: string): void {
-    for (const key of [...this.docs.keys()]) {
+    for (const key of this.docs.keys()) {
       if (key.startsWith(`${appId}:`)) this.docs.delete(key);
     }
-    for (const [key, entry] of [...this.queries.entries()]) {
+    for (const [key, entry] of this.queries.entries()) {
       if (entry.appId === appId) this.deleteQuery(key);
     }
   }
 
   invalidateDataset(datasetId: string, belowRevision?: number): void {
-    for (const [key, entry] of [...this.queries.entries()]) {
+    for (const [key, entry] of this.queries.entries()) {
       if (entry.datasetId !== datasetId) continue;
       if (belowRevision !== undefined && entry.dataRevision >= belowRevision) continue;
       this.deleteQuery(key);
