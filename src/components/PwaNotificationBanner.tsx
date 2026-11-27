@@ -19,6 +19,7 @@ import { openPwaNotificationTarget } from "@/hooks/use-external-chat-links";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import { listenLiveFrames } from "@/lib/live-events";
+import { computeBannerSwipeState } from "@/lib/pwa-top-chrome";
 import { useShowThreads } from "@/lib/thread-preferences";
 import type { LocaleKey } from "@/locales";
 import { useStore } from "@/state/store";
@@ -115,6 +116,9 @@ export function PwaNotificationBanner({
   const [current, setCurrent] = useState<QueuedBannerItem | null>(null);
   const [queue, setQueue] = useState<QueuedBannerItem[]>([]);
   const [paused, setPaused] = useState(false);
+  const [dragOffsetY, setDragOffsetY] = useState(0);
+  const [dragOpacity, setDragOpacity] = useState(1);
+  const swipeRef = useRef<{ startY: number; startAt: number; moved: boolean } | null>(null);
 
   const suppressionRef = useRef({ activeView, activeThreadId, drawerOpen });
   suppressionRef.current = { activeView, activeThreadId, drawerOpen };
@@ -134,6 +138,9 @@ export function PwaNotificationBanner({
       setCurrent(null);
     }
     setPaused(false);
+    setDragOffsetY(0);
+    setDragOpacity(1);
+    swipeRef.current = null;
   }, []);
 
   useEffect(() => {
@@ -227,9 +234,52 @@ export function PwaNotificationBanner({
           onMouseLeave={() => setPaused(false)}
           onPointerDown={() => setPaused(true)}
           onPointerUp={() => setPaused(false)}
-          onClick={handleOpen}
+          onTouchStart={(event) => {
+            const touch = event.touches[0];
+            if (!touch) return;
+            setPaused(true);
+            swipeRef.current = { startY: touch.clientY, startAt: Date.now(), moved: false };
+          }}
+          onTouchMove={(event) => {
+            const swipe = swipeRef.current;
+            const touch = event.touches[0];
+            if (!swipe || !touch) return;
+            const dy = touch.clientY - swipe.startY;
+            if (Math.abs(dy) > 4) swipe.moved = true;
+            const state = computeBannerSwipeState(dy);
+            setDragOffsetY(state.offsetY);
+            setDragOpacity(state.opacity);
+          }}
+          onTouchEnd={(event) => {
+            const swipe = swipeRef.current;
+            swipeRef.current = null;
+            setPaused(false);
+            const touch = event.changedTouches[0];
+            if (swipe && touch) {
+              const dy = touch.clientY - swipe.startY;
+              const elapsed = Math.max(1, Date.now() - swipe.startAt);
+              const result = computeBannerSwipeState(dy, dy / elapsed);
+              if (result.decision === "dismiss") {
+                dismissCurrent();
+                return;
+              }
+            }
+            setDragOffsetY(0);
+            setDragOpacity(1);
+          }}
+          onTouchCancel={() => {
+            swipeRef.current = null;
+            setPaused(false);
+            setDragOffsetY(0);
+            setDragOpacity(1);
+          }}
+          onClick={() => {
+            if (swipeRef.current?.moved) return;
+            handleOpen();
+          }}
+          style={dragOffsetY !== 0 || dragOpacity !== 1 ? { transform: `translateY(${dragOffsetY}px)`, opacity: dragOpacity } : undefined}
           className={cn(
-            "pointer-events-auto relative flex w-full cursor-pointer items-stretch gap-2.5 overflow-hidden rounded-2xl bg-composer p-3 text-left shadow-(--shadow-float) transition-transform active:scale-[0.99] animate-pop-in motion-reduce:animate-none motion-reduce:transition-none",
+            "pointer-events-auto relative flex w-full cursor-pointer items-stretch gap-2.5 overflow-hidden rounded-2xl bg-composer p-3 text-left shadow-(--shadow-float) transition-[transform,opacity] duration-150 active:scale-[0.99] animate-pop-in motion-reduce:animate-none motion-reduce:transition-none",
             isP0 ? "border border-warning/45" : "border border-edge",
           )}
         >
