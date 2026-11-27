@@ -177,6 +177,7 @@ describe("a room on screen", () => {
     expect(renderedSince(mark).filter((entry) => entry.component === "Transcript"), "the room's list").toEqual([]);
     expect(renderedSince(mark).filter((entry) => entry.row !== null && !entry.row.startsWith("live:")), "saved rows").toEqual([]);
     expect(document.querySelector('[data-mid^="live:"]')?.textContent).toContain("word19");
+    flushSync(() => noteLiveReplyEvent({ eventId: "tc1", provider: "claudeAgent", threadId: "room-thread", createdAt: new Date(at).toISOString(), turnId: "t1", type: "turn.completed" } as RuntimeEvent));
   });
 
   it("draws no bubble for a store change none of them shows", async () => {
