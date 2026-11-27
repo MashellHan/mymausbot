@@ -145,6 +145,14 @@ function buildMiniAppSdkSource(githubActivity: boolean, managedRelease: boolean,
     apply(answer && answer.hostContext);
     post({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
   });
+  var visibilityListeners = new Set();
+  window.addEventListener("message", function (event) {
+    if (event.source !== window.parent) return;
+    var msg = event.data;
+    if (msg && msg.jsonrpc === "2.0" && msg.method === "ui/notifications/visibility-changed" && msg.params && typeof msg.params.visible === "boolean") {
+      visibilityListeners.forEach(function (fn) { try { fn({ visible: msg.params.visible }); } catch (e) {} });
+    }
+  });
   function openSource(url) {
     return ready.then(function () { return request({ jsonrpc: "2.0", method: "ui/open-link", params: { url: url } }); }).then(function () {});
   }
@@ -185,6 +193,11 @@ function buildMiniAppSdkSource(githubActivity: boolean, managedRelease: boolean,
       if (typeof listener !== "function") throw new TypeError("A listener is required.");
       listeners.add(listener);
       return function () { listeners.delete(listener); };
+    },
+    onVisibilityChanged: function (listener) {
+      if (typeof listener !== "function") throw new TypeError("A listener is required.");
+      visibilityListeners.add(listener);
+      return function () { visibilityListeners.delete(listener); };
     },
     get openSource() { return canOpenSources ? openSource : undefined; }
   };
