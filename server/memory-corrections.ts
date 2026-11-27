@@ -264,18 +264,20 @@ export function applyPlaybookDelta(input: {
   }
 
   if (input.delta.op === "REFINE") {
-    if (hasSecret(input.delta.instruction) || (input.delta.when && hasSecret(input.delta.when))) return { rules: next, changed: false };
-    const target = next.find((r) => r.id === input.delta.ruleId);
+    const refine = input.delta;
+    if (hasSecret(refine.instruction) || (refine.when && hasSecret(refine.when))) return { rules: next, changed: false };
+    const target = next.find((r) => r.id === refine.ruleId);
     if (!target) return { rules: next, changed: false };
-    target.instruction = input.delta.instruction;
-    if (input.delta.when) target.when = input.delta.when;
-    target.evidence = input.delta.evidence;
+    target.instruction = refine.instruction;
+    if (refine.when) target.when = refine.when;
+    target.evidence = refine.evidence;
     target.lastUsedAt = input.today;
     target.struck = false;
     return { rules: next, changed: true, affectedId: target.id };
   }
 
-  const target = next.find((r) => r.id === input.delta.ruleId);
+  const contradict = input.delta;
+  const target = next.find((r) => r.id === contradict.ruleId);
   if (!target) return { rules: next, changed: false };
   target.harmful += 1;
   target.lastUsedAt = input.today;
