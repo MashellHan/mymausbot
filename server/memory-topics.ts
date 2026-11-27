@@ -33,7 +33,7 @@ export function normalizeTopicSlug(raw: string): string | null {
 
 export function extractInlineWikilinks(text: string): string[] {
   const out: string[] = [];
-  for (const match of text.matchAll(/\[\[([^\[\]\r\n|]{1,64})(?:\|[^\[\]\r\n]*)?\]\]/g)) {
+  for (const match of text.matchAll(/\[\[([^[\]\r\n|]{1,64})(?:\|[^[\]\r\n]*)?\]\]/g)) {
     const slug = normalizeTopicSlug(match[1]!);
     if (slug && !out.includes(slug)) out.push(slug);
     if (out.length >= TOPIC_MAX_LINKS * 2) break;
