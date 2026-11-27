@@ -386,6 +386,12 @@ export class MiniApps {
     });
   }
 
+  private versionBindings(actor: MiniAppActor, id: string): { app: MiniAppSummary; bindings: MiniAppDataBinding[] } {
+    const app = this.require(actor, id);
+    const version = this.version(id, app.templateVersion);
+    return { app, bindings: JSON.parse(version.bindings) as MiniAppDataBinding[] };
+  }
+
   document(actor: MiniAppActor, id: string): MiniAppDocument {
     const app = this.require(actor, id);
     const version = this.version(id, app.templateVersion);
@@ -699,12 +705,12 @@ export class MiniApps {
   }
 
   async state(actor: MiniAppActor, id: string): Promise<MiniAppState> {
-    const document = this.document(actor, id);
-    const wanted = new Set(document.bindings.map((binding) => binding.datasetId));
+    const { app, bindings } = this.versionBindings(actor, id);
+    const wanted = new Set(bindings.map((binding) => binding.datasetId));
     const data = wanted.size ? (await this.data.listDatasets(MINI_APPS_OWNER)).filter((dataset) => wanted.has(dataset.datasetId))
       .map(({ datasetId, revision }) => ({ datasetId, revision })) : [];
     const current = this.require(actor, id);
-    this.expected(current, document.app.revision);
+    this.expected(current, app.revision);
     if (data.length !== wanted.size) throw appFailure(503, "A bound Data source is unavailable.");
     return { appId: id, revision: current.revision, templateVersion: current.templateVersion, status: current.status, data };
   }
@@ -776,7 +782,7 @@ export class MiniApps {
 
   async query(actor: MiniAppActor, id: string, raw: unknown): Promise<MiniAppQueryResult> {
     const input: MiniAppQuery = parseQuery(raw);
-    const { app, bindings } = this.document(actor, id);
+    const { app, bindings } = this.versionBindings(actor, id);
     this.expected(app, input.expectedRevision);
     if (app.status !== "active") throw appFailure(409, "This Mini App is archived.");
     const binding = bindings.find((candidate) => Object.hasOwn(candidate.queries, input.queryId));

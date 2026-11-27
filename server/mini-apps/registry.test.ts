@@ -99,6 +99,17 @@ describe("persistent Mini Apps", () => {
     expect(await apps.query(owner, first.app.id, { expectedRevision: 2, queryId: "stock", parameters: {} })).toMatchObject({ rows: [["Pencil"]] });
   });
 
+  it("serves state() and query() from version bindings without reading the HTML document from disk", async () => {
+    const { apps, docs } = fixture();
+    const { app } = await apps.publish(owner, publication());
+    const readSpy = vi.spyOn(docs, "read");
+    const st = await apps.state(owner, app.id);
+    expect(st).toMatchObject({ appId: app.id, revision: 1, templateVersion: 1, data: [{ datasetId: DATASET, revision: 1 }] });
+    const res = await apps.query(owner, app.id, { expectedRevision: 1, queryId: "stock", parameters: {} });
+    expect(res).toMatchObject({ rows: [["Pencil"]] });
+    expect(readSpy).not.toHaveBeenCalled();
+  });
+
   it("keeps archived apps discoverable but lets only the owner reactivate them", async () => {
     const { apps } = fixture();
     const { app } = await apps.publish(bot(), publication());
