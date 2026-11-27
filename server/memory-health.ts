@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { parseMemoryEntries, isExpired } from "./memory-entries.ts";
 import { parseTopicHeader } from "./memory-topics.ts";
 import { readPlaybook, playbookUtility } from "./memory-playbook.ts";
-import { HEAVY_PROMPT_BYTES, memoryDate, readMemoryText, workspaceDir } from "./workspace.ts";
+import { MEMORY_MAX_BYTES, memoryDate, readMemoryText, workspaceDir } from "./workspace.ts";
 
 export interface MemoryHealthSnapshot {
   botId: string;
@@ -78,7 +78,7 @@ export function memoryHealth(botId: string, today = memoryDate()): MemoryHealthS
   return {
     botId,
     coreBytes,
-    coreBudgetRatio: Number((coreBytes / HEAVY_PROMPT_BYTES).toFixed(4)),
+    coreBudgetRatio: Number((coreBytes / MEMORY_MAX_BYTES).toFixed(4)),
     activeEntries,
     expiredEntries,
     supersededEntries,
