@@ -788,14 +788,15 @@ export async function syncPushSubscriptionOnForeground(options: { fetchImpl?: ty
           });
         }
       }
-    } catch {} finally {
-      if (autoSyncInFlight === run) {
-        autoSyncInFlight = null;
-      }
-    }
+    } catch {}
   })();
 
   autoSyncInFlight = run;
+  void run.finally(() => {
+    if (autoSyncInFlight === run) {
+      autoSyncInFlight = null;
+    }
+  });
   return run;
 }
 

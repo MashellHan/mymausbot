@@ -264,18 +264,21 @@ async function pairAttemptKey(relayUrl: string, credential: string): Promise<str
 async function getOrCreatePairRequestId(relayUrl: string, credential: string): Promise<string> {
   const key = `${PAIR_REQUEST_PREFIX}${await pairAttemptKey(relayUrl, credential)}`;
   try {
-    const existing = globalThis.sessionStorage?.getItem(key);
-    if (existing) return existing;
-    const created = randomUuid();
-    globalThis.sessionStorage?.setItem(key, created);
-    return created;
+    const storage = globalThis.sessionStorage;
+    if (storage && typeof storage.getItem === "function" && typeof storage.setItem === "function") {
+      const existing = storage.getItem(key);
+      if (existing) return existing;
+      const created = randomUuid();
+      storage.setItem(key, created);
+      return created;
+    }
   } catch {
-    const existing = memoryPairRequests.get(key);
-    if (existing) return existing;
-    const created = randomUuid();
-    memoryPairRequests.set(key, created);
-    return created;
   }
+  const existing = memoryPairRequests.get(key);
+  if (existing) return existing;
+  const created = randomUuid();
+  memoryPairRequests.set(key, created);
+  return created;
 }
 
 async function clearPairRequestId(relayUrl: string, credential: string): Promise<void> {
