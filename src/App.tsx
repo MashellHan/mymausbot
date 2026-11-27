@@ -83,6 +83,7 @@ import { botUnreadCount, showBrowserUnread } from "@/lib/bot-unread";
 import { phonePairingSettingsAction, takePhonePairingRequest } from "@/lib/phone-pairing"; import { useConnectLink } from "@/lib/use-connect-link";
 import { isSettingsPage } from "@/components/settings/settings-index";
 import { useBotListDrawer } from "@/hooks/use-bot-list-drawer";
+import { useMobileDrawerSwipe } from "@/hooks/use-mobile-drawer-swipe";
 import { useRememberedSidePanel } from "@/hooks/use-remembered-side-panel";
 import { useSwNotificationOpens, useDesktopNotificationOpens, useExternalChatLinks } from "@/hooks/use-external-chat-links";
 import { useNewBotFromOtherPlace } from "@/lib/places-together";
@@ -332,8 +333,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
     dispatch({ type: "select", id });
   }, [dispatch]);
 
-  const nativeViewOverlayOpen =
-    drawerOpen ||
+  const blockingModalOpen =
     paletteOpen ||
     state.settingsOpen ||
     state.computerOpen ||
@@ -341,6 +341,13 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
     state.activityOpen ||
     state.appSettingsOpen ||
     state.pluginsOpen;
+  const nativeViewOverlayOpen = drawerOpen || blockingModalOpen;
+  const drawerSwipe = useMobileDrawerSwipe({
+    enabled: !sidebarInline && !calendarFocus && !blockingModalOpen,
+    drawerOpen,
+    onOpen: openDrawer,
+    onClose: hideDrawer,
+  });
 
   useEffect(() => {
     return window.ogb?.onOpenAppSettings?.(section => dispatch(section === "phone" ? phonePairingSettingsAction() : (section === "cloud-add" || section === "cloud-add-howto") && window.ogb?.cloudAccount && !remoteClient
@@ -394,7 +401,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
       <BotLimitPopup />
       <ConversationShareDialogs />
       {!framed && strips}
-      <div className="relative flex min-h-0 flex-1 overflow-x-clip">
+      <div className="relative flex min-h-0 flex-1 overflow-x-clip" {...drawerSwipe.touchHandlers}>
       {!calendarFocus && <button
         type="button"
         ref={menuButtonRef}
@@ -410,9 +417,11 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
         <div
           aria-hidden
           onMouseDown={(e) => e.target === e.currentTarget && hideDrawer()}
+          style={drawerSwipe.dragProgress !== null ? { opacity: drawerSwipe.dragProgress } : undefined}
           className={cn(
             "absolute inset-0 z-30 bg-black/50 transition-opacity duration-[220ms] ease-out motion-reduce:transition-none md:hidden",
             drawerOpen ? "opacity-100" : "pointer-events-none opacity-0",
+            drawerSwipe.dragProgress !== null && "transition-none",
           )}
         />
       )}
@@ -429,6 +438,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
         collapseToIcons={collapseSidebar}
         open={drawerOpen}
         onClose={closeDrawer}
+        dragProgress={drawerSwipe.dragProgress}
       />}
       <div
         key={state.activeView !== "chat" ? state.activeView : !remoteClient && localVmWorkspaceBotId ? `vm:${localVmWorkspaceBotId}` : teamWelcomeOn && team ? "team-welcome" : firstRun ? `first-run:${firstRun}` : chiefStep ? "chief-step" : group ? `group:${group.id}` : bot ? `bot:${bot.id}` : noEngines ? "no-engines" : "loading"}
