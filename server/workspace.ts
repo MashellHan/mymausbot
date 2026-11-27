@@ -209,7 +209,7 @@ function indexWrittenMemoryFile(botId: string, relativePath: string): void {
     const path = join(workspaceDir(botId), relativePath);
     const stat = statSync(path);
     const raw = readMemoryText(path);
-    indexMemoryFile(botId, relativePath, searchableMemoryText(relativePath, raw), { mtimeMs: stat.mtimeMs, bytes: stat.size }, memoryEntryRecords(relativePath, raw));
+    indexMemoryFile(botId, relativePath, searchableMemoryText(relativePath, raw), { mtimeMs: stat.mtimeMs, bytes: stat.size }, memoryEntryRecords(relativePath, raw), raw);
   } catch {
   }
 }
@@ -281,7 +281,7 @@ export function syncMemoryIndex(botId: string): void {
     if (!dateChanged && known && known.bytes === file.bytes && known.mtimeMs === Math.trunc(file.mtimeMs)) continue;
     try {
       const text = readMemoryText(join(workspaceDir(botId), file.path));
-      indexMemoryFile(botId, file.path, searchableMemoryText(file.path, text), file, memoryEntryRecords(file.path, text));
+      indexMemoryFile(botId, file.path, searchableMemoryText(file.path, text), file, memoryEntryRecords(file.path, text), text);
     } catch {
     }
   }

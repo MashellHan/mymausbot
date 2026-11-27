@@ -938,8 +938,8 @@ export function latestSaidByBot(threadIds: readonly string[], botId: string, sin
 
 export type { MemoryEntryHit, MemoryEntryRecord, MemoryFileStat, MemoryHit };
 
-export function indexMemoryFile(botId: string, path: string, text: string, stat: { mtimeMs: number; bytes: number }, entries?: readonly MemoryEntryRecord[]): void {
-  transaction((database) => upsertMemoryFile(database, botId, path, text, stat, entries));
+export function indexMemoryFile(botId: string, path: string, text: string, stat: { mtimeMs: number; bytes: number }, entries?: readonly MemoryEntryRecord[], rawText?: string): void {
+  transaction((database) => upsertMemoryFile(database, botId, path, text, stat, entries, rawText));
 }
 
 export function removeMemoryFile(botId: string, path: string): void {
