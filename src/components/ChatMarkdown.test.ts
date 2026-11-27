@@ -1550,6 +1550,31 @@ it("renders mermaid strictly and serves repeat views from cache", async () => {
     for (const callback of effects.splice(0)) cleanup.push(callback());
     await Promise.resolve();
     expect(render).toHaveBeenCalledTimes(1);
+
+    // Clicking the rendered diagram opens the zoomable lightbox, and Escape closes it.
+    effect.mockImplementation(originalUseEffect);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(ChatMarkdown, { text: fence })));
+      const clickable = host.querySelector<HTMLElement>('[role="button"][class*="cursor-zoom-in"]');
+      expect(clickable).not.toBeNull();
+      await act(async () => clickable!.click());
+      const lightbox = document.body.querySelector<HTMLElement>('[data-testid="mermaid-lightbox"]');
+      expect(lightbox).not.toBeNull();
+      expect(lightbox?.textContent).toContain("100%");
+      const zoomIn = lightbox!.querySelector<HTMLButtonElement>('button[aria-label="Zoom in"]');
+      await act(async () => zoomIn!.click());
+      expect(lightbox?.textContent).toContain("125%");
+      await act(async () => {
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      });
+      expect(document.body.querySelector('[data-testid="mermaid-lightbox"]')).toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
   } finally {
     for (const close of cleanup) if (typeof close === "function") close();
     effect.mockImplementation(originalUseEffect);

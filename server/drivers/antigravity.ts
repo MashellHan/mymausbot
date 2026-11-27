@@ -133,6 +133,28 @@ const offeredModels = new Set<string>();
 /** The version of the runtime each instance's turns were last started on, known before it answers initialize. */
 const launchedVersions = new Map<string, string | null>();
 
+// Antigravity CLI 1.5.14 scans the entire ACP prompt text for its built-in slash command tokens
+// (e.g. `/learn`, `/compact`, `/goal`, `/schedule`, `/browser`, `/plan`, `/grill-me`) even when
+// embedded in system instructions or recalled conversation history, appending the command to the
+// end of `<USER_REQUEST>` and injecting its native workflow block. Neutralize those tokens inside
+// system prompt text and recalled-history prompts with a zero-width space after `/` so OpenMausBot's
+// own turns never accidentally trigger Antigravity's native slash workflows.
+const AGY_SLASH_TOKEN = /(^|[\s(`"'[\]:：，。；])\/(learn|compact|goal|schedule|browser|plan|grill-me)\b/gi;
+
+export function neutralizeAntigravitySlashCommands(text: string): string {
+  return text.replace(AGY_SLASH_TOKEN, "$1/\u200B$2");
+}
+
+function sanitizeAntigravityTurn(turn: SendTurnInput): SendTurnInput {
+  const next: SendTurnInput = { ...turn };
+  if (typeof next.system === "string") next.system = neutralizeAntigravitySlashCommands(next.system);
+  if (typeof next.systemStable === "string") next.systemStable = neutralizeAntigravitySlashCommands(next.systemStable);
+  if (typeof next.systemVolatile === "string") next.systemVolatile = neutralizeAntigravitySlashCommands(next.systemVolatile);
+  if (typeof next.text === "string") next.text = neutralizeAntigravitySlashCommands(next.text);
+  if (typeof next.recoveryText === "string") next.recoveryText = neutralizeAntigravitySlashCommands(next.recoveryText);
+  return next;
+}
+
 const support: AcpSupport = {
   driverKind: "antigravityAgent",
   // Named for what people look for: Google moved personal Gemini subscriptions (free, AI Pro, AI Ultra) from Gemini CLI to Antigravity on 2026-06-18.
@@ -293,7 +315,7 @@ export const AntigravityDriver: ProviderDriver<AcpConfig> = {
       ...base,
       adapter: {
         ...base.adapter,
-        sendTurn: async (turn) => base.adapter.sendTurn(stageAntigravitySkills(turn, antigravityProfileDirectory(input.instanceId))),
+        sendTurn: async (turn) => base.adapter.sendTurn(sanitizeAntigravityTurn(stageAntigravitySkills(turn, antigravityProfileDirectory(input.instanceId)))),
       },
       get models() {
         return base.models;

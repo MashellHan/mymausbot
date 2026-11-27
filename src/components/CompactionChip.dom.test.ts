@@ -34,23 +34,13 @@ function render(message: Message, onNewChat?: () => void) {
   return host.querySelector<HTMLElement>("[data-testid=new-chat-hint]");
 }
 
-it("offers a new chat under a summarized or engine-compacted chat, and the button starts one", () => {
+it("keeps automatic/engine compaction quiet in chat while still showing explicit Start fresh dividers", () => {
   for (const message of [summary, engine]) {
     const onNewChat = vi.fn();
-    const hint = render(message, onNewChat);
-    expect(hint?.textContent).toContain("Start a new chat to save tokens.");
-    const button = hint?.querySelector("button");
-    expect(button?.textContent).toBe("New chat");
-    flushSync(() => button?.click());
-    expect(onNewChat).toHaveBeenCalledTimes(1);
+    expect(render(message, onNewChat)).toBeNull();
+    expect(host.querySelector("[data-testid=compaction-chip]")).toBeNull();
+    expect(host.querySelector("[data-testid=engine-compaction-chip]")).toBeNull();
   }
-});
-
-it("shows no hint on a Start fresh divider or when the chat can't start a new one", () => {
   expect(render(fresh, vi.fn())).toBeNull();
   expect(host.querySelector("[data-testid=fresh-start-divider]")).not.toBeNull();
-  expect(render(summary)).toBeNull();
-  expect(host.querySelector("[data-testid=compaction-chip]")).not.toBeNull();
-  expect(render(engine)).toBeNull();
-  expect(host.querySelector("[data-testid=engine-compaction-chip]")).not.toBeNull();
 });
