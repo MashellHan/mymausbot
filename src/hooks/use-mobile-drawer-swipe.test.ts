@@ -141,8 +141,8 @@ describe("useMobileDrawerSwipe", () => {
   let root: Root;
   let container: HTMLDivElement;
   let latest: MobileDrawerSwipeResult;
-  let onOpen: ReturnType<typeof vi.fn>;
-  let onClose: ReturnType<typeof vi.fn>;
+  let onOpen: ReturnType<typeof vi.fn<() => void>>;
+  let onClose: ReturnType<typeof vi.fn<() => void>>;
 
   interface HarnessProps {
     enabled: boolean;
@@ -178,8 +178,8 @@ describe("useMobileDrawerSwipe", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-11-27T12:00:00Z"));
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-    onOpen = vi.fn();
-    onClose = vi.fn();
+    onOpen = vi.fn<() => void>();
+    onClose = vi.fn<() => void>();
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);

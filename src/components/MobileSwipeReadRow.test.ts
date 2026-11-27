@@ -179,15 +179,16 @@ describe("MobileSwipeReadRow", () => {
     onToggleUnread?: () => void;
     onOpenChat?: () => void;
   }) {
-    const onToggleUnread = props.onToggleUnread ?? vi.fn();
-    const onOpenChat = props.onOpenChat ?? vi.fn();
+    const onToggleUnread = props.onToggleUnread ?? vi.fn<() => void>();
+    const onOpenChat = props.onOpenChat ?? vi.fn<() => void>();
     await act(async () => {
       root.render(
-        h(
-          MobileSwipeReadRow,
-          { enabled: props.enabled, unread: props.unread, onToggleUnread },
-          h("button", { type: "button", "data-chat-btn": "", onClick: onOpenChat }, "Maus"),
-        ),
+        h(MobileSwipeReadRow, {
+          enabled: props.enabled,
+          unread: props.unread,
+          onToggleUnread,
+          children: h("button", { type: "button", "data-chat-btn": "", onClick: onOpenChat }, "Maus"),
+        }),
       );
     });
     return { onToggleUnread, onOpenChat };
