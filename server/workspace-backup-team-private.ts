@@ -127,7 +127,7 @@ function strip(file: string, remove: (db: DatabaseSync) => void): void {
   try {
     db.exec("BEGIN");
     try { remove(db); db.exec("COMMIT"); } catch (error) { db.exec("ROLLBACK"); throw error; }
-    for (const index of ["messages_fts", "memory_fts"]) if (hasTable(db, index)) db.exec(`INSERT INTO ${index}(${index}) VALUES('rebuild')`);
+    for (const index of ["messages_fts", "memory_fts", "memory_entries_fts"]) if (hasTable(db, index)) db.exec(`INSERT INTO ${index}(${index}) VALUES('rebuild')`);
     db.exec("VACUUM");
   } finally {
     db.close();
@@ -171,9 +171,14 @@ export function stripTeamPrivate(snapshot: { messages: string; runtime: string }
     for (const table of ["messages", "thread_state", "chat_followups", "notification_log"]) deleteWhereIn(db, table, "thread_id", threads);
     // A tool's saved answer, kept only so a retried call repeats it: nothing says whose chat it came from.
     if (hasTable(db, "command_receipts")) db.exec("DELETE FROM command_receipts");
-    if (!hasTable(db, "memory_files")) return;
-    const indexed = db.prepare("SELECT DISTINCT bot_id AS id FROM memory_files").all().map((row) => String(row.id));
-    deleteWhereIn(db, "memory_files", "bot_id", indexed.filter((id) => memberLayer(id) || privacy.bots.has(id)));
+    if (hasTable(db, "memory_files")) {
+      const indexed = db.prepare("SELECT DISTINCT bot_id AS id FROM memory_files").all().map((row) => String(row.id));
+      deleteWhereIn(db, "memory_files", "bot_id", indexed.filter((id) => memberLayer(id) || privacy.bots.has(id)));
+    }
+    if (hasTable(db, "memory_entries")) {
+      const indexed = db.prepare("SELECT DISTINCT bot_id AS id FROM memory_entries").all().map((row) => String(row.id));
+      deleteWhereIn(db, "memory_entries", "bot_id", indexed.filter((id) => memberLayer(id) || privacy.bots.has(id)));
+    }
   });
   strip(snapshot.runtime, (db) => {
     const assignments = [...new Set([

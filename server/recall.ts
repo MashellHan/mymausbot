@@ -1,8 +1,8 @@
 // Recall rides in front of the turn's message, never the system prompt; fence markers are neutralised so a note cannot close the block.
-import { recallMessages, recallTerms, type MemoryHit, type RecallHit } from "./message-db.ts";
+import { recallMessages, recallTerms, type MemoryEntryHit, type MemoryHit, type RecallHit } from "./message-db.ts";
 import { parseTopicHeader, readTopicHead, topicBody, topicWords } from "./memory-topics.ts";
-import { listMemoryTopics, memoryDate, readMemoryTopic, searchMemoryFiles, workspaceDir } from "./workspace.ts";
-import { withoutExpired, withoutSuperseded } from "./memory-entries.ts";
+import { listMemoryTopics, memoryDate, readMemoryTopic, searchMemoryEntries, searchMemoryFiles, workspaceDir } from "./workspace.ts";
+import { isFuture, parseMemoryEntries, withoutExpired, withoutSuperseded } from "./memory-entries.ts";
 import { hasCjk } from "./cjk-search.ts";
 import { join } from "node:path";
 
@@ -132,17 +132,43 @@ function sameWord(term: string, word: string): boolean {
   return word.startsWith(stem) || (stem.startsWith(word) && stem.length - word.length <= 3);
 }
 
+const HISTORICAL_QUERY = /\b(?:used to|previously|last year|last month|before|formerly|history|historical|earlier|was)\b|(?:以前|之前|去年|上个月|曾经|原来|过去)/iu;
+
+export function isHistoricalQuery(query: string): boolean {
+  return HISTORICAL_QUERY.test(query);
+}
+
+function withoutFuture(text: string, today: string): string {
+  const future = parseMemoryEntries(text).filter((entry) => isFuture(entry, today));
+  if (!future.length) return text;
+  const dropped = new Set<number>();
+  for (const entry of future) for (let line = entry.line; line < entry.end; line++) dropped.add(line);
+  return text.split("\n").filter((_, index) => !dropped.has(index)).join("\n");
+}
+
+function formatEntrySnippet(hit: MemoryEntryHit, today: string): string {
+  const snippet = plain(hit.snippet);
+  if (hit.struck || (hit.validUntil && hit.validUntil < today) || hit.file === "memory/archive.md") {
+    const end = hit.supersededAt ?? hit.validUntil ?? "earlier";
+    return `[historical, valid ${hit.validFrom}..${end}] ${snippet}`;
+  }
+  if (hit.validFrom > today) return `[upcoming from ${hit.validFrom}] ${snippet}`;
+  return snippet;
+}
+
 export function topicPassages(botId: string, query: string): RecallPassage[] {
   const terms = recallTerms(query);
   if (!terms.length) return [];
   const dir = join(workspaceDir(botId), "memory");
+  const today = memoryDate();
   const out: RecallPassage[] = [];
   try {
     for (const topic of listMemoryTopics(botId)) {
       if (topic.name === "archive.md") continue;
       const words = topicWords(topic.name, parseTopicHeader(readTopicHead(join(dir, topic.name))));
       if (!terms.some((term) => words.some((word) => sameWord(term, word)))) continue;
-      const body = topicBody(withoutSuperseded(withoutExpired(readMemoryTopic(botId, topic.name) ?? "", memoryDate()).text));
+      const visible = withoutFuture(withoutSuperseded(withoutExpired(readMemoryTopic(botId, topic.name) ?? "", today).text), today);
+      const body = topicBody(visible);
       if (!body) continue;
       out.push({ source: "memory", label: `memory/${topic.name}`, snippet: body.length > TOPIC_PASSAGE_CHARS ? `${body.slice(0, TOPIC_PASSAGE_CHARS)}…` : body });
       if (out.length >= MEMORY_HITS) break;
@@ -154,15 +180,46 @@ export function topicPassages(botId: string, query: string): RecallPassage[] {
 }
 
 export function memoryPassages(botId: string, query: string): RecallPassage[] {
+  const today = memoryDate();
+  const out: RecallPassage[] = [];
+  const seenFiles = new Set<string>();
+  const historical = isHistoricalQuery(query);
+  try {
+    const entryHits = searchMemoryEntries(botId, query, { limit: MEMORY_HITS * 3, mode: "any", today, includeUpcomingDays: 14 });
+    for (const hit of entryHits) {
+      if (!recalled(hit.file) || !enoughMatches(query, hit.snippet)) continue;
+      if (seenFiles.has(hit.file)) continue;
+      seenFiles.add(hit.file);
+      out.push({ source: "memory", label: hit.file, at: hit.at, snippet: formatEntrySnippet(hit, today) });
+    }
+  } catch {
+    // Fall through to file-level recall below.
+  }
   let hits: MemoryHit[] = [];
   try {
     hits = searchMemoryFiles(botId, query, MEMORY_HITS * 3, "any");
   } catch {
-    return [];
+    hits = [];
   }
-  return hits
-    .filter((hit) => recalled(hit.file) && enoughMatches(query, hit.snippet))
-    .map((hit) => ({ source: "memory" as const, label: hit.file, at: hit.at, snippet: plain(hit.snippet) }));
+  for (const hit of hits) {
+    if (!recalled(hit.file) || !enoughMatches(query, hit.snippet) || seenFiles.has(hit.file)) continue;
+    seenFiles.add(hit.file);
+    out.push({ source: "memory", label: hit.file, at: hit.at, snippet: plain(hit.snippet) });
+  }
+  if (historical && out.length < MEMORY_HITS) {
+    try {
+      const pastHits = searchMemoryEntries(botId, query, { limit: MEMORY_HITS, mode: "any", today, includeHistorical: true });
+      for (const hit of pastHits) {
+        if (!enoughMatches(query, hit.snippet)) continue;
+        const label = `${hit.file} (historical)`;
+        if (seenFiles.has(label)) continue;
+        seenFiles.add(label);
+        out.push({ source: "memory", label, at: hit.at, snippet: formatEntrySnippet(hit, today) });
+      }
+    } catch {
+    }
+  }
+  return out;
 }
 
 export function conversationPassages(input: RecallInput, query: string): RecallPassage[] {

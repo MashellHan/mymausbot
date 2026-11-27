@@ -170,6 +170,45 @@ describe("recall from memory files", () => {
     }
   });
 
+  it("filters future validFrom entries until their window and surfaces superseded facts only on historical queries", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date(2026, 3, 10, 12)); // 2026-04-10
+      writeMemoryTopic(
+        BOT,
+        "stack.md",
+        [
+          "---",
+          "title: Stack",
+          "---",
+          "- 2026-01-10 · from Setup · ~~Uses webpack bundler for builds~~ · superseded 2026-04-01 by 2026-04-01#vite",
+          "- 2026-04-01 · from Setup · Uses vite bundler for builds",
+          "- 2026-04-10 · from Travel · Working from Kyoto office · from 2026-06-01 · until 2026-06-15",
+          "- 2026-04-10 · from Travel · Visiting Osaka summit · from 2026-04-18 · until 2026-04-20",
+          "",
+        ].join("\n"),
+      );
+      // Present query returns active vite entry and never leaks struck webpack entry.
+      const present = memoryPassages(BOT, "which bundler for builds");
+      expect(present.some((p) => p.snippet.includes("vite"))).toBe(true);
+      expect(present.some((p) => p.snippet.includes("webpack"))).toBe(false);
+      // Far-future validFrom (> 14 days away) does not activate prematurely.
+      expect(memoryPassages(BOT, "Kyoto office")).toEqual([]);
+      // Near-upcoming validFrom (within 14 days) is explicitly tagged as upcoming.
+      const upcoming = memoryPassages(BOT, "Osaka summit");
+      expect(upcoming[0]?.snippet).toContain("[upcoming from 2026-04-18]");
+      // Historical query surfaces superseded entries clearly tagged with their validity range.
+      const historical = memoryPassages(BOT, "what webpack bundler did we previously use?");
+      expect(historical.some((p) => p.snippet.includes("[historical, valid 2026-01-10..2026-04-01]") && p.snippet.includes("webpack"))).toBe(true);
+      // Once validFrom arrives, Kyoto becomes active.
+      vi.setSystemTime(new Date(2026, 5, 5, 12)); // 2026-06-05
+      expect(memoryPassages(BOT, "Kyoto office")[0]?.snippet).toContain("Kyoto");
+      expect(memoryPassages(BOT, "Kyoto office")[0]?.snippet).not.toContain("[upcoming");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("is null for a short message or nothing matching", () => {
     writeMemoryTopic(BOT, "dining.md", "- Loves pasta\n");
     expect(buildRecall({ botId: BOT, message: "ok", threadIds: [], label: () => "", author: () => "" })).toBeNull();
