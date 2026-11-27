@@ -1600,7 +1600,7 @@ describe("Simple mode's code block", () => {
     // A finger-sized target on touch screens, and a ring on the menu's button for the keyboard.
     expect(html.match(/<button[^>]*aria-label="Copy code"[^>]*>/)?.[0]).toContain("touch:size-11");
     expect(html.match(/<button[^>]*aria-label="More"[^>]*>/)?.[0]).toContain("focus-visible:ring-2");
-    expect(html).toMatch(/<pre class="[^"]*leading-5 px-3 py-2 text-ink-secondary/);
+    expect(html).toMatch(/<pre\b[^>]*class="[^"]*leading-5 px-3 py-2 text-ink-secondary/);
   });
 
   it("gives a diagram the same plate instead of its header", () => {
