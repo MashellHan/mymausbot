@@ -275,4 +275,19 @@ describe("QueuedComposerMessages", () => {
     );
     expect(markup).toBe("");
   });
+
+  it("filters out queued items whose queueId is already rendered as a user message in the transcript", async () => {
+    const { filterVisibleQueuedMessages } = await import("./ComposerQueuedMessages");
+    const visible = filterVisibleQueuedMessages(
+      [
+        { queueId: "q-in-transcript", text: "Compare these three options [image]" },
+        { queueId: "q-only", text: "Still waiting off transcript" },
+      ],
+      [
+        { role: "user", queueId: "q-in-transcript" },
+        { role: "bot", queueId: "q-only" },
+      ],
+    );
+    expect(visible).toEqual([{ queueId: "q-only", text: "Still waiting off transcript" }]);
+  });
 });

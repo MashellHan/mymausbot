@@ -591,6 +591,7 @@ describe("pwa-cache", () => {
       }),
     }));
     expect(getNotifications).toHaveBeenCalledWith({ tag: "omb:activity:thread-9" });
+    expect(getNotifications).toHaveBeenCalledWith({ tag: "openmausbot:scout" });
     expect(priorClose).toHaveBeenCalledTimes(1);
     expect(setAppBadge).toHaveBeenCalledWith(3);
 
