@@ -701,6 +701,7 @@ class Engine implements DataEngine {
   private blocked = false;
   private readonly listeners = new Set<(event: DataChanged) => void>();
   private readonly datasetByDb = new WeakMap<BotDb, string>();
+  private readonly revisionByDataset = new Map<string, number>();
   private cursors = new DataCursorCodec();
   readonly admission = new DataAdmission();
   private loaded: { binding: Binding } | { reason: string } | null = null;
@@ -742,7 +743,7 @@ class Engine implements DataEngine {
       this.recovery = this.admission.barrier(async () => {
         if (hadHandle) {
           await closeKnownDatabases(this.databases.values(), this.storeDatabases.values(), true);
-          this.databases.clear(); this.storeDatabases.clear(); this.cursors = new DataCursorCodec();
+          this.databases.clear(); this.storeDatabases.clear(); this.revisionByDataset.clear(); this.cursors = new DataCursorCodec();
         }
         await recoverPromotions(this.catalog!, this.dataDir, this.folder);
         this.blocked = false;
@@ -760,6 +761,7 @@ class Engine implements DataEngine {
   changed(database: BotDb, revision: number): void {
     const datasetId = this.datasetByDb.get(database);
     if (!datasetId) return;
+    this.revisionByDataset.set(datasetId, revision);
     for (const listener of this.listeners) {
       try { listener({ datasetId, revision }); }
       catch (error) { console.warn("data: change listener failed", error); }
@@ -855,8 +857,31 @@ class Engine implements DataEngine {
 
   async listDatasets(ownerId: string): Promise<Array<{ datasetId: string; storeId: string; revision: number }>> {
     await this.recover();
-    return listOwnerDatasets(this.requireCatalog(), ownerId, async (entry) =>
-      (await this.forDataset(entry.datasetId, ownerId) as BotDb).revision());
+    return listOwnerDatasets(this.requireCatalog(), ownerId, async (entry) => {
+      const cached = this.revisionByDataset.get(entry.datasetId);
+      if (cached !== undefined) return cached;
+      const revision = await (await this.forDataset(entry.datasetId, ownerId) as BotDb).revision();
+      this.revisionByDataset.set(entry.datasetId, revision);
+      return revision;
+    });
+  }
+
+  async datasetRevisions(ownerId: string, datasetIds: ReadonlySet<string>): Promise<Array<{ datasetId: string; storeId: string; revision: number }>> {
+    if (!datasetIds.size) return [];
+    await this.recover();
+    const catalog = this.requireCatalog();
+    const out: Array<{ datasetId: string; storeId: string; revision: number }> = [];
+    for (const datasetId of datasetIds) {
+      const entry = catalog.forDataset(datasetId, ownerId);
+      if (!entry) continue;
+      let revision = this.revisionByDataset.get(datasetId);
+      if (revision === undefined) {
+        revision = await (await this.forDataset(datasetId, ownerId) as BotDb).revision();
+        this.revisionByDataset.set(datasetId, revision);
+      }
+      out.push({ datasetId: entry.datasetId, storeId: entry.storeId, revision });
+    }
+    return out;
   }
 
   async promoteForBot(botId: string, ownerId: string): Promise<{ datasetId: string; storeId: string; revision: number }> {
@@ -896,7 +921,10 @@ class Engine implements DataEngine {
       const removed = await removeBot();
       if (!removed) return false;
       this.databases.delete(botId);
-      if (alias) this.storeDatabases.delete(alias.storeId);
+      if (alias) {
+        this.storeDatabases.delete(alias.storeId);
+        this.revisionByDataset.delete(alias.datasetId);
+      }
       db?.revoke();
       this.catalog?.detachBot(botId);
       return true;

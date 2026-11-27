@@ -87,6 +87,7 @@ export interface DataEngine {
   forDataset(datasetId: string, ownerId: string): Promise<BotDatabase>;
   listBotSources(ownerId: string, botIds: string[]): Promise<Array<{ botId: string; datasetId: string | null }>>;
   listDatasets(ownerId: string): Promise<Array<{ datasetId: string; storeId: string; revision: number }>>;
+  datasetRevisions?(ownerId: string, datasetIds: ReadonlySet<string>): Promise<Array<{ datasetId: string; storeId: string; revision: number }>>;
   promoteForBot(botId: string, ownerId: string): Promise<{ datasetId: string; storeId: string; revision: number }>;
   validateBinding(ownerId: string, binding: MiniAppDataBinding): Promise<void>;
   readNamed(input: MiniAppNamedRead): Promise<MiniAppNamedPage>;
