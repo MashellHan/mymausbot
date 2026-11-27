@@ -19,7 +19,7 @@ interface ThreadRow {
 /** Only dispatch inside the internal capability gate: `from` and `fromThreadId` come from the caller's capability. */
 export function createInternalThreadRoutes(deps: {
   store: Pick<Store, "bot" | "bots" | "tasks" | "taskByThread" | "appendMessage" | "patchTask" | "setTaskClosedBy" | "renameTask">;
-  coordinator: Pick<Coordinator, "awaitingAnswer" | "parkedDirect" | "activeDirect" | "active">;
+  coordinator: Pick<Coordinator, "threadActivity" | "awaitingAnswer" | "activeDirect" | "active">;
   from: BotRecord;
   fromThreadId: string;
   ownsThread(botId: string, threadId: string): boolean;
@@ -43,29 +43,9 @@ export function createInternalThreadRoutes(deps: {
       if (!deps.ownsThread(from.id, fromThreadId)) {
         return json(res, 403, { error: "source conversation does not belong to sender" });
       }
-      const rows: ThreadRow[] = [];
-      const stateOf = (bot: BotRecord, task: TaskRecord) => {
-        if (task.activity === "waiting-on-you" || coordinator.awaitingAnswer(task.threadId)) return "waiting-on-you" as const;
-        if (deps.threadBusy(bot.id, task.threadId)) return "running" as const;
-        if (coordinator.parkedDirect(task.threadId)) return "waiting-on-you" as const;
-        if (deps.queuedThreadPosition(bot.id, task.threadId) !== null) return "queued" as const;
-        if (coordinator.activeDirect(task.threadId)) return "queued" as const;
-        if (task.closedBy) return "closed" as const;
-        return "idle" as const;
-      };
-      // A queued handoff says why it waits and which handoff it is, so a bot can tell the person and match a report.
-      const queued = (bot: BotRecord, task: TaskRecord, state: ThreadState): Pick<ThreadRow, "waiting" | "delegationId"> => {
-        const node = state === "queued" ? coordinator.active().find((n) => n.threadId === task.threadId && n.botId === bot.id && !n.groupId && n.status === "queued") : undefined;
-        return node ? { waiting: deps.queuedReason(node, bot.id === from.id ? deps.shown : undefined), delegationId: node.id } : {};
-      };
+      const visible: { bot: BotRecord; task: TaskRecord; openedAt: number; openedBy?: string }[] = [];
       for (const task of store.tasks(from.id)) {
-        if (!deps.shown(task.threadId)) continue;
-        const state = stateOf(from, task);
-        rows.push({
-          threadId: task.threadId, botId: from.id, botName: from.name, title: task.title,
-          state, unread: task.unread === true, openedAt: task.openedBy?.at ?? task.createdAt,
-          delegationId: task.openedBy?.delegationId, own: true, ...queued(from, task, state),
-        });
+        if (deps.shown(task.threadId)) visible.push({ bot: from, task, openedAt: task.openedBy?.at ?? task.createdAt });
       }
       for (const peer of reachablePeers(store.bots, from)) {
         for (const task of store.tasks(peer.id)) {
@@ -73,17 +53,33 @@ export function createInternalThreadRoutes(deps: {
           if (!opener || !deps.shown(task.threadId)) continue;
           const mine = opener.botId === from.id;
           if (!mine && !chiefTidies(from, task, store.bot(opener.botId), peer)) continue;
-          const state = stateOf(peer, task);
-          rows.push({
-            threadId: task.threadId, botId: peer.id, botName: peer.name, title: task.title,
-            state, unread: task.unread === true, openedAt: opener.at,
-            delegationId: opener.delegationId, own: false, ...queued(peer, task, state),
-            ...(mine ? {} : { openedBy: opener.name }),
-          });
+          visible.push({ bot: peer, task, openedAt: opener.at, ...(mine ? {} : { openedBy: opener.name }) });
         }
       }
-      rows.sort((a, b) => b.openedAt - a.openedAt);
-      return json(res, 200, { threads: rows.slice(0, 100) });
+      visible.sort((a, b) => b.openedAt - a.openedAt);
+      const selected = visible.slice(0, 100);
+      if (selected.length === 0) return json(res, 200, { threads: [] });
+      const pageThreads = new Map<string, Set<string>>();
+      for (const { bot, task } of selected) {
+        let bots = pageThreads.get(task.threadId);
+        if (!bots) { bots = new Set(); pageThreads.set(task.threadId, bots); }
+        bots.add(bot.id);
+      }
+      const activity = coordinator.threadActivity(pageThreads);
+      const threads = selected.map(({ bot, task, openedAt, openedBy }): ThreadRow => {
+        const state: ThreadState = task.activity === "waiting-on-you" || activity.awaitingAnswer.has(task.threadId) ? "waiting-on-you"
+          : deps.threadBusy(bot.id, task.threadId) ? "running"
+          : deps.queuedThreadPosition(bot.id, task.threadId) !== null || activity.activeDirect.has(task.threadId) ? "queued"
+          : task.closedBy ? "closed" : "idle";
+        const node = state === "queued" ? activity.queued.get(task.threadId)?.get(bot.id) : undefined;
+        return {
+          threadId: task.threadId, botId: bot.id, botName: bot.name, title: task.title,
+          state, unread: task.unread === true, openedAt, delegationId: task.openedBy?.delegationId,
+          own: bot.id === from.id, ...(node ? { waiting: deps.queuedReason(node, bot.id === from.id ? deps.shown : undefined), delegationId: node.id } : {}),
+          ...(openedBy !== undefined ? { openedBy } : {}),
+        };
+      });
+      return json(res, 200, { threads });
     }
     const withdrawMatch = method === "POST" ? path.match(/^\/api\/internal\/threads\/([\w-]+)\/withdraw-wait$/) : null;
     if (withdrawMatch) {
