@@ -23,7 +23,7 @@ export interface TopChromeStackMode {
  * states never stack redundant working spinners over the connection banner.
  */
 export function resolveMobileTopChromeMode(input: TopChromeStackInput): TopChromeStackMode {
-  const disconnectedNotice = !input.online || (input.macOffline && !input.connected) || (!input.connected && !input.cachedHydrated);
+  const disconnectedNotice = !input.online || (input.macOffline && !input.connected);
   if (disconnectedNotice) {
     return {
       suppressWorkingActivity: true,
