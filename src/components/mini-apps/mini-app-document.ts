@@ -2,6 +2,7 @@ import type { AppDocument } from "../../../shared/app";
 import { APP_PROTOCOL_VERSION } from "../../../shared/app";
 import { buildSrcdoc, stripDocumentPreamble } from "../../../shared/app-frame/document";
 import { APP_THEME_STYLE } from "../../../shared/app-frame/helper";
+import { hasMausUiOptIn, MAUS_MINI_APP_UI_CSS, MAUS_UI_SDK_HELPERS_SOURCE } from "../../../shared/mini-app-ui-kit";
 import type { MiniAppDocument } from "../../../shared/mini-apps";
 import { isEligibleGithubActivityDocument } from "./github-activity-host";
 import { HONGGUO_FRAME_SDK_SOURCE } from "./hongguo-frame-sdk";
@@ -216,6 +217,7 @@ function buildMiniAppSdkSource(githubActivity: boolean, managedRelease: boolean,
     });
   }
   ${hongguo ? HONGGUO_FRAME_SDK_SOURCE : ""}
+  ${MAUS_UI_SDK_HELPERS_SOURCE}
   var api = Object.freeze(base);
   Object.defineProperty(window, "mausApp", { value: api, enumerable: true });
 })();`;
@@ -228,7 +230,8 @@ export function isCustomLocalMiniApp(app: Pick<MiniAppDocument["app"], "dashboar
 export function miniAppFrameDocument(document: MiniAppDocument, desktopOpenerAvailable: boolean, scope: { site?: MiniAppSite; hongguo?: boolean; roleEditor?: boolean } = {}): AppDocument {
   const managedRelease = document.app.status === "active" && Boolean((document.app as { release?: unknown }).release);
   const sdk = buildMiniAppSdkSource(isEligibleGithubActivityDocument(document), managedRelease, scope.site, scope.hongguo === true, scope.roleEditor === true);
-  const html = `<style>${APP_THEME_STYLE}</style><script>${sdk}</script>${stripDocumentPreamble(document.html)}`;
+  const uiStyle = hasMausUiOptIn(document.html) ? `<style>${MAUS_MINI_APP_UI_CSS}</style>` : "";
+  const html = `<style>${APP_THEME_STYLE}</style>${uiStyle}<script>${sdk}</script>${stripDocumentPreamble(document.html)}`;
   return {
     v: 1,
     messageId: document.app.id,
