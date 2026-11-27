@@ -35,7 +35,7 @@ import { PASS, type RouteHandler } from "./table.ts";
 
 const ROOT = "/api/mini-apps";
 const REPORT_SOURCE = `${ROOT}/report-source`;
-const APP_PATH = /^\/api\/mini-apps\/([0-9a-f-]{36})(?:\/(state|query|dashboard|publish|rollback|archive|update|agent-md))?$/;
+const APP_PATH = /^\/api\/mini-apps\/([0-9a-f-]{36})(?:\/(state|query|query-batch|dashboard|publish|rollback|archive|update|agent-md))?$/;
 const HONGGUO_ACTION = /^\/api\/mini-apps\/([0-9a-f-]{36})\/hongguo\/(catalog|series|playback|history|preferences)$/;
 const HONGGUO_MEDIA = /^\/api\/mini-apps\/([0-9a-f-]{36})\/hongguo\/media\/([A-Za-z0-9_-]{1,256})$/;
 const HONGGUO_COVER = /^\/api\/mini-apps\/([0-9a-f-]{36})\/hongguo\/cover$/;
@@ -364,8 +364,9 @@ export function createMiniAppRoutes(deps: MiniAppRouteDeps): RouteHandler {
       }
       if (method !== "POST") throw appFailure(405, "Method not allowed.");
       if (action === "dashboard") return json(res, 200, await deps.apps.dashboardRead(owner, id, await readBody(req, 4096)));
-      const body: unknown = await readBody(req, action === "publish" ? 900_000 : 20_000);
+      const body: unknown = await readBody(req, action === "publish" ? 900_000 : action === "query-batch" ? 64 * 1024 : 20_000);
       if (action === "query") return json(res, 200, await deps.apps.query(owner, id, body));
+      if (action === "query-batch") return json(res, 200, await deps.apps.queryBatch(owner, id, body));
       if (action === "publish") return json(res, 200, await deps.apps.publish(owner, body, id));
       if (action === "rollback") return json(res, 200, await deps.apps.rollback(owner, id, body));
       if (action === "archive") return json(res, 200, deps.apps.archive(owner, id, body));

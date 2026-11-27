@@ -293,6 +293,28 @@ export interface MiniAppQuery {
 
 export type MiniAppQueryResult = MiniAppNamedPage;
 
+export interface MiniAppQueryBatchItem {
+  queryId: string;
+  parameters: Record<string, string | string[]>;
+  cursor?: string;
+  expectedDataRevision?: number;
+}
+
+export interface MiniAppQueryBatchRequest {
+  expectedRevision: number;
+  queries: MiniAppQueryBatchItem[];
+}
+
+export type MiniAppQueryBatchEntryResult =
+  | { ok: true; result: MiniAppQueryResult }
+  | { ok: false; status: number; error: string; code?: string };
+
+export interface MiniAppQueryBatchResult {
+  appId: string;
+  revision: number;
+  results: MiniAppQueryBatchEntryResult[];
+}
+
 export interface MiniAppDataset {
   datasetId: string;
   revision: number;
@@ -313,6 +335,7 @@ export interface MiniAppQueryOptions {
 /** Available in an opaque app frame. It has no chat, model, filesystem, write or generic tool capability. */
 export interface MausApp {
   query(queryId: string, parameters: Record<string, string | string[]>, options?: MiniAppQueryOptions): Promise<MiniAppNamedPage>;
+  queryBatch?(items: ReadonlyArray<{ queryId: string; parameters?: Record<string, string | string[]>; options?: MiniAppQueryOptions }>): Promise<MiniAppNamedPage[]>;
   dashboard: { read(request: MiniAppDashboardRequest): Promise<MiniAppDashboardReadResult> };
   onDataChanged(listener: () => void): () => void;
 }

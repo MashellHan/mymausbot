@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { MINI_APP_ICON_PRESETS, MINI_APP_SHIPPED_TEMPLATE_KINDS, type MiniAppCustomIcon, type MiniAppDashboardRead, type MiniAppIconPreset, type MiniAppPublish, type MiniAppQuery, type MiniAppUpdateApply } from "../../shared/mini-apps.ts";
+import { MINI_APP_ICON_PRESETS, MINI_APP_SHIPPED_TEMPLATE_KINDS, type MiniAppCustomIcon, type MiniAppDashboardRead, type MiniAppIconPreset, type MiniAppPublish, type MiniAppQuery, type MiniAppQueryBatchRequest, type MiniAppUpdateApply } from "../../shared/mini-apps.ts";
 import { LOCAL_AGENT_ACTIVITY_HISTORY_CURSOR } from "../../shared/local-dashboard.ts";
 
 export const bindingNameSchema = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,62}$/);
@@ -94,9 +94,18 @@ export const publishSchema = z.object({
 }).strict();
 export const rollbackSchema = z.object({ ...mutationKey, templateVersion: z.number().int().positive() }).strict();
 export const archiveSchema = z.object(mutationKey).strict();
-export const querySchema = z.object({
-  queryId: name, parameters: z.record(name, z.union([z.string().max(500), z.array(z.string().max(500)).min(1).max(50)])),
-  expectedRevision: z.number().int().positive(), expectedDataRevision: z.number().int().nonnegative().optional(), cursor: z.string().max(4096).optional(),
+export const queryItemSchema = z.object({
+  queryId: name,
+  parameters: z.record(name, z.union([z.string().max(500), z.array(z.string().max(500)).min(1).max(50)])),
+  expectedDataRevision: z.number().int().nonnegative().optional(),
+  cursor: z.string().max(4096).optional(),
+}).strict();
+export const querySchema = queryItemSchema.extend({
+  expectedRevision: z.number().int().positive(),
+}).strict();
+export const queryBatchSchema = z.object({
+  expectedRevision: z.number().int().positive(),
+  queries: z.array(queryItemSchema).min(1).max(16),
 }).strict();
 const dashboardRevision = z.number().int().positive().max(Number.MAX_SAFE_INTEGER - 1);
 const occupantId = z.string().regex(/^o[0-9a-f]{16}$/);
@@ -131,6 +140,12 @@ export function parsePublish(raw: unknown): MiniAppPublish {
 export function parseQuery(raw: unknown): MiniAppQuery {
   const parsed = querySchema.safeParse(raw);
   if (!parsed.success) throw appFailure(400, "Invalid Mini App named query.");
+  return parsed.data;
+}
+
+export function parseQueryBatch(raw: unknown): MiniAppQueryBatchRequest {
+  const parsed = queryBatchSchema.safeParse(raw);
+  if (!parsed.success) throw appFailure(400, "Invalid Mini App batch query request.");
   return parsed.data;
 }
 
