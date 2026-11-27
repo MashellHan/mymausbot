@@ -66,10 +66,16 @@ function hasActionCapability(capabilities: string[], action: MiniAppActionReques
 }
 
 export class MiniAppActionBridge {
+  private readonly dbAccess: { database(): DatabaseSync; write<T>(work: (db: DatabaseSync) => T): T };
+  private readonly handlers: MiniAppActionHandlers;
+
   constructor(
-    private readonly dbAccess: { database(): DatabaseSync; write<T>(work: (db: DatabaseSync) => T): T },
-    private readonly handlers: MiniAppActionHandlers = {},
-  ) {}
+    dbAccess: { database(): DatabaseSync; write<T>(work: (db: DatabaseSync) => T): T },
+    handlers: MiniAppActionHandlers = {},
+  ) {
+    this.dbAccess = dbAccess;
+    this.handlers = handlers;
+  }
 
   async invoke(actor: MiniAppActor, appId: string, raw: unknown): Promise<MiniAppActionResult> {
     actor.assertActive();
