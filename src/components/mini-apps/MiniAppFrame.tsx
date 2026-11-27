@@ -16,6 +16,7 @@ import { AgentRoleEditor, type AgentRoleEditorSelection } from "./AgentRoleEdito
 import { MiniAppSiteOverlay } from "./MiniAppSiteOverlay";
 import { isCustomLocalMiniApp, miniAppFrameDocument } from "./mini-app-document";
 import { createMiniAppSitePresentation, managedMiniAppSite, type MiniAppSite, type MiniAppSiteView } from "./mini-app-site";
+import { miniAppClientCache } from "./mini-app-client-cache";
 import { miniAppNativeFrameGuard } from "./native-frame-guard";
 import { miniAppPerfTelemetry } from "./mini-app-telemetry";
 
@@ -119,6 +120,7 @@ export function mountMiniAppFrame(options: {
   container: HTMLElement;
   document: MiniAppDocument;
   state: MiniAppState;
+  storageKey?: string | null;
   onRevoked(): void;
   onChanged?(): void;
   onRuntimeReady?(info: { appId: string; revision: number; templateVersion: number }): void;
@@ -436,6 +438,20 @@ export function mountMiniAppFrame(options: {
     const now = Date.now();
     recentReads = recentReads.filter((at) => now - at < 60_000);
     if (recentReads.length >= MAX_READS_PER_MINUTE) return reply(request.id, undefined, "Too many reads. Wait a minute and try again.");
+    const queryCache = miniAppClientCache(options.storageKey ?? null);
+    const cacheKey = queryCache.queryKey({
+      appId: document.app.id,
+      appRevision: state.revision,
+      datasetId: binding.datasetId,
+      dataRevision,
+      queryId: request.queryId,
+      parameters: request.parameters,
+      cursor: request.options?.cursor,
+    });
+    const cachedResult = queryCache.getQuery(cacheKey);
+    if (cachedResult) {
+      return reply(request.id, cachedResult);
+    }
     recentReads.push(now);
     const controller = new AbortController();
     controllers.set(controller, [request.id]);
@@ -454,10 +470,14 @@ export function mountMiniAppFrame(options: {
       if (!miniAppNativeFrameGuard()) return reply(request.id, undefined, "This Mini App requires the guarded desktop window.");
       if (!Array.isArray(result.columns) || !Array.isArray(result.rows) || result.rows.length > 100 || result.revision !== dataRevision
         || utf8Bytes(JSON.stringify(result)) > MAX_RESULT_BYTES) return reply(request.id, undefined, "This result is too large. Narrow the query or use the next page.");
+      queryCache.setQuery(cacheKey, { appId: document.app.id, datasetId: binding.datasetId, dataRevision }, result);
       reply(request.id, result);
     }).catch((error: unknown) => {
       if (!active || controller.signal.aborted) return;
-      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) options.onRevoked();
+      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+        queryCache.clear();
+        options.onRevoked();
+      }
       reply(request.id, undefined, error instanceof Error ? error.message : "The data read failed. Try again.");
     }).finally(() => controllers.delete(controller));
   };
@@ -538,9 +558,10 @@ export function mountMiniAppFrame(options: {
   };
 }
 
-export function MiniAppFrame({ document, state, onRevoked, onChanged, onRuntimeReady, site, hongguo, refreshKey = 0, githubSelection, onGithubSelectionChange }: {
+export function MiniAppFrame({ document, state, storageKey, onRevoked, onChanged, onRuntimeReady, site, hongguo, refreshKey = 0, githubSelection, onGithubSelectionChange }: {
   document: MiniAppDocument;
   state: MiniAppState;
+  storageKey?: string | null;
   onRevoked(): void;
   onChanged?(): void;
   onRuntimeReady?(info: { appId: string; revision: number; templateVersion: number }): void;
@@ -575,6 +596,7 @@ export function MiniAppFrame({ document, state, onRevoked, onChanged, onRuntimeR
       container: box.current,
       document,
       state,
+      storageKey,
       onRevoked: () => revoked.current(),
       onChanged: () => dashboardChanged.current?.(),
       onRuntimeReady: (info) => runtimeReadyRef.current?.(info),
