@@ -452,3 +452,49 @@ it("gates Mini App release update check and apply behind local workspace owner a
   const putDenied = await call("PUT", ownerAuth);
   expect(putDenied.json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 405, { error: "Method not allowed." });
 });
+
+it("serves ETag / 304 Not Modified on GET /api/mini-apps/:id after owner auth", async () => {
+  const id = "11111111-1111-4111-8111-111111111111";
+  const path = `/api/mini-apps/${id}`;
+  let revision = 1;
+  const docId = "a".repeat(64);
+  const documentMeta = vi.fn(() => ({
+    app: { id, revision, templateVersion: 1 },
+    docId,
+    etag: `W/"${id}:${revision}:1:${docId.slice(0, 16)}"`,
+  }));
+  const document = vi.fn(() => ({ app: { id, revision, templateVersion: 1 }, html: "<h1>App</h1>", bindings: [], versions: [] }));
+  const route = createMiniAppRoutes({ localEnabled: () => true, apps: { documentMeta, document } } as unknown as Parameters<typeof createMiniAppRoutes>[0]);
+  const ownerAuth: RequestAuth = { kind: "loopback", scopes: ["admin"] };
+  const call = async (auth: RequestAuth, ifNoneMatch?: string) => {
+    const req = new IncomingMessage(new Socket());
+    Object.defineProperty(req.socket, "remoteAddress", { value: "127.0.0.1", configurable: true });
+    if (ifNoneMatch) req.headers["if-none-match"] = ifNoneMatch;
+    const res = new ServerResponse(req);
+    const json = vi.fn();
+    await route({ method: "GET", path, url: new URL(`http://127.0.0.1${path}`), req, res, auth, json, readBody: async () => null });
+    return { res, json };
+  };
+
+  const first = await call(ownerAuth);
+  const etag = first.res.getHeader("etag");
+  expect(etag).toBe(`W/"${id}:1:1:${docId.slice(0, 16)}"`);
+  expect(first.res.getHeader("cache-control")).toBe("private, no-cache");
+  expect(first.json).toHaveBeenCalledWith(first.res, 200, expect.objectContaining({ html: "<h1>App</h1>" }));
+  expect(document).toHaveBeenCalledTimes(1);
+
+  const hit = await call(ownerAuth, String(etag));
+  expect(hit.res.statusCode).toBe(304);
+  expect(hit.json).not.toHaveBeenCalled();
+  expect(document).toHaveBeenCalledTimes(1);
+
+  const denied = await call({ kind: "loopback", scopes: ["admin"], companionDevice: "phone" }, String(etag));
+  expect(denied.json).toHaveBeenCalledWith(denied.res, 403, { error: "Mini Apps are available only to this local workspace's owner." });
+  expect(documentMeta).toHaveBeenCalledTimes(2);
+
+  revision = 2;
+  const stale = await call(ownerAuth, String(etag));
+  expect(stale.res.getHeader("etag")).toBe(`W/"${id}:2:1:${docId.slice(0, 16)}"`);
+  expect(stale.json).toHaveBeenCalledWith(stale.res, 200, expect.objectContaining({ html: "<h1>App</h1>" }));
+  expect(document).toHaveBeenCalledTimes(2);
+});

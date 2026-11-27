@@ -330,7 +330,20 @@ export function createMiniAppRoutes(deps: MiniAppRouteDeps): RouteHandler {
       const id = match[1]!;
       const action = match[2];
       if (action === "agent-md") return await agentRoleEdit(ctx, id, owner, deps.apps, deps.roleConfiguration);
-      if (method === "GET" && !action) return json(res, 200, deps.apps.document(owner, id));
+      if (method === "GET" && !action) {
+        const meta = typeof deps.apps.documentMeta === "function" ? deps.apps.documentMeta(owner, id) : null;
+        if (meta) {
+          res.setHeader("cache-control", "private, no-cache");
+          res.setHeader("etag", meta.etag);
+          const ifNoneMatch = req.headers["if-none-match"];
+          if (typeof ifNoneMatch === "string" && ifNoneMatch.split(",").some((tag) => tag.trim() === meta.etag || tag.trim() === "*")) {
+            res.statusCode = 304;
+            res.end();
+            return;
+          }
+        }
+        return json(res, 200, deps.apps.document(owner, id));
+      }
       if (method === "GET" && action === "state") return json(res, 200, await deps.apps.state(owner, id));
       if (method === "GET" && action === "update") {
         const abort = new AbortController();

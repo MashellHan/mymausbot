@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -112,5 +112,30 @@ describe("AppDocs", () => {
     expect(docs.readFile(second.doc, "app.js")?.toString()).toBe("b()");
     docs.sweep([]);
     expect(files(dir, "file")).toEqual([]);
+  });
+
+  it("caches verified reads in memory with byte-bounded LRU eviction and invalidates on sweep", () => {
+    const dir = fresh();
+    const docs = new AppDocs(dir, { cacheMaxBytes: 500 });
+    const a = docs.put({ source: "html", html: "a".repeat(240) });
+    const b = docs.put({ source: "html", html: "b".repeat(240) });
+    const c = docs.put({ source: "html", html: "c".repeat(240) });
+    if (!a.ok || !b.ok || !c.ok) throw new Error("not stored");
+    expect(docs.read(a.doc)?.html).toBe("a".repeat(240));
+    expect(docs.read(b.doc)?.html).toBe("b".repeat(240));
+    // Re-read a to refresh its LRU position before c evicts b.
+    expect(docs.read(a.doc)?.html).toBe("a".repeat(240));
+    expect(docs.read(c.doc)?.html).toBe("c".repeat(240));
+    // Corrupting a on disk while cached still returns the verified cached copy; b was evicted so corruption is detected.
+    const aManifest = JSON.parse(readFileSync(join(dir, "doc", `${a.doc}.json`), "utf8")) as { html: string };
+    const bManifest = JSON.parse(readFileSync(join(dir, "doc", `${b.doc}.json`), "utf8")) as { html: string };
+    writeFileSync(join(dir, "html", `${aManifest.html}.html`), "tampered-a");
+    writeFileSync(join(dir, "html", `${bManifest.html}.html`), "tampered-b");
+    expect(docs.read(a.doc)?.html).toBe("a".repeat(240));
+    expect(docs.read(b.doc)).toBeNull();
+    // Sweeping unreferenced c removes it from both disk and memory cache.
+    age(dir, APP_DOCS_SWEEP_GRACE_MS + 1_000);
+    expect(docs.sweep([])).toBeGreaterThan(0);
+    expect(docs.read(c.doc)).toBeNull();
   });
 });
