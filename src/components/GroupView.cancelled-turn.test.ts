@@ -21,6 +21,7 @@ vi.mock("./DesktopCapabilities", async (importOriginal) => ({
 vi.mock("@/lib/analytics", () => ({ track: vi.fn() }));
 
 const { Transcript } = await import("./GroupView");
+const { MESSAGE_ROW } = await import("./MessageActions");
 
 const CANCELLED = "The request was cancelled by the client.";
 const room: Group = {
@@ -55,14 +56,19 @@ afterEach(() => {
 
 describe("a cancelled turn in a room", () => {
   it("offers Reply only for sources the server can quote", () => {
+    const hover = () => {
+      for (const row of host.querySelectorAll(`[${MESSAGE_ROW}]`)) flushSync(() => row.dispatchEvent(new PointerEvent("pointerenter", { pointerType: "mouse" })));
+    };
     const imageOnly = { id: "image-only", role: "bot", kind: "text", at: 1, text: "",
       from: { botId: "lead", name: "Lead", color: "blue" }, attachments: [{ kind: "image", path: "/fixture/image.png", mime: "image/png" }] } as Message;
     render([imageOnly]);
+    hover();
     expect(host.querySelector('button[aria-label="Reply to message"]')).toBeNull();
 
     const attachedText = { id: "attached-text", role: "user", kind: "text", at: 2,
       text: '<attached-file path="/fixture/report.txt" name="report.txt" />' } as Message;
     render([attachedText]);
+    hover();
     expect(host.querySelector('button[aria-label="Reply to message"]')).not.toBeNull();
   });
 

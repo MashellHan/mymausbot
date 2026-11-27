@@ -127,8 +127,13 @@ export const Transcript = memo(function Transcript({
   const items = useMemo(() => groupActivityRuns(messages.filter(message =>
     !folds.hiddenIds.has(message.id) &&
     (message.kind !== "activity" || roomActivityVisible(message, showToolCalls)))), [messages, showToolCalls, folds]);
-  const newestMessageId = messages.at(-1)?.id;
-  const newestUserMessageId = [...messages].reverse().find((message) => message.role === "user")?.id;
+  let newestMessageId: string | undefined;
+  let newestUserMessageId: string | undefined;
+  for (let i = messages.length - 1; i >= 0 && (!newestMessageId || !newestUserMessageId); i--) {
+    const candidate = messages[i]!;
+    if (!newestMessageId && candidate.kind === "text") newestMessageId = candidate.id;
+    if (!newestUserMessageId && candidate.role === "user") newestUserMessageId = candidate.id;
+  }
   const roomBusy = roomThreadWorking(group, group.threadId);
   let retryableId: string | undefined;
   let retryableIndex = -1;
