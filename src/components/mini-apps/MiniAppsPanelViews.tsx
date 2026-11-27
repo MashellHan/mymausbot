@@ -19,13 +19,14 @@ import { miniAppDisplayDescription, miniAppDisplayName } from "./mini-app-displa
 import { managedMiniAppSite } from "./mini-app-site";
 import { readAppReleaseMeta, shortCommit, type MiniAppUpdateInfo } from "./mini-app-update";
 import { mojoHostEligible } from "./mojo-host";
+import { reorderMiniAppByOffset, useMiniAppLongPressReorder } from "./mini-app-reorder";
 
 function stamp(value: number): string {
   return Number.isFinite(value) && value > 0 ? new Date(value).toLocaleString(activeLocale()) : t("computer.miniApps.timeUnavailable");
 }
 
 export function MiniAppsHeader({ apps, selected, selectedId, selectedUpdate, barCollapsed, archivedKind, actionsBusy, checking,
-  canRestore, libraryPopover, tabListRef, choose, toggleBar, onAddArchived, onRefresh, onRestorePrevious }: {
+  canRestore, canReorder = false, libraryPopover, tabListRef, choose, toggleBar, onAddArchived, onRefresh, onRestorePrevious, onReorder }: {
   apps: MiniAppSummary[] | null;
   selected: MiniAppSummary | null;
   selectedId: string | null;
@@ -35,6 +36,7 @@ export function MiniAppsHeader({ apps, selected, selectedId, selectedUpdate, bar
   actionsBusy: boolean;
   checking: boolean;
   canRestore: boolean;
+  canReorder?: boolean;
   libraryPopover: ReactNode;
   tabListRef: RefObject<HTMLDivElement | null>;
   choose(id: string): void;
@@ -42,12 +44,34 @@ export function MiniAppsHeader({ apps, selected, selectedId, selectedUpdate, bar
   onAddArchived(): void;
   onRefresh(): void;
   onRestorePrevious(): void;
+  onReorder?(appIds: string[]): void;
 }) {
+  const appIds = apps?.map((app) => app.id) ?? [];
+  const { draggingId, dropTarget, startPress, consumeSuppressedClick } = useMiniAppLongPressReorder({
+    appIds,
+    enabled: canReorder && !actionsBusy && !barCollapsed,
+    tabListRef,
+    onReorder,
+  });
+
   const onNavKey = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.altKey || event.ctrlKey || event.metaKey || !apps?.length) return;
+    if (event.ctrlKey || event.metaKey || !apps?.length) return;
     const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
     const at = buttons.findIndex((button) => button === event.target);
     if (at < 0) return;
+    if (event.altKey) {
+      if (!canReorder || actionsBusy || !onReorder) return;
+      const rtl = document.documentElement.dir === "rtl";
+      const delta = event.key === "ArrowLeft" ? (rtl ? 1 : -1) : event.key === "ArrowRight" ? (rtl ? -1 : 1) : 0;
+      if (!delta) return;
+      const movedId = buttons[at]?.dataset.appId;
+      if (!movedId) return;
+      const nextIds = reorderMiniAppByOffset(appIds, movedId, delta as -1 | 1);
+      if (!nextIds) return;
+      event.preventDefault();
+      onReorder(nextIds);
+      return;
+    }
     const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
       : event.key === "ArrowRight" ? (at + 1) % buttons.length : event.key === "ArrowLeft" ? (at - 1 + buttons.length) % buttons.length : -1;
     if (next < 0) return;
@@ -94,24 +118,36 @@ export function MiniAppsHeader({ apps, selected, selectedId, selectedUpdate, bar
       </div>
       {apps && !barCollapsed && <div id="mini-apps-bar" className="mt-2 flex min-w-0 items-center gap-2">
         {apps.length ? <div ref={tabListRef} role="tablist" aria-label={t("computer.miniApps.chooseApp")} onKeyDown={onNavKey} onWheel={scrollTabsWithWheel} className="flex min-w-0 flex-1 flex-nowrap gap-1 overflow-x-auto pb-1 [scrollbar-width:thin]">
-          {apps.map((app) => <div key={app.id} className="relative w-[104px] shrink-0">
-            <button id={`mini-app-tab-${app.id}`} data-app-id={app.id} type="button" role="tab" aria-selected={app.id === selectedId} aria-controls="mini-app-content" tabIndex={app.id === selectedId ? 0 : -1} onClick={() => choose(app.id)}
-            aria-label={miniAppDisplayName(app)} title={miniAppDisplayName(app)}
-            className={`flex w-full flex-col items-center gap-1 rounded-xl px-1.5 py-2 text-[11px] font-medium focus-visible:outline-2 focus-visible:outline-accent ${app.id === selectedId ? "bg-control text-ink" : "text-ink-secondary hover:bg-inset hover:text-ink"}`}>
-              <MiniAppIcon kind={iconKindForApp(app)} app={app} launcher /><span className="line-clamp-2 min-h-8 w-full text-center leading-4">{miniAppDisplayName(app)}</span>
-            </button>
-            {app.id === selectedId && (() => {
-              const release = readAppReleaseMeta(app, selectedUpdate);
-              return <InfoHint className="absolute end-0 top-1" label={`${miniAppDisplayName(app)}: ${t("app.info")}`}>
-                <p>{miniAppDisplayDescription(app)}</p>
-                {release.version && <p data-mini-app-release-version className="tabular-nums text-ink-secondary">{t("computer.miniApps.update.installedVersion", { version: release.version })}</p>}
-                {release.sourceCommit && <p data-mini-app-source-commit title={release.sourceCommit} className="tabular-nums text-ink-secondary">{t("computer.miniApps.update.sourceCommit", { commit: shortCommit(release.sourceCommit) })}</p>}
-                {selectedUpdate?.status === "incompatible" && <p className="text-ink-secondary">{t("computer.miniApps.update.incompatible")}</p>}
-                {selectedUpdate?.status === "custom" && <p className="text-ink-secondary">{t("computer.miniApps.update.custom")}</p>}
-                <p className="tabular-nums text-ink-secondary">{t("computer.miniApps.published", { time: stamp(app.updatedAt) })}</p>
-              </InfoHint>;
-            })()}
-          </div>)}
+          {apps.map((app) => {
+            const isDragging = draggingId === app.id;
+            const drop = dropTarget?.id === app.id && !isDragging ? dropTarget.place : null;
+            const dropIndicator = drop === "before"
+              ? "shadow-[-2px_0_var(--color-accent)]"
+              : drop === "after"
+                ? "shadow-[2px_0_var(--color-accent)]"
+                : "";
+            return <div key={app.id} data-mini-app-item={app.id} data-mini-app-dragging={isDragging ? "true" : undefined} data-mini-app-drop={drop ?? undefined}
+              className={`relative w-[104px] shrink-0 rounded-xl transition-transform ${isDragging ? "scale-105 opacity-70 cursor-grabbing" : ""} ${dropIndicator}`}>
+              <button id={`mini-app-tab-${app.id}`} data-app-id={app.id} type="button" role="tab" aria-selected={app.id === selectedId} aria-controls="mini-app-content" tabIndex={app.id === selectedId ? 0 : -1}
+                onPointerDown={(event) => startPress(app.id, event)}
+                onClick={() => { if (!consumeSuppressedClick()) choose(app.id); }}
+                aria-label={miniAppDisplayName(app)} title={miniAppDisplayName(app)}
+                className={`flex w-full select-none flex-col items-center gap-1 rounded-xl px-1.5 py-2 text-[11px] font-medium focus-visible:outline-2 focus-visible:outline-accent ${isDragging ? "cursor-grabbing ring-2 ring-accent/60" : ""} ${app.id === selectedId ? "bg-control text-ink" : "text-ink-secondary hover:bg-inset hover:text-ink"}`}>
+                <MiniAppIcon kind={iconKindForApp(app)} app={app} launcher /><span className="line-clamp-2 min-h-8 w-full text-center leading-4">{miniAppDisplayName(app)}</span>
+              </button>
+              {app.id === selectedId && !isDragging && (() => {
+                const release = readAppReleaseMeta(app, selectedUpdate);
+                return <InfoHint className="absolute end-0 top-1" label={`${miniAppDisplayName(app)}: ${t("app.info")}`}>
+                  <p>{miniAppDisplayDescription(app)}</p>
+                  {release.version && <p data-mini-app-release-version className="tabular-nums text-ink-secondary">{t("computer.miniApps.update.installedVersion", { version: release.version })}</p>}
+                  {release.sourceCommit && <p data-mini-app-source-commit title={release.sourceCommit} className="tabular-nums text-ink-secondary">{t("computer.miniApps.update.sourceCommit", { commit: shortCommit(release.sourceCommit) })}</p>}
+                  {selectedUpdate?.status === "incompatible" && <p className="text-ink-secondary">{t("computer.miniApps.update.incompatible")}</p>}
+                  {selectedUpdate?.status === "custom" && <p className="text-ink-secondary">{t("computer.miniApps.update.custom")}</p>}
+                  <p className="tabular-nums text-ink-secondary">{t("computer.miniApps.published", { time: stamp(app.updatedAt) })}</p>
+                </InfoHint>;
+              })()}
+            </div>;
+          })}
         </div> : <div className="min-w-0 flex-1" />}
         {libraryPopover}
       </div>}
