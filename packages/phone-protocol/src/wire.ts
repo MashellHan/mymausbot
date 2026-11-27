@@ -969,6 +969,8 @@ export type ServerFrame =
   | { kind: "runtime"; event: RuntimeEvent }
   /** An MCP server was added, changed or removed: a list of them is stale. */
   | { kind: "mcp.changed" }
+  | { kind: "mini-app.changed"; appId: string; revision: number; templateVersion: number; status: "active" | "archived" }
+  | { kind: "mini-app.data-changed"; datasetId: string; revision: number }
   /** `surface` names what the frame shows: the bot's desktop (`computer`) or its built-in browser. */
   | { kind: "screen"; botId: string; threadId: string; png: string; mime?: string; surface?: "browser" | "computer" }
   /** A bot's computer is being set up or woken for a turn; the chat shows
