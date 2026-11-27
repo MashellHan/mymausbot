@@ -35,6 +35,7 @@ import { CodeBlock, CodePlate, codeHash } from "./CodeBlock";
 export { CodeBlock, HIGHLIGHT_CACHE_MAX, HIGHLIGHT_CACHE_MAX_CHARS, HIGHLIGHT_MAX_CHARS, type CodeBlockProps } from "./CodeBlock";
 import { useFilePreview } from "./FilePreviewButton";
 import { SaveIconButton } from "./HtmlFilePreview";
+import { MermaidExpandIcon, MermaidLightbox } from "./MermaidLightbox";
 import { useRevealOriginalMenu } from "./RevealOriginalMenu";
 
 const mermaidCache = new Map<string, string>();
@@ -212,6 +213,7 @@ export function MermaidDiagram({ code }: MermaidDiagramProps) {
   const markup = useMemo(() => (svg ? { __html: svg } : null), [svg]);
   const [error, setError] = useState<string | null>(null);
   const [showSource, setShowSource] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const { state: copied, copy } = useCopyFeedback(code);
   const simple = !useAdvancedMode();
 
@@ -270,15 +272,32 @@ export function MermaidDiagram({ code }: MermaidDiagramProps) {
         {t("chat.mermaid.failed", { error })}
       </p>
     )}
-    {markup && <div className="overflow-x-auto p-3 [&_svg]:!max-w-full" dangerouslySetInnerHTML={markup} />}
+    {markup && (
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => setExpanded(true)}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          setExpanded(true);
+        }}
+        title={t("attach.previewAria", { name: t("chat.mermaid.title") })}
+        aria-label={t("attach.previewAria", { name: t("chat.mermaid.title") })}
+        className="cursor-zoom-in overflow-x-auto p-3 [&_svg]:!max-w-full"
+        dangerouslySetInnerHTML={markup}
+      />
+    )}
     {(showSource || !svg || error) && (
       <pre className={cn("overflow-x-auto text-[13px]", simple ? "px-3 py-2 leading-5 text-ink-secondary" : "p-3 leading-relaxed text-ink")}>{code}</pre>
     )}
+    {expanded && svg && <MermaidLightbox svg={svg} onClose={() => setExpanded(false)} />}
   </>;
   if (simple) {
     return (
       <div ref={frame} dir="ltr" className="group/code relative my-2.5 overflow-hidden rounded-xl bg-ink/[0.04]">
         <CodePlate copied={copied} onCopy={copy} copyLabel={t("code.copySource")} items={[
+          ...(svg ? [{ key: "expand", label: t("attach.previewAria", { name: t("chat.mermaid.title") }), icon: <MermaidExpandIcon />, onSelect: () => setExpanded(true) }] : []),
           { key: "source", label: t(showSource ? "code.hideSource" : "code.showSource"), icon: <WrapText size={14} aria-hidden="true" />, active: showSource, onSelect: () => setShowSource((shown) => !shown) },
           { key: "about", label: t("code.mermaid"), disabled: true, separatorBefore: true, onSelect: () => {} },
         ]} />
@@ -293,6 +312,17 @@ export function MermaidDiagram({ code }: MermaidDiagramProps) {
           {t("chat.mermaid.title")}
         </span>
         <div className="flex shrink-0 items-center gap-1 whitespace-nowrap">
+          {svg && (
+            <button
+              type="button"
+              onClick={() => setExpanded(true)}
+              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-ink-secondary hover:bg-raised hover:text-ink transition-colors"
+              title={t("attach.previewAria", { name: t("chat.mermaid.title") })}
+              aria-label={t("attach.previewAria", { name: t("chat.mermaid.title") })}
+            >
+              <MermaidExpandIcon />
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setShowSource((visible) => !visible)}

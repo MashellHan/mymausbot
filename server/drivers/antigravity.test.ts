@@ -41,6 +41,7 @@ import {
   AntigravityDriver,
   STATIC_ANTIGRAVITY_MODELS,
   antigravityPermissionMode,
+  neutralizeAntigravitySlashCommands,
   normalizeAntigravityTurn,
 } from "./antigravity.ts";
 
@@ -77,6 +78,15 @@ afterEach(async () => {
 });
 
 describe("official Antigravity catalog", () => {
+  it("neutralizes Antigravity native slash command tokens without altering normal file paths or URLs", () => {
+    expect(neutralizeAntigravitySlashCommands("If the user sends /learn or `/compact` or /goal.")).toBe(
+      "If the user sends /\u200Blearn or `/\u200Bcompact` or /\u200Bgoal.",
+    );
+    expect(neutralizeAntigravitySlashCommands("https://example.com/learn/docs and /Users/me/plan/file.ts")).toBe(
+      "https://example.com/learn/docs and /Users/me/plan/file.ts",
+    );
+  });
+
   it("uses current Gemini 3.8 variants as the offline fallback", () => {
     expect(STATIC_ANTIGRAVITY_MODELS).toEqual({
       default: "gemini-3.8-flash",
