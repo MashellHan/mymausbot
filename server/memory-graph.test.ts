@@ -2,7 +2,9 @@ import { rmSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
-import { extractTopicEdges, listTopicNeighbors, patchBacklinks } from "./memory-graph.ts";
+import { extractTopicEdges, listTopicNeighbors, patchBacklinks, spreadActivation } from "./memory-graph.ts";
+import { cosineInt8, quantizeInt8, reciprocalRankFusion } from "./memory-vectors.ts";
+import { buildRecall } from "./recall.ts";
 import { extractInlineWikilinks, mergeTopicText, parseTopicHeader } from "./memory-topics.ts";
 import { applicationDatabase, closeMessageDb } from "./message-db.ts";
 import { listMemoryTopics, readMemoryTopic, syncMemoryIndex, writeMemoryTopic, WORKSPACES_DIR } from "./workspace.ts";
@@ -82,5 +84,35 @@ describe("Zettelkasten topic frontmatter and memory_edges graph", () => {
     syncMemoryIndex(BOT);
     const neighbors = listTopicNeighbors(applicationDatabase(), BOT, "asha");
     expect(neighbors).toEqual([{ topic: "diet-hosting", weight: 1 }]);
+  });
+
+  it("recalls 2-hop linked topics via damped PPR and bilingual aliases, with Int8 cosine + RRF helpers", () => {
+    writeMemoryTopic(BOT, "asha.md", "---\ntitle: Asha\naliases: [阿莎, sister]\nlinks: [diet-hosting]\n---\n- 2026-04-10 · Visiting this weekend\n");
+    writeMemoryTopic(BOT, "diet-hosting.md", "---\ntitle: Dinner Hosting\naliases: [hosting]\n---\n- 2026-04-10 · Strictly pescatarian and hates cilantro\n");
+    syncMemoryIndex(BOT);
+
+    const spread = spreadActivation(applicationDatabase(), BOT, new Map([["asha", 1]]));
+    expect(spread[0]?.topic).toBe("diet-hosting");
+    expect(spread[0]?.viaTopic).toBe("asha");
+
+    // Bilingual Chinese query about 阿莎 bridges to asha.md and 2-hop spreads into diet-hosting.md!
+    const recalled = buildRecall({
+      botId: BOT,
+      message: "阿莎周末来家里吃饭要注意什么",
+      threadIds: [],
+      label: () => "",
+      author: () => "",
+    });
+    expect(recalled?.text).toContain("memory/asha.md");
+    expect(recalled?.text).toContain("memory/diet-hosting.md (linked via memory/asha.md)");
+    expect(recalled?.text).toContain("cilantro");
+
+    const q1 = quantizeInt8(new Float32Array([1, 0.5, -0.25]));
+    const q2 = quantizeInt8(new Float32Array([1, 0.5, -0.25]));
+    const q3 = quantizeInt8(new Float32Array([-1, -0.5, 0.25]));
+    expect(cosineInt8(q1, q2)).toBeGreaterThan(0.99);
+    expect(cosineInt8(q1, q3)).toBeLessThan(-0.99);
+    const fused = reciprocalRankFusion([["a", "b"], ["b", "c"]]);
+    expect(fused.get("b")!).toBeGreaterThan(fused.get("a")!);
   });
 });
