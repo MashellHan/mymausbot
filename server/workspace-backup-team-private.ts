@@ -179,6 +179,10 @@ export function stripTeamPrivate(snapshot: { messages: string; runtime: string }
       const indexed = db.prepare("SELECT DISTINCT bot_id AS id FROM memory_entries").all().map((row) => String(row.id));
       deleteWhereIn(db, "memory_entries", "bot_id", indexed.filter((id) => memberLayer(id) || privacy.bots.has(id)));
     }
+    if (hasTable(db, "memory_edges")) {
+      const indexed = db.prepare("SELECT DISTINCT bot_id AS id FROM memory_edges").all().map((row) => String(row.id));
+      deleteWhereIn(db, "memory_edges", "bot_id", indexed.filter((id) => memberLayer(id) || privacy.bots.has(id)));
+    }
   });
   strip(snapshot.runtime, (db) => {
     const assignments = [...new Set([

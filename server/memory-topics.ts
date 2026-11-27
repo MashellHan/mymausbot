@@ -1,4 +1,4 @@
-// A memory/<topic>.md may begin with YAML frontmatter: `title`, `description`, `aliases`.
+// A memory/<topic>.md may begin with YAML frontmatter: `title`, `description`, `aliases`, `links`, `entities`, `updated`.
 import { closeSync, openSync, readSync } from "node:fs";
 
 import { hasCjk } from "./cjk-search.ts";
@@ -6,11 +6,39 @@ import { hasCjk } from "./cjk-search.ts";
 const HEAD_BYTES = 2_048;
 export const TOPIC_INDEX_MAX_TOPICS = 40;
 export const TOPIC_INDEX_MAX_CHARS = 2_000;
+export const TOPIC_MAX_LINKS = 8;
+export const TOPIC_MAX_ENTITIES = 12;
 
 export interface TopicHeader {
   title?: string;
   description?: string;
   aliases: string[];
+  links?: string[];
+  entities?: string[];
+  updated?: string;
+}
+
+export function normalizeTopicSlug(raw: string): string | null {
+  const slug = raw
+    .trim()
+    .replace(/^memory\//i, "")
+    .replace(/\.md$/i, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+  if (!slug || slug === "archive" || slug === "memory") return null;
+  return slug;
+}
+
+export function extractInlineWikilinks(text: string): string[] {
+  const out: string[] = [];
+  for (const match of text.matchAll(/\[\[([^[\]\r\n|]{1,64})(?:\|[^[\]\r\n]*)?\]\]/g)) {
+    const slug = normalizeTopicSlug(match[1]!);
+    if (slug && !out.includes(slug)) out.push(slug);
+    if (out.length >= TOPIC_MAX_LINKS * 2) break;
+  }
+  return out;
 }
 
 function unquote(value: string): string {
@@ -28,13 +56,15 @@ export function parseTopicHeader(text: string): TopicHeader {
     if (heading) header.title = heading.slice(0, 160);
     return header;
   }
+  const links: string[] = [];
+  const entities: string[] = [];
   const lines = m[1].split(/\r?\n/);
   for (let i = 0; i < lines.length; i += 1) {
-    const field = /^(title|description|aliases|tags)\s*:\s*(.*)$/.exec(lines[i]);
+    const field = /^(title|description|aliases|tags|links|entities|updated)\s*:\s*(.*)$/.exec(lines[i]);
     if (!field) continue;
     const [, key, value] = field;
-    if (key === "title" || key === "description") {
-      if (value.trim()) header[key] = unquote(value).slice(0, 160);
+    if (key === "title" || key === "description" || key === "updated") {
+      if (value.trim()) header[key] = unquote(value).slice(0, key === "updated" ? 16 : 160);
       continue;
     }
     const items: string[] = [];
@@ -46,16 +76,32 @@ export function parseTopicHeader(text: string): TopicHeader {
       while (i + 1 < lines.length && /^\s*-\s+/.test(lines[i + 1])) items.push(lines[(i += 1)].replace(/^\s*-\s+/, ""));
     }
     for (const item of items.map(unquote).filter(Boolean)) {
-      if (!header.aliases.includes(item)) header.aliases.push(item.slice(0, 40));
+      if (key === "links") {
+        const slug = normalizeTopicSlug(item);
+        if (slug && !links.includes(slug)) links.push(slug);
+      } else if (key === "entities") {
+        const clean = item.slice(0, 60);
+        if (!entities.includes(clean)) entities.push(clean);
+      } else if (!header.aliases.includes(item)) {
+        header.aliases.push(item.slice(0, 40));
+      }
     }
   }
   header.aliases = header.aliases.slice(0, 12);
+  if (links.length) header.links = links.slice(0, TOPIC_MAX_LINKS);
+  if (entities.length) header.entities = entities.slice(0, TOPIC_MAX_ENTITIES);
   if (!header.title && heading) header.title = heading.slice(0, 160);
   return header;
 }
 
 export function topicWords(name: string, header: TopicHeader): string[] {
-  const text = [name.replace(/\.md$/i, "").replace(/[-_.]+/g, " "), header.title ?? "", header.description ?? "", ...header.aliases].join(" ");
+  const text = [
+    name.replace(/\.md$/i, "").replace(/[-_.]+/g, " "),
+    header.title ?? "",
+    header.description ?? "",
+    ...header.aliases,
+    ...(header.entities ?? []),
+  ].join(" ");
   return [...new Set(text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((word) => word.length >= (hasCjk(word) ? 2 : 3)))];
 }
 
@@ -113,11 +159,23 @@ function aliasList(aliases: readonly string[]): string {
   return `[${aliases.join(", ")}]`;
 }
 
-export function mergeTopicText(existing: string | null, input: { title: string; aliases: readonly string[]; lines: readonly string[] }): string {
+export function mergeTopicText(
+  existing: string | null,
+  input: { title: string; aliases: readonly string[]; links?: readonly string[]; entities?: readonly string[]; updated?: string; lines: readonly string[] },
+): string {
   const lines = input.lines.join("\n");
+  const normalizedLinks = [...new Set((input.links ?? []).map(normalizeTopicSlug).filter((s): s is string => Boolean(s)))].slice(0, TOPIC_MAX_LINKS);
+  const normalizedEntities = [...new Set((input.entities ?? []).map((e) => e.trim().slice(0, 60)).filter(Boolean))].slice(0, TOPIC_MAX_ENTITIES);
   if (existing === null || !existing.trim()) {
     const aliases = [...new Set(input.aliases)].slice(0, 12);
-    return `---\ntitle: ${input.title}\n${aliases.length ? `aliases: ${aliasList(aliases)}\n` : ""}---\n\n${lines}\n`;
+    const meta = [
+      `title: ${input.title}`,
+      ...(aliases.length ? [`aliases: ${aliasList(aliases)}`] : []),
+      ...(normalizedLinks.length ? [`links: ${aliasList(normalizedLinks)}`] : []),
+      ...(normalizedEntities.length ? [`entities: ${aliasList(normalizedEntities)}`] : []),
+      ...(input.updated ? [`updated: ${input.updated}`] : []),
+    ];
+    return `---\n${meta.join("\n")}\n---\n\n${lines}\n`;
   }
   const lead = LEAD.exec(existing)?.[0] ?? "";
   const rest = existing.slice(lead.length);
@@ -125,24 +183,48 @@ export function mergeTopicText(existing: string | null, input: { title: string; 
   let text: string;
   if (!block) {
     const aliases = [...new Set(input.aliases)].slice(0, 12);
-    text = `---\ntitle: ${parseTopicHeader(existing).title ?? input.title}\n${aliases.length ? `aliases: ${aliasList(aliases)}\n` : ""}---\n\n${existing}`;
+    const meta = [
+      `title: ${parseTopicHeader(existing).title ?? input.title}`,
+      ...(aliases.length ? [`aliases: ${aliasList(aliases)}`] : []),
+      ...(normalizedLinks.length ? [`links: ${aliasList(normalizedLinks)}`] : []),
+      ...(normalizedEntities.length ? [`entities: ${aliasList(normalizedEntities)}`] : []),
+      ...(input.updated ? [`updated: ${input.updated}`] : []),
+    ];
+    text = `---\n${meta.join("\n")}\n---\n\n${existing}`;
   } else {
-    const known = parseTopicHeader(existing).aliases;
-    const lower = new Set(known.map((alias) => alias.toLowerCase()));
-    const added = input.aliases.filter((alias) => !lower.has(alias.toLowerCase()));
-    if (!added.length) text = existing;
-    else {
-      const merged = [...known, ...added].slice(0, 12);
+    const parsed = parseTopicHeader(existing);
+    const knownAliases = parsed.aliases;
+    const lowerAliases = new Set(knownAliases.map((alias) => alias.toLowerCase()));
+    const addedAliases = input.aliases.filter((alias) => !lowerAliases.has(alias.toLowerCase()));
+    const knownLinks = parsed.links ?? [];
+    const addedLinks = normalizedLinks.filter((slug) => !knownLinks.includes(slug));
+    const knownEntities = parsed.entities ?? [];
+    const lowerEntities = new Set(knownEntities.map((e) => e.toLowerCase()));
+    const addedEntities = normalizedEntities.filter((e) => !lowerEntities.has(e.toLowerCase()));
+    const needsUpdate = addedAliases.length || addedLinks.length || addedEntities.length || (input.updated && parsed.updated !== input.updated);
+    if (!needsUpdate) {
+      text = existing;
+    } else {
       const body = block[1].split(/\r?\n/);
-      const at = body.findIndex((line) => /^aliases\s*:/.test(line));
-      if (at === -1) body.push(`aliases: ${aliasList(merged)}`);
-      else {
-        let end = at + 1;
-        while (end < body.length && /^\s*-\s+/.test(body[end]!)) end += 1;
-        body.splice(at, end - at, `aliases: ${aliasList(merged)}`);
+      const upsertList = (field: string, values: string[]) => {
+        const at = body.findIndex((line) => new RegExp(`^${field}\\s*:`).test(line));
+        if (at === -1) body.push(`${field}: ${aliasList(values)}`);
+        else {
+          let end = at + 1;
+          while (end < body.length && /^\s*-\s+/.test(body[end]!)) end += 1;
+          body.splice(at, end - at, `${field}: ${aliasList(values)}`);
+        }
+      };
+      if (addedAliases.length) upsertList("aliases", [...knownAliases, ...addedAliases].slice(0, 12));
+      if (addedLinks.length) upsertList("links", [...knownLinks, ...addedLinks].slice(0, TOPIC_MAX_LINKS));
+      if (addedEntities.length) upsertList("entities", [...knownEntities, ...addedEntities].slice(0, TOPIC_MAX_ENTITIES));
+      if (input.updated && parsed.updated !== input.updated) {
+        const at = body.findIndex((line) => /^updated\s*:/.test(line));
+        if (at === -1) body.push(`updated: ${input.updated}`);
+        else body[at] = `updated: ${input.updated}`;
       }
       text = `${lead}---\n${body.join("\n")}\n---\n${rest.slice(block[0].length)}`;
     }
   }
-  return `${text}${text.endsWith("\n") ? "" : "\n"}${lines}\n`;
+  return lines ? `${text}${text.endsWith("\n") ? "" : "\n"}${lines}\n` : text;
 }
