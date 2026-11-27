@@ -154,6 +154,8 @@ function memberTokenUsage(
   const seatContinuous = switchedAt === null || switchedAt <= cutoff;
   const logContinuous = cached.lostAt === null || cached.lostAt <= cutoff;
   let known = 0;
+  let outputKnown = 0;
+  let outputComplete = true;
   let activeMs = 0;
   let prevSampleAt: number | null = null;
   let invalid = cached.pendingLine;
@@ -169,6 +171,11 @@ function memberTokenUsage(
     if (sample.tokens > 0) {
       const gap = prevSampleAt !== null ? sample.at - prevSampleAt : 0;
       activeMs += gap > 0 && gap <= MAX_ACTIVE_STEP_MS ? gap : 1000;
+      if (sample.split && Number.isSafeInteger(outputKnown + sample.split.output)) {
+        outputKnown += sample.split.output;
+      } else {
+        outputComplete = false;
+      }
       if (!sample.model || !sample.split) {
         hasUnattributed = true;
         prevSampleAt = sample.at;
@@ -199,14 +206,16 @@ function memberTokenUsage(
     return {
       coverage,
       knownTokens: 0,
+      outputTokens: 0,
       activeSeconds: 0,
       estimatedCost: projectTokens([{ input: 0, output: 0, cacheRead: 0, models: [] }], "ready").estimatedCost,
     };
   }
+  const outputTokens = outputComplete ? outputKnown : null;
   const activeSeconds = activeMs > 0 ? Math.max(1, Math.round(activeMs / 1000)) : null;
   const models = [...byModel.values()];
   if (!models.length) {
-    return { coverage, knownTokens, ...(activeSeconds !== null ? { activeSeconds } : {}), estimatedCost: { coverage: "unavailable", usd: null } };
+    return { coverage, knownTokens, ...(outputTokens !== null ? { outputTokens } : {}), ...(activeSeconds !== null ? { activeSeconds } : {}), estimatedCost: { coverage: "unavailable", usd: null } };
   }
   const totals = models.reduce(
     (acc, row) => ({ input: acc.input + row.input, output: acc.output + row.output, cacheRead: acc.cacheRead + row.cacheRead }),
@@ -217,6 +226,7 @@ function memberTokenUsage(
   return {
     coverage,
     knownTokens,
+    ...(outputTokens !== null ? { outputTokens } : {}),
     ...(activeSeconds !== null ? { activeSeconds } : {}),
     estimatedCost: projectTokens([observation], costInputCoverage).estimatedCost,
   };

@@ -11,6 +11,19 @@ function queuedMessageLabel(text: string): string {
   return splitTranscriptCitations(text).citations.length || ATTACHMENT_TAG.test(text) ? replySnippet(text, 500) : text;
 }
 
+export function filterVisibleQueuedMessages<T extends { queueId: string }>(
+  items: readonly T[] | undefined,
+  messages: ReadonlyArray<{ role: string; queueId?: string }> | undefined,
+): T[] {
+  if (!items?.length) return [];
+  if (!messages?.length) return [...items];
+  const inTranscript = new Set<string>();
+  for (const message of messages) {
+    if (message.role === "user" && message.queueId) inTranscript.add(message.queueId);
+  }
+  return inTranscript.size ? items.filter((item) => !inTranscript.has(item.queueId)) : [...items];
+}
+
 export function composerCanSteerQueuedMessages(
   busy: boolean,
   locked: boolean,

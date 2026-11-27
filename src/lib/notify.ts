@@ -1,7 +1,7 @@
 import type { Notification } from "../../shared/notification";
 import { plainPreviewText } from "../../shared/plain-preview";
 import { finishedNotificationsEnabled, notificationSoundsEnabled } from "./notification-preferences";
-import { isStandalonePwa } from "./web-push";
+import { getWebPushClientSnapshot, isStandalonePwa } from "./web-push";
 
 export type NotifyFrame = Notification;
 
@@ -63,6 +63,34 @@ async function showViaServiceWorker(title: string, options: NotificationOptions,
   }
 }
 
+function webPushHandlesKind(kind: NotifyFrame["kind"]): boolean {
+  const prefs = getWebPushClientSnapshot().subscription?.preferences;
+  if (!prefs?.enabled) return false;
+  switch (kind) {
+    case "approval":
+    case "question":
+    case "sign-in":
+    case "secret":
+      return prefs.urgent;
+    case "done":
+      return prefs.finished;
+    case "turn-failed":
+    case "routine-failed":
+    case "incident":
+      return prefs.failures;
+    case "mention":
+      return prefs.mentions;
+    case "spend":
+      return prefs.spend;
+    case "delegation-settled":
+    case "wait":
+    case "brief":
+      return prefs.liveActivities;
+    default:
+      return false;
+  }
+}
+
 export function showNotification(
   frame: NotifyFrame,
   onOpen: (target: NotificationTarget) => void,
@@ -87,6 +115,8 @@ export function showNotification(
     ...(notificationSoundsEnabled() ? {} : { silent: true }),
   };
   const shownByPage = () => {
+    // When this standalone PWA has an active Web Push subscription for this kind, the server pushes it via sw.js.
+    if (isStandalonePwa() && webPushHandlesKind(frame.kind)) return;
     // iOS standalone PWAs expose Notification.permission but throw if new Notification() is called instead of SW showNotification().
     if ((!hasNotificationGlobal || isStandalonePwa()) && hasServiceWorker) {
       void showViaServiceWorker(title, options, frame);

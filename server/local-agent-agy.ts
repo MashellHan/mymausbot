@@ -248,15 +248,19 @@ function agyWindowUsage(samples: readonly TokenSample[], cutoff: number, verifie
     return {
       coverage: "ready",
       knownTokens: 0,
+      outputTokens: 0,
       activeSeconds: 0,
       estimatedCost: project([{ input: 0, output: 0, cacheRead: 0, models: [] }], "ready").estimatedCost,
     };
   }
+  const rawOutputTokens = observed.reduce((sum, row) => sum + row.observation.output, 0);
+  const outputTokens = Number.isSafeInteger(rawOutputTokens) ? rawOutputTokens : null;
   const activeMs = observed.reduce((sum, row) => sum + row.durationMs, 0);
   const activeSeconds = activeMs > 0 ? Math.max(1, Math.round(activeMs / 1000)) : null;
   return {
     coverage: "partial",
     knownTokens,
+    ...(outputTokens !== null ? { outputTokens } : {}),
     ...(activeSeconds !== null ? { activeSeconds } : {}),
     estimatedCost: project(observed.map(({ observation }) => observation), "partial").estimatedCost,
   };
