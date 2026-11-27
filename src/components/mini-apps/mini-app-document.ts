@@ -130,7 +130,7 @@ function buildMiniAppSdkSource(githubActivity: boolean, managedRelease: boolean,
       siteListeners.forEach(function (listener) {
         listener({ site: message.site, opening: message.opening, phase: message.phase });
       });
-    } else if ((message.type === "query-result" || message.type === "query-batch-result" || message.type === "dashboard-result" || message.type === "site-result") && pending.has(message.id)) {
+    } else if ((message.type === "query-result" || message.type === "query-batch-result" || message.type === "dashboard-result" || message.type === "site-result" || message.type === "kv-result") && pending.has(message.id)) {
       var answer = pending.get(message.id);
       pending.delete(message.id);
       if (message.error) answer.reject(new Error(String(message.error)));
@@ -170,6 +170,17 @@ function buildMiniAppSdkSource(githubActivity: boolean, managedRelease: boolean,
     dashboard: Object.freeze({ read: function (selection) {
       return ready.then(function () { return request({ mausMiniApp: 1, type: "dashboard-read", selection: selection }); });
     }${roleEditor ? ', openAgentEditor: function (selection) { return ready.then(function () { return request({ mausMiniApp: 1, type: "agent-md-edit", selection: selection }); }); }' : ""} }),
+    storage: Object.freeze({
+      get: function (keys, namespace) {
+        return ready.then(function () { return request({ mausMiniApp: 1, type: "kv-get", keys: Array.isArray(keys) ? keys : undefined, namespace: namespace || "prefs" }); });
+      },
+      set: function (entries, namespace) {
+        return ready.then(function () { return request({ mausMiniApp: 1, type: "kv-set", entries: entries || {}, namespace: namespace || "prefs" }); });
+      },
+      delete: function (keys, namespace) {
+        return ready.then(function () { return request({ mausMiniApp: 1, type: "kv-delete", keys: Array.isArray(keys) ? keys : [], namespace: namespace || "prefs" }); });
+      }
+    }),
     onDataChanged: function (listener) {
       if (typeof listener !== "function") throw new TypeError("A listener is required.");
       listeners.add(listener);

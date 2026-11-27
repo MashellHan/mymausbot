@@ -64,7 +64,7 @@ export function assertMiniAppExportPrivacy(dataDir: string, shared: boolean): vo
   if (!existsSync(database)) return;
   const db = new DatabaseSync(database, { readOnly: true });
   try {
-    if (["mini_apps", "mini_app_data_datasets"].some((table) => hasTable(db, table) && db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get())) {
+    if (["mini_apps", "mini_app_data_datasets", "mini_app_kv"].some((table) => hasTable(db, table) && db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get())) {
       throw new Error("Local Mini Apps and their Data are private to the workspace owner and cannot be included in a shared team export.");
     }
   } finally { db.close(); }

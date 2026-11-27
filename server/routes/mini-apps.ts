@@ -13,6 +13,8 @@ import { appDocRefs } from "../message-db.ts";
 import type { json as sendJson } from "../harness/http.ts";
 import { MINI_APP_TOOL_ROUTES } from "../drivers/agents-mini-app-tools.ts";
 import { MiniApps, MINI_APPS_OWNER, miniAppDocRefs, type MiniAppActor, type MiniAppChangedEvent } from "../mini-apps/registry.ts";
+import { MiniAppKvStore } from "../mini-apps/kv.ts";
+import { applicationDatabase, withApplicationWrite } from "../message-db.ts";
 import type { MiniAppReleaseSource } from "../mini-apps/release-source.ts";
 import { appFailure, parsePublish } from "../mini-apps/validation.ts";
 import { agentRoleEdit } from "../mini-apps/agent-role-edit.ts";
@@ -35,7 +37,7 @@ import { PASS, type RouteHandler } from "./table.ts";
 
 const ROOT = "/api/mini-apps";
 const REPORT_SOURCE = `${ROOT}/report-source`;
-const APP_PATH = /^\/api\/mini-apps\/([0-9a-f-]{36})(?:\/(state|query|query-batch|dashboard|publish|rollback|archive|update|agent-md))?$/;
+const APP_PATH = /^\/api\/mini-apps\/([0-9a-f-]{36})(?:\/(state|query|query-batch|dashboard|publish|rollback|archive|update|agent-md|kv))?$/;
 const HONGGUO_ACTION = /^\/api\/mini-apps\/([0-9a-f-]{36})\/hongguo\/(catalog|series|playback|history|preferences)$/;
 const HONGGUO_MEDIA = /^\/api\/mini-apps\/([0-9a-f-]{36})\/hongguo\/media\/([A-Za-z0-9_-]{1,256})$/;
 const HONGGUO_COVER = /^\/api\/mini-apps\/([0-9a-f-]{36})\/hongguo\/cover$/;
@@ -111,6 +113,7 @@ async function hongguoProviderResult<T>(read: () => Promise<T>): Promise<T> {
 export function createMiniAppRoutes(deps: MiniAppRouteDeps): RouteHandler {
   const defaults = new DefaultMiniApps(deps);
   const covers = new HongguoCovers();
+  const kvStore = new MiniAppKvStore({ database: () => applicationDatabase(), write: withApplicationWrite });
   return async (ctx) => {
     const { req, res, path, method, auth, json, readBody, url } = ctx;
     if (path !== ROOT && !path.startsWith(`${ROOT}/`)) return PASS;
@@ -126,7 +129,8 @@ export function createMiniAppRoutes(deps: MiniAppRouteDeps): RouteHandler {
       const hongguoMedia = HONGGUO_MEDIA.exec(path);
       const hongguoCover = HONGGUO_COVER.exec(path);
       const githubMedia = GITHUB_ACTIVITY_MEDIA.exec(path);
-      if (url.search && !hongguoMedia && !hongguoCover && !githubMedia) throw appFailure(400, "Query parameters are not supported.");
+      const kvRoute = /^\/api\/mini-apps\/([0-9a-f-]{36})\/kv$/.test(path);
+      if (url.search && !hongguoMedia && !hongguoCover && !githubMedia && !kvRoute) throw appFailure(400, "Query parameters are not supported.");
       if (githubMedia) {
         if (method !== "GET") throw appFailure(405, "Method not allowed.");
         const rawRevision = url.searchParams.get("expectedRevision");
@@ -331,6 +335,30 @@ export function createMiniAppRoutes(deps: MiniAppRouteDeps): RouteHandler {
       const id = match[1]!;
       const action = match[2];
       if (action === "agent-md") return await agentRoleEdit(ctx, id, owner, deps.apps, deps.roleConfiguration);
+      if (action === "kv") {
+        if (method === "GET") {
+          const ns = url.searchParams.get("namespace") ?? undefined;
+          const keysParam = url.searchParams.get("keys");
+          const keys = keysParam ? keysParam.split(",").filter(Boolean) : undefined;
+          return json(res, 200, kvStore.get(owner, id, { namespace: ns, keys }));
+        }
+        const kvBody = await readBody(req, 72_000) as Record<string, unknown>;
+        if (method === "PUT") {
+          return json(res, 200, kvStore.set(owner, id, {
+            namespace: kvBody?.namespace,
+            entries: (kvBody?.entries ?? {}) as Record<string, unknown>,
+            expectedRevision: typeof kvBody?.expectedRevision === "number" ? kvBody.expectedRevision : undefined,
+          }));
+        }
+        if (method === "DELETE") {
+          return json(res, 200, kvStore.delete(owner, id, {
+            namespace: kvBody?.namespace,
+            keys: Array.isArray(kvBody?.keys) ? kvBody.keys as string[] : [],
+            expectedRevision: typeof kvBody?.expectedRevision === "number" ? kvBody.expectedRevision : undefined,
+          }));
+        }
+        throw appFailure(405, "Method not allowed.");
+      }
       if (method === "GET" && !action) {
         const meta = typeof deps.apps.documentMeta === "function" ? deps.apps.documentMeta(owner, id) : null;
         if (meta) {

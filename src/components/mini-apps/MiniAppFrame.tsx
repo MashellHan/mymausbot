@@ -236,6 +236,10 @@ export function mountMiniAppFrame(options: {
     if (!active) return;
     host?.iframe.contentWindow?.postMessage(buildMausRpcError(id, code, message, status), "*");
   };
+  const replyKv = (id: string, result?: unknown, error?: string) => {
+    if (!active) return;
+    host?.iframe.contentWindow?.postMessage({ mausMiniApp: 1, type: "kv-result", id, ...(error ? { error } : { result }) }, "*");
+  };
   const handle = (event: MessageEvent) => {
     if (!active || !host || !host.iframe.contentWindow || event.source !== host.iframe.contentWindow) return;
     if (sitePresentation?.receive(event, host.iframe, frameInitialized)) return;
@@ -303,6 +307,51 @@ export function mountMiniAppFrame(options: {
         return;
       }
       return replyRpcError(rpcReq.id, "UNAVAILABLE", `Method '${rpcReq.method}' is not enabled for this Mini App.`);
+    }
+    if (record(event.data) && event.data.mausMiniApp === 1 && (event.data.type === "kv-get" || event.data.type === "kv-set" || event.data.type === "kv-delete")) {
+      const id = typeof event.data.id === "string" && event.data.id.length <= 100 ? event.data.id : "";
+      if (!id) return;
+      if (event.origin !== "null" || !miniAppNativeFrameGuard() || state.status !== "active" || document.app.status !== "active" || state.revision !== document.app.revision) {
+        return replyKv(id, undefined, "Preferences storage is unavailable.");
+      }
+      const namespace = event.data.namespace === "view-state" ? "view-state" : "prefs";
+      const appUrl = `/api/mini-apps/${encodeURIComponent(document.app.id)}/kv`;
+      if (event.data.type === "kv-get") {
+        const params = new URLSearchParams({ namespace });
+        if (Array.isArray(event.data.keys)) params.set("keys", event.data.keys.filter((k): k is string => typeof k === "string").join(","));
+        void api<{ entries: Record<string, unknown> }>(`${appUrl}?${params.toString()}`, { method: "GET", timeoutMs: 10_000 })
+          .then((res) => replyKv(id, res.entries))
+          .catch((err: unknown) => {
+            if (err instanceof ApiError && (err.status === 401 || err.status === 403)) options.onRevoked();
+            replyKv(id, undefined, err instanceof Error ? err.message : "Failed to read preferences.");
+          });
+        return;
+      }
+      if (event.data.type === "kv-set") {
+        const entries = record(event.data.entries) ? event.data.entries : null;
+        if (!entries) return replyKv(id, undefined, "KV entries must be an object.");
+        void api<{ entries: Record<string, unknown> }>(appUrl, {
+          method: "PUT",
+          body: JSON.stringify({ namespace, entries, expectedRevision: state.revision }),
+          timeoutMs: 10_000,
+        }).then(() => replyKv(id, undefined))
+          .catch((err: unknown) => {
+            if (err instanceof ApiError && (err.status === 401 || err.status === 403)) options.onRevoked();
+            replyKv(id, undefined, err instanceof Error ? err.message : "Failed to save preferences.");
+          });
+        return;
+      }
+      const keys = Array.isArray(event.data.keys) ? event.data.keys.filter((k): k is string => typeof k === "string") : [];
+      void api<{ entries: Record<string, unknown> }>(appUrl, {
+        method: "DELETE",
+        body: JSON.stringify({ namespace, keys, expectedRevision: state.revision }),
+        timeoutMs: 10_000,
+      }).then(() => replyKv(id, undefined))
+        .catch((err: unknown) => {
+          if (err instanceof ApiError && (err.status === 401 || err.status === 403)) options.onRevoked();
+          replyKv(id, undefined, err instanceof Error ? err.message : "Failed to delete preferences.");
+        });
+      return;
     }
     if (record(event.data) && event.data.mausMiniApp === 1 && event.data.type === "agent-md-edit") {
       const { id, selection } = event.data;
