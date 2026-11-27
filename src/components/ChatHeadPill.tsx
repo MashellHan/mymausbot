@@ -40,12 +40,12 @@ export function ChatHeadPill({ bot, avatar, privacy, remoteClient = false, onTog
   onToggle: (event: MouseEvent<HTMLButtonElement>) => void;
 }) {
   const open = useStoreSelector((state) => remoteClient ? state.settingsOpen : state.computerOpen), pendingQueued = useStoreSelector((state) => state.pendingQueued);
-  const connected = useStoreSelector((state) => state.connected);
-  const cachedHydrated = useStoreSelector((state) => Boolean(state.cachedHydrated));
+  const remotePwa = isRemotePwaMode();
+  const offlineCached = useStoreSelector((state) => remotePwa && !state.connected && Boolean(state.cachedHydrated));
   const pwaStatus = resolvePwaHeaderStatus({
-    remotePwa: isRemotePwaMode(),
-    connected,
-    cachedHydrated,
+    remotePwa,
+    connected: !offlineCached,
+    cachedHydrated: offlineCached,
     busy: Boolean(bot.busy),
     waitingOnYou: bot.activity === "waiting-on-you",
   });

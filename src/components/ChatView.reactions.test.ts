@@ -14,6 +14,7 @@ vi.mock("@/lib/cloud-guest", () => ({ useCanWriteIn: () => true, useReactor: () 
 vi.mock("./ModelPicker", () => ({ ModelPicker: () => null }));
 
 const { ChatView } = await import("./ChatView");
+const { MESSAGE_ROW } = await import("./MessageActions");
 const { BotEditorStore, initialState } = await import("@/state/store");
 const { t } = await import("@/lib/i18n");
 
@@ -57,6 +58,8 @@ afterAll(() => {
 
 describe("a 👍 that answered a bot's question, in the chat", () => {
   it("offers Reply as the primary Simple action instead of duplicating it in More", async () => {
+    const row = document.querySelector<HTMLElement>(`[data-mid="m2"] [${MESSAGE_ROW}]`)!;
+    flushSync(() => row.dispatchEvent(new PointerEvent("pointerenter", { pointerType: "mouse" })));
     const actions = document.querySelector<HTMLElement>('[data-mid="m2"] [data-testid="message-actions"]')!;
     expect(actions.querySelector('button[aria-label="Reply to message"]')).not.toBeNull();
     flushSync(() => actions.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')!.click());

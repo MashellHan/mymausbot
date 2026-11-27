@@ -75,9 +75,9 @@ describe("Settings search in Simple mode", () => {
     type("notifications");
     const first = document.querySelector<HTMLButtonElement>("[data-settings-hit]")!;
     expect(first.getAttribute("data-settings-hit")).toBe("notifications");
-    // Simple keeps notifications on This app (This browser in a tab), not on General.
-    expect(first.textContent, "a browser tab is This browser").toContain("This browser");
-    expect(first.textContent).not.toContain("General");
+    // Simple puts browser notifications on General rather than This browser.
+    expect(first.textContent, "a browser tab is General in Simple mode").toContain("General");
+    expect(first.textContent).not.toContain("This browser");
     type("phone");
     expect(document.querySelector("[data-settings-hit]")!.textContent).toContain("Phone & devices");
   });

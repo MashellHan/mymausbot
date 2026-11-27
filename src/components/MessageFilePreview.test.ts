@@ -24,6 +24,7 @@ vi.mock("@/lib/interface-mode", () => ({ useAdvancedMode: () => false, setAdvanc
 vi.mock("@/lib/use-owner-or-admin", () => ({ useOwnerOrAdmin: () => true }));
 vi.mock("./AndroidDevicePanel", () => ({ AndroidDevicePanel: () => null, useAndroidUsbDevices: () => ({ devices: [] }) }));
 vi.mock("./mini-apps/MiniAppsPanel", () => ({ MiniAppsPanel: () => createElement("div", null, "Mini Apps fixture") }));
+vi.mock("./bot-panel/use-bot-library", () => ({ useBotLibrary: () => null }));
 
 const markdown = "# Weekly review\n\nA **complete** report.\n\n| Project | Changes |\n| --- | --- |\n| Alpha | 12 |\n\n```text\nhello\n```\n\n<script>globalThis.leaked = true</script>\n\n[secret](file:///private/secret.md)\n\n[unsafe](javascript:alert(1))\n\n![remote](https://example.test/track.png)";
 const csv = 'Code,Name,Notes\n001,"Alpha, Inc","Line one\nLine two"\n9007199254740993,Beta,Ready\n';

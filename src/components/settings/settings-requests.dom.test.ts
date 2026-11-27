@@ -60,7 +60,7 @@ beforeAll(async () => {
   vi.stubGlobal("fetch", (input: string | URL | Request, init?: RequestInit) => {
     const path = String(input instanceof Request ? input.url : input).replace(/^https?:\/\/[^/]+/, "").replace(/\?.*$/, "");
     requests.push(`${init?.method ?? "GET"} ${path}`);
-    return Promise.resolve(new Response(JSON.stringify(answers[path] ?? {})));
+    return Promise.resolve(new Response(JSON.stringify(answers[path] ?? {}), { headers: { "content-type": "application/json" } }));
   });
   const container = document.createElement("div");
   document.body.append(container);

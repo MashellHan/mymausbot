@@ -22,7 +22,12 @@ function storeFor(botId: string, threadId: string): SteerStore & { messages: Mes
       messages.push(saved);
       return saved;
     },
-    patchMessage: () => null,
+    patchMessage: (_thread, messageId, patch) => {
+      const at = messages.findIndex((message) => message.id === messageId);
+      if (at === -1) return null;
+      messages[at] = { ...messages[at], ...patch };
+      return messages[at];
+    },
   };
 }
 
@@ -57,7 +62,7 @@ describe("durable accepted follow-ups", () => {
     expect(run.mock.calls[0]).toEqual([
       "bot", "thread", `Reply context\n${text}`, store.messages[0],
       ["message-0"], true,
-      { trigger: { kind: "user", email: "ada@example.test", label: "Ada's laptop" }, sender: { name: "ada@example.test" }, peerAsk: undefined },
+      { trigger: { kind: "user", email: "ada@example.test", label: "Ada's laptop" }, sender: { name: "ada@example.test" }, peerAsk: undefined, origin: undefined, messageId: first.id, text },
     ]);
     expect(store.messages).toEqual([
       expect.objectContaining({ text, replyToId: "reply", sendId: "first", queueId: first.id, dataContext: { cardId: "c_1", draftSql: "select 1" } }),
@@ -69,7 +74,7 @@ describe("durable accepted follow-ups", () => {
     expect(run.mock.calls[1]).toEqual([
       "bot", "thread", "then summarize", store.messages[1],
       ["message-1"], false,
-      { trigger: undefined, sender: undefined, peerAsk: undefined },
+      { trigger: undefined, sender: undefined, peerAsk: undefined, origin: undefined, messageId: second.id, text: "then summarize" },
     ]);
     expect(store.messages).toEqual([
       expect.objectContaining({ text, replyToId: "reply", sendId: "first", queueId: first.id }),
@@ -137,12 +142,12 @@ describe("durable accepted follow-ups", () => {
   it("keeps running a stopped steered row as itself across a restart", () => {
     const store = storeFor("bot", "thread");
     const steered = store.appendMessage("thread", { role: "user", kind: "text", text: "is the PR up?", steered: true });
-    queueSteeredMessage("bot", "thread", steered.text!, { prompt: "is the PR up?\n\n[note]", rowId: steered.id, first: true });
+    const queued = queueSteeredMessage("bot", "thread", steered.text!, { prompt: "is the PR up?\n\n[note]", rowId: steered.id, first: true });
     journal.closeMessageDb();
     restoreSteeredMessages();
     const run = vi.fn();
     drainSteeredMessages({ ...store, messagesFor: () => store.messages }, run);
-    expect(run.mock.calls[0]?.slice(2, 5)).toEqual(["is the PR up?\n\n[note]", steered, [steered.id]]);
+    expect(run.mock.calls[0]?.slice(2, 5)).toEqual(["is the PR up?\n\n[note]", { ...steered, queueId: queued.id }, [steered.id]]);
     expect(store.messages).toHaveLength(1);
   });
 
