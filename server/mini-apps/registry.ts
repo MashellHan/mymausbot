@@ -392,6 +392,12 @@ export class MiniApps {
     return { app, bindings: JSON.parse(version.bindings) as MiniAppDataBinding[] };
   }
 
+  documentMeta(actor: MiniAppActor, id: string): { app: MiniAppSummary; docId: string; etag: string } {
+    const app = this.require(actor, id);
+    const version = this.version(id, app.templateVersion);
+    return { app, docId: version.doc, etag: `W/"${app.id}:${app.revision}:${app.templateVersion}:${version.doc.slice(0, 16)}"` };
+  }
+
   document(actor: MiniAppActor, id: string): MiniAppDocument {
     const app = this.require(actor, id);
     const version = this.version(id, app.templateVersion);

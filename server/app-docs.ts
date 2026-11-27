@@ -11,6 +11,7 @@ import { writeFileAtomic } from "./atomic.ts";
 
 export const APP_DOCS_MAX_BYTES = 512 * 1024 * 1024;
 export const APP_DOCS_SWEEP_GRACE_MS = 10 * 60_000;
+export const APP_DOCS_CACHE_MAX_BYTES = 16 * 1024 * 1024;
 
 const ID = /^[0-9a-f]{64}$/;
 const KINDS = { html: ".html", data: ".json", doc: ".json", file: ".bin" } as const;
@@ -56,11 +57,64 @@ const syncFile = (file: string) => {
 export class AppDocs {
   private readonly dir: string;
   private readonly maxBytes: number;
+  private readonly cacheMaxBytes: number;
+  private readonly cache = new Map<string, { stored: StoredAppDoc; bytes: number }>();
+  private cacheBytes = 0;
   private used: number | null = null;
 
-  constructor(dir: string, options: { maxBytes?: number } = {}) {
+  constructor(dir: string, options: { maxBytes?: number; cacheMaxBytes?: number } = {}) {
     this.dir = dir;
     this.maxBytes = options.maxBytes ?? APP_DOCS_MAX_BYTES;
+    this.cacheMaxBytes = options.cacheMaxBytes ?? APP_DOCS_CACHE_MAX_BYTES;
+  }
+
+  private cacheGet(doc: string): StoredAppDoc | null {
+    const hit = this.cache.get(doc);
+    if (!hit) return null;
+    this.cache.delete(doc);
+    this.cache.set(doc, hit);
+    return hit.stored;
+  }
+
+  private cacheSet(doc: string, stored: StoredAppDoc, bytes: number): void {
+    if (this.cacheMaxBytes <= 0 || bytes > this.cacheMaxBytes) return;
+    this.cacheDelete(doc);
+    while (this.cacheBytes + bytes > this.cacheMaxBytes && this.cache.size > 0) {
+      const oldest = this.cache.keys().next().value;
+      if (oldest === undefined) break;
+      this.cacheDelete(oldest);
+    }
+    this.cache.set(doc, { stored, bytes });
+    this.cacheBytes += bytes;
+  }
+
+  private cacheDelete(doc: string): void {
+    const existing = this.cache.get(doc);
+    if (!existing) return;
+    this.cache.delete(doc);
+    this.cacheBytes = Math.max(0, this.cacheBytes - existing.bytes);
+  }
+
+  private cacheSize(stored: StoredAppDoc): number {
+    return Buffer.byteLength(stored.html, "utf8") + (stored.data ? Buffer.byteLength(JSON.stringify(stored.data), "utf8") : 0);
+  }
+
+  private verifyOnDisk(doc: string): StoredAppDoc | null {
+    if (!ID.test(doc)) return null;
+    try {
+      const manifest = JSON.parse(readFileSync(this.path("doc", doc), "utf8")) as Manifest;
+      if (manifest.v !== 1 || !ID.test(manifest.html) || (manifest.data !== null && !ID.test(manifest.data))) return null;
+      if (manifest.source !== "html" && manifest.source !== "mcp") return null;
+      if (sha256(JSON.stringify({ html: manifest.html, data: manifest.data })) !== doc) return null;
+      const html = readFileSync(this.path("html", manifest.html), "utf8");
+      if (sha256(html) !== manifest.html) return null;
+      const dataText = manifest.data ? readFileSync(this.path("data", manifest.data), "utf8") : null;
+      if (dataText !== null && sha256(dataText) !== manifest.data) return null;
+      const data = dataText ? JSON.parse(dataText) as AppDocData : undefined;
+      return { doc, source: manifest.source, html, ...(data ? { data } : {}) };
+    } catch {
+      return null;
+    }
   }
 
   private path(kind: Kind, id: string): string {
@@ -143,25 +197,17 @@ export class AppDocs {
     this.write("html", htmlId, html);
     if (data !== null && dataId !== null) this.write("data", dataId, data);
     this.write("doc", doc, manifestText);
+    this.cacheDelete(doc);
     return { ok: true, doc, bytes: Buffer.byteLength(html) };
   }
 
   read(doc: string): StoredAppDoc | null {
     if (!ID.test(doc)) return null;
-    try {
-      const manifest = JSON.parse(readFileSync(this.path("doc", doc), "utf8")) as Manifest;
-      if (manifest.v !== 1 || !ID.test(manifest.html) || (manifest.data !== null && !ID.test(manifest.data))) return null;
-      if (manifest.source !== "html" && manifest.source !== "mcp") return null;
-      if (sha256(JSON.stringify({ html: manifest.html, data: manifest.data })) !== doc) return null;
-      const html = readFileSync(this.path("html", manifest.html), "utf8");
-      if (sha256(html) !== manifest.html) return null;
-      const dataText = manifest.data ? readFileSync(this.path("data", manifest.data), "utf8") : null;
-      if (dataText !== null && sha256(dataText) !== manifest.data) return null;
-      const data = dataText ? JSON.parse(dataText) as AppDocData : undefined;
-      return { doc, source: manifest.source, html, ...(data ? { data } : {}) };
-    } catch {
-      return null;
-    }
+    const cached = this.cacheGet(doc);
+    if (cached) return cached;
+    const stored = this.verifyOnDisk(doc);
+    if (stored) this.cacheSet(doc, stored, this.cacheSize(stored));
+    return stored;
   }
 
   sweep(referenced: Iterable<string>, now = Date.now()): number {
@@ -177,6 +223,7 @@ export class AppDocs {
         unlinkSync(file);
         removed += 1;
         if (this.used !== null) this.used = Math.max(0, this.used - size);
+        if (kind === "doc") this.cacheDelete(name.slice(0, -KINDS.doc.length));
       } catch { /* gone meanwhile */ }
     };
     const keepHtml = new Set<string>();
@@ -205,7 +252,11 @@ export class AppDocs {
   }
 
   private keepBlobsOf(doc: string, html: Set<string>, data: Set<string>, files: Set<string>): void {
-    if (!this.read(doc)) throw new Error("App document references are unreadable; collection stopped.");
+    const verified = this.verifyOnDisk(doc);
+    if (!verified) {
+      this.cacheDelete(doc);
+      throw new Error("App document references are unreadable; collection stopped.");
+    }
     const manifest = JSON.parse(readFileSync(this.path("doc", doc), "utf8")) as Manifest;
     html.add(manifest.html);
     if (manifest.data !== null) {
