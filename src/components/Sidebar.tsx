@@ -84,7 +84,7 @@ import { PHONE_TOP_BUTTON, SIMPLE_CORNER_BUTTON, SIMPLE_ROW_FOCUS, SIMPLE_TOP_BU
 import { isSidebarToggle } from "@/lib/keyboard-shortcuts";
 import { SidebarRailSeparator, SimpleRailFooter } from "./SidebarSimpleRail";
 import { useShowThreads } from "@/lib/thread-preferences";
-import { useBotUnread } from "./unread-notice";
+import { useBotUnread } from "./unread-notice"; import { MobileSwipeReadRow, toggleBotUnread, toggleGroupUnread } from "./MobileSwipeReadRow";
 import { attentionHasRunningWork, attentionJumpAction, attentionUnpinAction, crossBotAttentionThreads, crossBotPinnedThreads, runningRoutineRun, SidebarBotActivity, sidebarBotActivityTasks, sidebarBotStatus } from "./SidebarBotActivity";
 import { SidebarNoBots, SidebarTileGrid } from "./SidebarTiles";
 import { BotContextMenu } from "./SidebarBotMenu";
@@ -147,7 +147,7 @@ export const GroupListItem = memo(function GroupListItem({
   onMenu: (menu: { groupId: string; x: number; y: number }) => void;
 }) {
   const dispatch = useStoreDispatch(), bots = useStoreSelector((s) => s.bots, sameDrawnBots), instances = useStoreSelector((s) => s.instances);
-  const advanced = useAdvancedMode();
+  const advanced = useAdvancedMode(), phone = useMediaQuery(PHONE_LAYOUT, false);
   const selected = useStoreSelector((s) => s.activeView === "chat" && s.selectedId === group.id);
   const [threadsOpen, setThreadsOpen] = useSearchDisclosure(`group:${group.id}`, query ?? "", searchMatchesThreads(query ?? "", group.tasks), selected);
   const wasSelected = useRef(selected);
@@ -166,6 +166,7 @@ export const GroupListItem = memo(function GroupListItem({
   const last = group.messages.at(-1);
   return (
     <>
+    <MobileSwipeReadRow enabled={phone && density !== "icons"} unread={Boolean(group.unread)} onToggleUnread={() => toggleGroupUnread(group, Boolean(group.unread), dispatch)}>
     <div className={cn("group relative", railTile && "mx-auto w-[54px]")}>
     <button
       data-sidebar-group-row={group.id}
@@ -217,7 +218,7 @@ export const GroupListItem = memo(function GroupListItem({
     {!group.dm && density !== "icons" && <button type="button" disabled={roomBusy} aria-label={t("task.newShort")} title={t(roomBusy ? "task.newBusy" : "task.newShort")}
       onClick={() => { setThreadsOpen(true); dispatch({ type: "newGroupTask", groupId: group.id }); }}
       className="pointer-events-none absolute right-1 max-md:right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded text-ink-secondary opacity-0 hover:bg-raised hover:text-ink disabled:opacity-40 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 max-md:pointer-events-auto max-md:opacity-70 touch:pointer-events-auto touch:opacity-70 touch:disabled:opacity-40"><Plus size={14} /></button>}
-    </div>
+    </div></MobileSwipeReadRow>
     {expanded && <GroupThreadList group={group} selected={selected} query={group.name.toLowerCase().includes(query.toLowerCase()) ? "" : query} />}
     </>
   );
@@ -695,7 +696,7 @@ export function useVisibleMessages(bot: Bot): Message[] {
 }
 
 export const BotListItem = memo(function BotListItem(props: BotRowProps) {
-  const advanced = useAdvancedMode(), raw = useRawPresentation();
+  const advanced = useAdvancedMode(), raw = useRawPresentation(), phone = useMediaQuery(PHONE_LAYOUT, false);
   const { bot, selected, deleting, mascotMotion, reveal, pendingQueued, instances, liveCall, density, query, dispatch, onMenu, renameRequest, botDrag: drag, botDrop: drop, botDragging: dragging } = props;
   const showThreads = useShowThreads();
   const liveMedia = useLiveMedia();
@@ -852,6 +853,7 @@ export const BotListItem = memo(function BotListItem(props: BotRowProps) {
 
   return (
     <>
+    <MobileSwipeReadRow enabled={phone && !iconOnly && !renaming && !deleting} unread={unread} onToggleUnread={() => toggleBotUnread(bot, unread, dispatch)}>
     <div className={cn("group relative", railTile && "mx-auto w-[54px]", botRowDropClass(drop, dragging))} data-bot-drop={drop ?? undefined} {...(drag && !renaming ? drag.row(bot.id) : {})}
       title={railTile ? botTooltip(bot, instances) : iconOnly ? [bot.name, bot.title?.trim()].filter(Boolean).join(" · ") : undefined}><BotDropLine place={drop} />
       {/* Keep this wrapper mounted: replacing it remounts RenameTitle and leaves the row stuck in rename mode. */}
@@ -907,7 +909,7 @@ export const BotListItem = memo(function BotListItem(props: BotRowProps) {
           <Loader2 size={12} className="animate-spin" />
         </span>
       )}
-    </div>
+    </div></MobileSwipeReadRow>
     {advanced && !iconOnly && threadsOpen && hasThreadList && <BotThreadList {...props} hidden={!showThreads}
       activityLabel={liveActivityLabel(sidebarMessage(last))}
       query={bot.name.toLowerCase().includes(query.toLowerCase()) || bot.title.toLowerCase().includes(query.toLowerCase()) ? "" : query} />}
@@ -917,10 +919,8 @@ export const BotListItem = memo(function BotListItem(props: BotRowProps) {
   );
 });
 
-export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = false }: {
-  open: boolean;
-  onClose: () => void;
-  collapseToIcons?: boolean;
+export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = false, dragProgress = null }: {
+  open: boolean; onClose: () => void; collapseToIcons?: boolean; dragProgress?: number | null;
 }) {
   const state = useStoreSelector(sidebarState, sameFields), dispatch = useStoreDispatch();
   const now = useRelativeNow();
@@ -1222,19 +1222,20 @@ export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = 
     </div>
   );
 
+  const draggingDrawer = phone && dragProgress !== null, drawerInteractive = open || dragProgress !== null;
   return (
     <aside
-      ref={sidebarRef} data-look="sidebar" data-sidebar-root={!phone || open ? "" : undefined}
+      ref={sidebarRef} data-look="sidebar" data-sidebar-root={!phone || drawerInteractive ? "" : undefined}
       tabIndex={-1}
       aria-label={t("sidebar.aria")}
       data-native-view-overlay
       data-sidebar
-      inert={phone && !open ? true : undefined}
+      inert={phone && !drawerInteractive ? true : undefined}
       onClick={(event) => {
         // The phone's list covers the whole screen: choosing the bot that is already open has to dismiss it too.
-        if (phone && open && event.target instanceof Element && !(event.target instanceof HTMLInputElement) && event.target.closest("[data-sidebar-bot-row], [data-sidebar-hero]")) onClose();
+        if (phone && open && event.target instanceof Element && !(event.target instanceof HTMLInputElement) && !event.target.closest("[data-swipe-action], [data-swipe-row-open]") && event.target.closest("[data-sidebar-bot-row], [data-sidebar-group-row], [data-sidebar-hero]")) onClose();
       }}
-      style={{ "--sidebar-width": `${raw ? 280 : sizing.width}px`, "--sidebar-max": sidePanelOpen ? advanced ? "320px" : "280px" : "calc(100vw - 320px)" } as CSSProperties}
+      style={{ "--sidebar-width": `${raw ? 280 : sizing.width}px`, "--sidebar-max": sidePanelOpen ? advanced ? "320px" : "280px" : "calc(100vw - 320px)", ...(draggingDrawer ? { transform: `translateX(${(dragProgress - 1) * 100}%)` } : {}) } as CSSProperties}
       className={cn(
         "relative flex h-full shrink-0 flex-col border-r-[0.5px] border-edge bg-panel max-md:[--scroll-fade-surface:var(--color-app)]",
         sizing.resizing && !sizing.snapping ? "transition-none" : "transition-[width] duration-200 motion-reduce:transition-none",
@@ -1244,7 +1245,7 @@ export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = 
         // this a containing block for its `fixed` descendants.
         "max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-40 max-md:w-full max-md:bg-app",
         "max-md:transition-transform max-md:duration-[240ms] max-md:ease-[cubic-bezier(0.22,1,0.36,1)] max-md:will-change-transform max-md:[contain:layout_style_paint] max-md:motion-reduce:transition-none",
-        open ? "max-md:translate-x-0" : "max-md:-translate-x-full max-md:pointer-events-none",
+        draggingDrawer ? "max-md:translate-x-0 max-md:transition-none" : open ? "max-md:translate-x-0" : "max-md:-translate-x-full max-md:pointer-events-none",
       )}
     >
       <GlassScrollFrame className="flex-1" fade><PlaceTint />
@@ -1373,11 +1374,9 @@ export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = 
           )}
           {!q && <NeedsYouButton compact={rail} />}{!q && <SidebarPeople compact={rail} onOpened={phone ? onClose : undefined} />}
           {unsectionedChief && (phone ? (
-            <PhoneHero bot={unsectionedChief} selected={botRow(unsectionedChief).selected} onOpen={() => openBotRow(dispatch, unsectionedChief, showThreads, botRow(unsectionedChief).selected)} onMenu={setMenu} />
+            <PhoneHero bot={unsectionedChief} selected={botRow(unsectionedChief).selected} deleting={Boolean(state.deletingBots[unsectionedChief.id])} onOpen={() => openBotRow(dispatch, unsectionedChief, showThreads, botRow(unsectionedChief).selected)} onMenu={setMenu} />
           ) : (
-            <div className="mb-1.5">
-              <BotListItem {...botRow(unsectionedChief)} />
-            </div>
+            <div className="mb-1.5"><BotListItem {...botRow(unsectionedChief)} /></div>
           ))}
           {sectionIds.map((id, index) => {
             const sectionName = userSectionName(id);
