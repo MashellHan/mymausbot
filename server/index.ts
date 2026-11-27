@@ -12049,7 +12049,19 @@ ROUTES.push(createBotMessageRoutes({
   onQueueSettled: (threadId, queueIds) => progressiveIntake.clearRedirectContext(threadId, queueIds),
 }));
 const liveRoots = (threadId: string, botId: string | undefined) => { const bot = botId ? store.bot(botId) : store.botByThread(threadId); return bot ? messageFileRootsForThread(bot.id, threadId).filter((root) => root !== ATTACHMENTS_DIR) : null; };
-const miniAppRoutes = createMiniAppRouteHandlers({ store, dataDir: DATA_DIR, data: dataEngine, hongguoProvider: createHongguoProvider({ dataDir: DATA_DIR }), releaseSource: sealedFixture() && Boolean(process.env.OMB_TEST_INTERNAL_CAPABILITY_KEY) && Boolean(process.env.OMB_TEST_MINI_APP_RELEASES_FILE) && !DESKTOP_MANAGED && !CLOUD_HOME && !HOSTED_WORKSPACE && utilityParentPort === undefined ? new MiniAppReleaseSource({ reader: createFixtureFileReader(process.env.OMB_TEST_MINI_APP_RELEASES_FILE!) }) : undefined, validPublisher: (id) => Boolean(store.bot(id)), routines: () => routines, localEnabled: () => !CLOUD_HOME && !HOSTED_WORKSPACE && !sharedMembership(), bots: () => store.bots, liveRows: liveAppRows, liveRoots, paused: () => workspaceMaintenance.active || moveFreeze.frozen(), suggestionWriter: (botId) => sideJobs.text("mini-app-suggestions", botId) }); reportAppsForBot = miniAppRoutes.reportAppsForBot; const { chatApps } = miniAppRoutes; ROUTES.push(miniAppRoutes.owner);
+const miniAppRoutes = createMiniAppRouteHandlers({ store, dataDir: DATA_DIR, data: dataEngine, hongguoProvider: createHongguoProvider({ dataDir: DATA_DIR }), releaseSource: sealedFixture() && Boolean(process.env.OMB_TEST_INTERNAL_CAPABILITY_KEY) && Boolean(process.env.OMB_TEST_MINI_APP_RELEASES_FILE) && !DESKTOP_MANAGED && !CLOUD_HOME && !HOSTED_WORKSPACE && utilityParentPort === undefined ? new MiniAppReleaseSource({ reader: createFixtureFileReader(process.env.OMB_TEST_MINI_APP_RELEASES_FILE!) }) : undefined, validPublisher: (id) => Boolean(store.bot(id)), routines: () => routines, localEnabled: () => !CLOUD_HOME && !HOSTED_WORKSPACE && !sharedMembership(), bots: () => store.bots, liveRows: liveAppRows, liveRoots, paused: () => workspaceMaintenance.active || moveFreeze.frozen(), suggestionWriter: (botId) => sideJobs.text("mini-app-suggestions", botId), onChanged: (event) => { if (!CLOUD_HOME && !HOSTED_WORKSPACE && !sharedMembership()) broadcast({ kind: "mini-app.changed", ...event }, { adminOnly: true }); } }); reportAppsForBot = miniAppRoutes.reportAppsForBot; const { chatApps } = miniAppRoutes; ROUTES.push(miniAppRoutes.owner);
+const miniAppDataBroadcastTimers = new Map<string, ReturnType<typeof setTimeout>>();
+dataEngine.onChanged((event) => {
+  if (CLOUD_HOME || HOSTED_WORKSPACE || sharedMembership()) return;
+  const existing = miniAppDataBroadcastTimers.get(event.datasetId);
+  if (existing) clearTimeout(existing);
+  const timer = setTimeout(() => {
+    miniAppDataBroadcastTimers.delete(event.datasetId);
+    broadcast({ kind: "mini-app.data-changed", datasetId: event.datasetId, revision: event.revision }, { adminOnly: true });
+  }, 25);
+  timer.unref?.();
+  miniAppDataBroadcastTimers.set(event.datasetId, timer);
+});
 const chatAppsMcp = createChatAppsMcp({ store, apps: chatApps, dataDir: DATA_DIR, keys: mcpKeys, storedServers: () => cfg.mcpServers ?? {}, mountedServers: engineMcpServers, personMcp: teamConnections.personMcp, probeAs: (server) => mcpServersHost.probeAs(server), oauth: mcpOAuth });
 ROUTES.push(createChatAppRoutes({ store, apps: chatApps, threadRefusal: cloudThreadRefusal, mcpRpc: chatAppsMcp.rpc, threadVisible: (auth, threadId) => (auth.kind !== "session" || sessions.isLive(auth.session.id)) && visibleTo(viewerFor(auth)).thread(threadId) }));
 const { react } = createReactions({
