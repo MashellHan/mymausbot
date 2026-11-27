@@ -5,7 +5,7 @@ import { api, ApiError } from "@/state/store";
 import { utf8Bytes } from "../../../shared/app";
 import { LOCAL_AGENT_ACTIVITY_HISTORY_CURSOR } from "../../../shared/local-dashboard";
 import type { MiniAppDataBinding, MiniAppNamedQuery } from "../../../shared/mini-app-data";
-import type { MiniAppDashboardReadResult, MiniAppDashboardRequest, MiniAppDashboardResource, MiniAppDocument, MiniAppQuery, MiniAppQueryOptions,
+import type { MiniAppDashboardReadResult, MiniAppDashboardRequest, MiniAppDashboardResource, MiniAppDocument, MiniAppQuery, MiniAppQueryBatchRequest, MiniAppQueryBatchResult, MiniAppQueryOptions,
   MiniAppQueryResult, MiniAppState } from "../../../shared/mini-apps";
 import { mountAppFrame, type AppFrameHost } from "../app/app-frame-host";
 import { appHostContext, appMaxHeight, appThemeContext } from "../app/app-host-context";
@@ -150,7 +150,7 @@ export function mountMiniAppFrame(options: {
     && state.status === "active" && state.appId === installed.id && state.revision === installed.revision && state.templateVersion === installed.templateVersion
     && document.app.id === installed.id && document.app.revision === installed.revision && document.app.templateVersion === installed.templateVersion
     && managedMiniAppSite(document) === site;
-  const controllers = new Map<AbortController, string>();
+  const controllers = new Map<AbortController, string[]>();
   const dashboardControllers = new Map<AbortController, string>();
   const mediaControllers = new Map<AbortController, string>();
   const usageFrame = document.app.dashboard?.kind === "usage" && document.app.dashboard.renderer === "html";
@@ -178,6 +178,10 @@ export function mountMiniAppFrame(options: {
   const reply = (id: string, result?: MiniAppQueryResult, error?: string) => {
     if (!active) return;
     host?.iframe.contentWindow?.postMessage({ mausMiniApp: 1, type: "query-result", id, ...(error ? { error } : { result }) }, "*");
+  };
+  const replyBatch = (id: string, result?: MiniAppQueryResult[], error?: string) => {
+    if (!active) return;
+    host?.iframe.contentWindow?.postMessage({ mausMiniApp: 1, type: "query-batch-result", id, ...(error ? { error } : { result }) }, "*");
   };
   const acceptsDashboardRequest = (resource: MiniAppDashboardResource) => {
     const { app, bindings } = document;
@@ -342,6 +346,72 @@ export function mountMiniAppFrame(options: {
       }).finally(() => dashboardControllers.delete(controller));
       return;
     }
+    if (record(event.data) && event.data.mausMiniApp === 1 && event.data.type === "query-batch") {
+      const reqId = typeof event.data.id === "string" && event.data.id && event.data.id.length <= 100 ? event.data.id : null;
+      if (!reqId) return;
+      if (!Array.isArray(event.data.queries) || event.data.queries.length < 1 || event.data.queries.length > 16) {
+        return replyBatch(reqId, undefined, "This query batch is invalid.");
+      }
+      if (!miniAppNativeFrameGuard()) return replyBatch(reqId, undefined, "This Mini App requires the guarded desktop window.");
+      if (state.appId !== document.app.id || state.status !== "active" || document.app.status !== "active") {
+        return replyBatch(reqId, undefined, "This app is archived and cannot read data.");
+      }
+      if (state.revision !== document.app.revision) return replyBatch(reqId, undefined, "Data changed while this report was being read. Refresh and try again.");
+      const items: Array<{ queryId: string; parameters: Record<string, string | string[]>; cursor?: string; expectedDataRevision: number; datasetId: string }> = [];
+      for (const rawItem of event.data.queries) {
+        const parsedItem = parseFrameQuery({ mausMiniApp: 1, type: "query", id: reqId, ...(record(rawItem) ? rawItem : {}) }, document.bindings);
+        if (!parsedItem) return replyBatch(reqId, undefined, "This query or its parameters are unavailable.");
+        const itemDataRev = state.data.find((entry) => entry.datasetId === parsedItem.binding.datasetId)?.revision;
+        if (itemDataRev === undefined) return replyBatch(reqId, undefined, "This app's data is unavailable. Refresh and try again.");
+        if (parsedItem.request.options?.expectedDataRevision !== undefined && parsedItem.request.options.expectedDataRevision !== itemDataRev) {
+          return replyBatch(reqId, undefined, "Data changed while this report was being read. Refresh and try again.");
+        }
+        items.push({
+          queryId: parsedItem.request.queryId,
+          parameters: parsedItem.request.parameters,
+          ...(parsedItem.request.options?.cursor ? { cursor: parsedItem.request.options.cursor } : {}),
+          expectedDataRevision: itemDataRev,
+          datasetId: parsedItem.binding.datasetId,
+        });
+      }
+      const now = Date.now();
+      recentReads = recentReads.filter((at) => now - at < 60_000);
+      if (recentReads.length >= MAX_READS_PER_MINUTE) return replyBatch(reqId, undefined, "Too many reads. Wait a minute and try again.");
+      recentReads.push(now);
+      const controller = new AbortController();
+      controllers.set(controller, [reqId]);
+      const revision = state.revision;
+      const body: MiniAppQueryBatchRequest = {
+        expectedRevision: revision,
+        queries: items.map(({ datasetId: _datasetId, ...rest }) => rest),
+      };
+      void api<MiniAppQueryBatchResult>(`/api/mini-apps/${encodeURIComponent(document.app.id)}/query-batch`, {
+        method: "POST", body: JSON.stringify(body), signal: controller.signal, timeoutMs: 15_000,
+      }).then((response) => {
+        if (!active || state.revision !== revision || controller.signal.aborted) return;
+        if (!miniAppNativeFrameGuard()) return replyBatch(reqId, undefined, "This Mini App requires the guarded desktop window.");
+        const pages: MiniAppQueryResult[] = [];
+        for (let i = 0; i < items.length; i += 1) {
+          const item = items[i]!;
+          if (state.data.find((entry) => entry.datasetId === item.datasetId)?.revision !== item.expectedDataRevision) {
+            return replyBatch(reqId, undefined, "Data changed while this report was being read. Refresh and try again.");
+          }
+          const entry = response.results[i];
+          if (!entry || !entry.ok) return replyBatch(reqId, undefined, entry && !entry.ok ? entry.error : "The data read failed. Try again.");
+          if (!Array.isArray(entry.result.columns) || !Array.isArray(entry.result.rows) || entry.result.rows.length > 100
+            || entry.result.revision !== item.expectedDataRevision || utf8Bytes(JSON.stringify(entry.result)) > MAX_RESULT_BYTES) {
+            return replyBatch(reqId, undefined, "This result is too large. Narrow the query or use the next page.");
+          }
+          pages.push(entry.result);
+        }
+        replyBatch(reqId, pages);
+      }).catch((error: unknown) => {
+        if (!active || controller.signal.aborted) return;
+        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) options.onRevoked();
+        replyBatch(reqId, undefined, error instanceof Error ? error.message : "The data read failed. Try again.");
+      }).finally(() => controllers.delete(controller));
+      return;
+    }
     const parsed = parseFrameQuery(event.data, document.bindings);
     if (!parsed) {
       if (record(event.data) && event.data.mausMiniApp === 1 && event.data.type === "query" && typeof event.data.id === "string") {
@@ -365,7 +435,7 @@ export function mountMiniAppFrame(options: {
     if (recentReads.length >= MAX_READS_PER_MINUTE) return reply(request.id, undefined, "Too many reads. Wait a minute and try again.");
     recentReads.push(now);
     const controller = new AbortController();
-    controllers.set(controller, request.id);
+    controllers.set(controller, [request.id]);
     const revision = state.revision;
     const body: MiniAppQuery = {
       queryId: request.queryId,
@@ -431,7 +501,7 @@ export function mountMiniAppFrame(options: {
       sitePresentation?.checkCurrent();
       hongguoMount?.update({ visible: true, refreshKey });
       if (!stateChanged) return;
-      for (const [controller, id] of controllers) { controller.abort(); reply(id, undefined, "Data changed while this report was being read. Refresh and try again."); }
+      for (const [controller, ids] of controllers) { controller.abort(); for (const id of ids) { reply(id, undefined, "Data changed while this report was being read. Refresh and try again."); replyBatch(id, undefined, "Data changed while this report was being read. Refresh and try again."); } }
       cancelDashboardReads("This dashboard changed. Refresh and try again.");
       for (const [controller, id] of mediaControllers) { controller.abort(); replyMedia(id, undefined, "Data changed while this media was being read. Refresh and try again."); }
       host?.iframe.contentWindow?.postMessage({ mausMiniApp: 1, type: "data-changed" }, "*");
@@ -453,7 +523,7 @@ export function mountMiniAppFrame(options: {
     retire() {
       if (!active) return;
       retireScoped();
-      for (const [controller, id] of controllers) { controller.abort(); reply(id, undefined, "This app was closed."); }
+      for (const [controller, ids] of controllers) { controller.abort(); for (const id of ids) { reply(id, undefined, "This app was closed."); replyBatch(id, undefined, "This app was closed."); } }
       cancelDashboardReads("This app was closed.");
       usageFrameSize?.disconnect();
       if (usageFrame) container.ownerDocument.removeEventListener("visibilitychange", cancelHiddenUsageReads);
