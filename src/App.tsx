@@ -103,8 +103,10 @@ import { useSessionEnded } from "@/lib/session-ended";
 import { PairPage } from "./pair/PairPage";
 import { refreshPublishedApps } from "@/lib/own-published-apps";
 import { isRemoteClientSession, isRemotePwaMode } from "@/lib/pwa-transport";
+import { usePwaViewportVars } from "@/lib/pwa-viewport";
 
 function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
+  usePwaViewportVars();
   const remoteClient = isRemoteClientSession();
   const remotePwa = isRemotePwaMode();
   const { state, dispatch } = useStore();

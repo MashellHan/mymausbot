@@ -6,6 +6,7 @@ import { Mic, Paperclip, Square, X } from "lucide-react";
 import { sameFields, useStoreDispatch, useStoreSelector } from "@/state/store-select"; import { useStoreRef } from "@/state/store-ref"; import { sameDrawnBots } from "@/lib/drawn-bots";
 import { visibleMessages, currentTaskBot, type Bot, type Group, type Message } from "@/state/store";
 import { cn } from "@/lib/cn";
+import { composerActionSizeClass, composerDockClass } from "@/lib/pwa-composer-dock";
 import { PHONE_LAYOUT, useMediaQuery } from "@/lib/use-media-query";
 import { useMenuMotion } from "./MenuMotion";
 import { ELEVATED_CARD, ELEVATED_FLOAT } from "./elevated";
@@ -695,7 +696,7 @@ export function Composer({
   const goal = !group?.dm ? { on: effectiveChannelMode === "goal", onToggle: toggleGoal, solo: !group } : undefined;
 
   return (
-    <div data-raw-composer={raw ? "" : undefined} className={cn("pointer-events-none relative px-5", simpleDock ? "pb-4" : "pb-3")}>
+    <div data-raw-composer={raw ? "" : undefined} className={composerDockClass({ simpleDock })}>
       {speechError && (
         <div className="pointer-events-auto mb-2 w-full rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-warning">
           {speechError}
@@ -948,8 +949,8 @@ export function Composer({
             data-composer-stop={simpleDock ? (stopInSlot ? "slot" : "beside") : undefined}
             className={cn(
               "flex shrink-0 items-center justify-center rounded-full",
-              !simpleDock ? "size-8 text-ink-secondary hover:bg-raised hover:text-ink"
-                : stopInSlot ? cn("size-7", slot.button.className)
+              !simpleDock ? "size-8 touch:size-10 text-ink-secondary hover:bg-raised hover:text-ink"
+                : stopInSlot ? cn("size-7 touch:size-10", slot.button.className)
                 : SIMPLE_CONTROL,
             )}
             style={stopInSlot ? slot.button.style : undefined}
@@ -958,14 +959,14 @@ export function Composer({
             <Square size={simpleDock ? 10 : 14} className="fill-current" />
           </button>
         )}
-        {!locked && <ComposerContextMenu bot={bot} group={group} members={members} className={cn(simpleDock ? "size-7" : "size-8", advanced || singleRow ? "text-ink-secondary hover:bg-raised hover:text-ink" : SIMPLE_CONTROL)} />}
+        {!locked && <ComposerContextMenu bot={bot} group={group} members={members} className={cn(composerActionSizeClass(simpleDock), advanced || singleRow ? "text-ink-secondary hover:bg-raised hover:text-ink" : SIMPLE_CONTROL)} />}
         {micShown && (
           <button
             onClick={toggleMic}
             aria-label={recording ? t("composer.dictation.stop") : t("composer.dictation.start")}
             className={cn(
               "flex shrink-0 items-center justify-center rounded-full",
-              simpleDock ? "size-7" : "size-8",
+              composerActionSizeClass(simpleDock),
               recording
                 ? "animate-pulse bg-danger/20 text-danger"
                 : advanced || singleRow ? "text-ink-secondary hover:bg-raised hover:text-ink" : SIMPLE_CONTROL,
