@@ -20,6 +20,7 @@ import { developedMiniApps, ensureMiniAppDevelopment, recordMiniAppDevelopment }
 import { AGENT_TEAM_NATIVE_PLACEHOLDER_SHA256, REVIEWED_AGENT_TEAM_HTML_SHA256 } from "./default-template-history.ts";
 import { parseHongguoHistory, parseHongguoPreferences } from "./hongguo-validation.ts";
 import { hasRevokedBuiltInGrant, isCustomAppTemplate, isReleaseCompatible, miniAppReleaseMapping, MiniAppReleaseSource } from "./release-source.ts";
+import { MiniAppQueryCache } from "./query-cache.ts";
 
 export const MINI_APPS_OWNER = "workspace-owner";
 
@@ -205,7 +206,8 @@ export class MiniApps {
   private readonly rate = rowRate(240, 60_000);
   private readonly running = new Map<string, number>();
   readonly docs: AppDocs;
-  readonly data: Pick<DataEngine, "validateBinding" | "readNamed" | "listDatasets">;
+  readonly data: Pick<DataEngine, "validateBinding" | "readNamed" | "listDatasets"> & Partial<Pick<DataEngine, "datasetRevisions" | "onChanged">>;
+  readonly queryCache = new MiniAppQueryCache();
   private readonly validPublisher: (id: string) => boolean;
   private readonly dashboardProviders?: LocalDashboardProviders;
   private readonly releaseSource: MiniAppReleaseSource;
@@ -224,6 +226,9 @@ export class MiniApps {
     this.dashboardProviders = deps.dashboardProviders;
     this.access = deps.access ?? { database: applicationDatabase, write: withApplicationWrite };
     this.releaseSource = deps.releaseSource ?? new MiniAppReleaseSource();
+    this.data.onChanged?.((event) => {
+      this.queryCache.evictDataset(event.datasetId, event.revision);
+    });
   }
 
   private db(): DatabaseSync {
@@ -710,11 +715,18 @@ export class MiniApps {
     });
   }
 
+  private async datasetRevisionsFor(wanted: ReadonlySet<string>): Promise<Array<{ datasetId: string; revision: number }>> {
+    if (!wanted.size) return [];
+    const list = this.data.datasetRevisions
+      ? await this.data.datasetRevisions(MINI_APPS_OWNER, wanted)
+      : (await this.data.listDatasets(MINI_APPS_OWNER)).filter((dataset) => wanted.has(dataset.datasetId));
+    return list.map(({ datasetId, revision }) => ({ datasetId, revision }));
+  }
+
   async state(actor: MiniAppActor, id: string): Promise<MiniAppState> {
     const { app, bindings } = this.versionBindings(actor, id);
     const wanted = new Set(bindings.map((binding) => binding.datasetId));
-    const data = wanted.size ? (await this.data.listDatasets(MINI_APPS_OWNER)).filter((dataset) => wanted.has(dataset.datasetId))
-      .map(({ datasetId, revision }) => ({ datasetId, revision })) : [];
+    const data = await this.datasetRevisionsFor(wanted);
     const current = this.require(actor, id);
     this.expected(current, app.revision);
     if (data.length !== wanted.size) throw appFailure(503, "A bound Data source is unavailable.");
@@ -797,9 +809,7 @@ export class MiniApps {
     if ((this.running.get(key) ?? 0) >= 8 || !this.rate.take(key)) throw appFailure(429, "Too many Mini App reads. Wait a moment.");
     this.running.set(key, (this.running.get(key) ?? 0) + 1);
     try {
-      const result = await this.data.readNamed({ ownerId: MINI_APPS_OWNER, binding, queryId: input.queryId, parameters: input.parameters,
-        scope: `${MINI_APPS_OWNER}:${id}:${app.revision}`, ...(input.cursor ? { cursor: input.cursor } : {}),
-        ...(input.expectedDataRevision === undefined ? {} : { expectedRevision: input.expectedDataRevision }) });
+      const result = await this.readNamedCached(id, app.revision, binding, input);
       const current = this.require(actor, id);
       this.expected(current, app.revision);
       if (Buffer.byteLength(JSON.stringify(result)) > 1_000_000) throw appFailure(413, "This query page is too large. Publish a smaller page size or fewer columns.");
@@ -808,5 +818,35 @@ export class MiniApps {
       const count = (this.running.get(key) ?? 1) - 1;
       if (count) this.running.set(key, count); else this.running.delete(key);
     }
+  }
+
+  private async readNamedCached(
+    id: string,
+    appRevision: number,
+    binding: MiniAppDataBinding,
+    input: MiniAppQuery,
+  ): Promise<MiniAppQueryResult> {
+    const load = () => this.data.readNamed({
+      ownerId: MINI_APPS_OWNER,
+      binding,
+      queryId: input.queryId,
+      parameters: input.parameters,
+      scope: `${MINI_APPS_OWNER}:${id}:${appRevision}`,
+      ...(input.cursor ? { cursor: input.cursor } : {}),
+      ...(input.expectedDataRevision === undefined ? {} : { expectedRevision: input.expectedDataRevision }),
+    });
+    const revisions = await this.datasetRevisionsFor(new Set([binding.datasetId]));
+    const dataRevision = revisions[0]?.revision;
+    if (dataRevision === undefined) return load();
+    if (input.expectedDataRevision !== undefined && input.expectedDataRevision !== dataRevision) return load();
+    const cacheKey = this.queryCache.key({
+      datasetId: binding.datasetId,
+      dataRevision,
+      binding,
+      queryId: input.queryId,
+      parameters: input.parameters,
+      cursor: input.cursor,
+    });
+    return this.queryCache.getOrLoad(cacheKey, binding.datasetId, load);
   }
 }
