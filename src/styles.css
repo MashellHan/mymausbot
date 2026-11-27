@@ -3919,3 +3919,13 @@ button:disabled.bg-danger {
 :root[data-reduced-motion="true"] .teams-face-in {
   animation: none !important;
 }
+
+/* Mobile PWA safe-area composer dock: clears the home indicator at rest and collapses cleanly while the virtual keyboard is open. */
+@media (max-width: 767.98px) {
+  .pwa-composer-dock {
+    padding-bottom: max(0.75rem, calc(env(safe-area-inset-bottom, 0px) + 0.375rem));
+  }
+  :root[data-kb-open="true"] .pwa-composer-dock {
+    padding-bottom: 0.5rem;
+  }
+}
