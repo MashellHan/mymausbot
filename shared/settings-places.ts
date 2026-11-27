@@ -89,6 +89,7 @@ export const SETTINGS_PLACES = [
   {"id":"analytics","path":"Settings → General → Privacy","words":["analytics","usage analytics","privacy","telemetry"],"advanced":true},
   {"id":"light-dark","path":"Settings → Appearance → Light or dark","words":["dark mode","night mode","light mode","dark","light","system"]},
   {"id":"theme","path":"Settings → Appearance → Theme","words":["skin","looks","themes"]},
+  {"id":"interface-mode","path":"Settings → Appearance → Interface mode","words":["raw","simple","advanced","interface mode"]},
   {"id":"bubbles","path":"Settings → Appearance → Use the bot's color for my messages","words":["message color","my messages","bubbles"]},
   {"id":"tool-calls","path":"Settings → Appearance → Chat","words":["tool calls","this run","chat width","font","typeface"]},
   {"id":"layout","path":"Settings → Appearance → Layout","words":["show your computers","rail","window frame","title bar","threads","tools layout","pinned","circles","universal pins","pinned panels"],"advanced":true},

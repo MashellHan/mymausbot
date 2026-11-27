@@ -1,4 +1,5 @@
 import { createContext, useContext } from "react";
+import type { InterfaceMode } from "@/lib/interface-mode";
 import type { SettingsPlace } from "./settings-context";
 import type { SettingsContext, SettingsPageId } from "./settings-index";
 
@@ -9,6 +10,7 @@ export interface SettingsShell {
   /** the section a link, a notice or search asked for; folds holding it open */
   anchor: string | null;
   go: (page: SettingsPageId, anchor?: string) => void;
+  onMode?: (mode: InterfaceMode) => void;
 }
 
 export const SettingsShellContext = createContext<SettingsShell | null>(null);

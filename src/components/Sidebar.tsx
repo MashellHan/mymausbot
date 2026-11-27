@@ -66,7 +66,7 @@ import { sidebarSectionAttention } from "@/lib/sidebar-attention";
 import { botListItemPointerIntent } from "@/lib/sidebar-selection";
 import { SidebarFooter } from "./SidebarFooter";
 import { SidebarPhoneBar } from "./SidebarPhoneBar";
-import { PhoneHero } from "./SidebarPhoneHero";
+import { PhoneHero } from "./SidebarPhoneHero"; import { PhoneBotCardGrid } from "./PhoneBotCardGrid"; import { usePhoneHomeLayout } from "@/lib/phone-home-layout";
 import { SidebarProfileMenu } from "./SidebarProfileMenu";
 import { PHONE_LAYOUT, useMediaQuery } from "@/lib/use-media-query";
 import { GlassBar, GlassScrollFrame, GlassScroller } from "./GlassScrollFrame";
@@ -929,7 +929,7 @@ export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = 
   const showThreads = useShowThreads();
   const remoteClient = window.ogb?.remoteClient?.active === true;
   const { capabilities } = useDesktopCapabilities();
-  const phone = useMediaQuery(PHONE_LAYOUT, false);
+  const phone = useMediaQuery(PHONE_LAYOUT, false), homeLayout = usePhoneHomeLayout();
   const importReturnRef = useRef<HTMLButtonElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
   const [confirm, setConfirm] = useState<{ kind: BotConfirmKind; bot: Bot } | null>(null);
@@ -1225,7 +1225,7 @@ export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = 
   const draggingDrawer = phone && dragProgress !== null, drawerInteractive = open || dragProgress !== null;
   return (
     <aside
-      ref={sidebarRef} data-look="sidebar" data-sidebar-root={!phone || drawerInteractive ? "" : undefined}
+      ref={sidebarRef} data-look="sidebar" data-sidebar-root={!phone || drawerInteractive ? "" : undefined} data-phone-layout={phone ? homeLayout : undefined}
       tabIndex={-1}
       aria-label={t("sidebar.aria")}
       data-native-view-overlay
@@ -1368,7 +1368,7 @@ export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = 
         onAvatars={(avatars) => setSidebarDensity(avatars ? "icons" : "comfortable")} style={windowNoDragStyle} />}
 
       <GlassScroller className={rail ? "[scrollbar-gutter:stable_both-edges]" : simpleDesk ? "px-3" : "px-2 max-md:px-3"}>
-        <div className={cn("flex flex-col", simpleDesk ? cn("gap-0.5 pb-2", !tiles && "pt-2") : advanced ? "gap-0.5 max-md:gap-2.5" : "gap-1 pb-2 pt-2 max-md:gap-2.5")}>
+        <div className={cn("flex flex-col", simpleDesk ? cn("gap-0.5 pb-2", !tiles && "pt-2") : advanced ? "gap-0.5 max-md:gap-2.5" : "gap-1 pb-2 pt-2 max-md:gap-2.5", phone && homeLayout === "compact" && "max-md:gap-1")}>
           {matchingBots.length === 0 && visibleGroups.length === 0 && q && q.length < MIN_QUERY && (
             <div className="px-3 py-6 text-center text-[13px] text-ink-secondary">{t("sidebar.noMatch", { query })}</div>
           )}
@@ -1416,6 +1416,7 @@ export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = 
                 className={cn(
                   "flex flex-col",
                   advanced || simpleDesk ? "gap-0.5 max-md:gap-2.5" : "gap-1 max-md:gap-2.5",
+                  phone && homeLayout === "compact" && "max-md:gap-0.5",
                   density !== "icons" && index > 0 && !simple && "pt-3",
                 )}
               >
@@ -1447,7 +1448,7 @@ export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = 
                 {!collapsed && (
                   <>
                     {id === BOTS_SECTION_ID && drops.slot}
-                    {sectionChiefItems.map((bot) => <BotListItem key={bot.id} {...botRow(bot)} />)}
+                    {!(phone && homeLayout === "cards" && id !== PINNED_SECTION_ID) && sectionChiefItems.map((bot) => <BotListItem key={bot.id} {...botRow(bot)} />)}
                     {sectionGroupItems.map((group) => roomDrag.wrap(group.id, (
                       <GroupListItem
                         key={group.id}
@@ -1457,15 +1458,9 @@ export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = 
                         onMenu={setRoomMenu}
                       />
                     )))}
-                    {id === PINNED_SECTION_ID ? (
-                      <PinnedBotRoster
-                        bots={sectionBotItems}
-                        density={density}
-                        circles={pinnedCircles}
-                        row={botRow}
-                        listItem={BotListItem}
-                      />
-                    ) : sectionBotItems.map((bot) => <BotListItem key={bot.id} {...botRow(bot)} />)}
+                    {id === PINNED_SECTION_ID ? <PinnedBotRoster bots={sectionBotItems} density={density} circles={pinnedCircles} row={botRow} listItem={BotListItem} />
+                      : phone && homeLayout === "cards" ? <PhoneBotCardGrid bots={[...sectionChiefItems, ...sectionBotItems]} row={botRow} />
+                      : sectionBotItems.map((bot) => <BotListItem key={bot.id} {...botRow(bot)} />)}
                     {!remoteClient && sectionName && layoutInteractive && !drops.naming(sectionName) && (!simple || sectionChiefItems.length + sectionGroupItems.length + sectionBotItems.length === 0) && (
                       <button onClick={() => setMoveToTeam(sectionName)} aria-label={t(state.bots.some(bot => !bot.hidden && bot.section?.trim() === sectionName) ? "team.manageBotsIn" : "team.addBotsTo", { name: sectionName })}
                         className="mx-3 my-1 flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[12px] text-ink-secondary hover:bg-raised hover:text-ink">
