@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { Action, AppState, Bot, ConfigStatus, Group } from "./store";
 import { getPwaAuth, isRemotePwaMode } from "@/lib/pwa-config";
+import { pwaPerf } from "@/lib/pwa-perf";
 import {
   consumeBootPwaCache,
   getActivePwaPrefs,
@@ -131,6 +132,16 @@ export function usePwaCacheSync(
   }, [ownerKey, dispatch, getState]);
 
   useEffect(() => {
+    if (!ownerKey || !isRemotePwaMode()) return;
+    if (state.hydrated && state.cachedHydrated) {
+      pwaPerf.mark("first_cached_paint");
+    }
+    if (state.hydrated && !state.cachedHydrated && state.connected) {
+      pwaPerf.mark("first_live_sse_connected");
+    }
+  }, [ownerKey, state.hydrated, state.cachedHydrated, state.connected]);
+
+  useEffect(() => {
     if (!ownerKey || !isRemotePwaMode() || !state.hydrated || state.cachedHydrated || !state.connected) return;
     void defaultOutboxManager.handleReconnect();
   }, [ownerKey, state.hydrated, state.cachedHydrated, state.connected]);
@@ -156,13 +167,19 @@ export function usePwaCacheSync(
     const persist = () => {
       const current = latestRef.current;
       if (!current.hydrated || current.cachedHydrated) return;
+      const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
       void writePwaSnapshot({
         ownerKey,
         bots: current.bots,
         groups: current.groups,
         sections: current.sections ?? [],
         config: current.config,
-      }).catch(() => {});
+      })
+        .then(() => {
+          const elapsed = (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt;
+          pwaPerf.recordSnapshotWrite(elapsed);
+        })
+        .catch(() => {});
     };
     if (!savedFirstLive.current) {
       savedFirstLive.current = true;
