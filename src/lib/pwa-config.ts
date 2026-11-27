@@ -71,6 +71,20 @@ export const DEFAULT_PWA_RELAY_ORIGIN = "https://relay.mxhan.com";
 
 const PAIR_REQUEST_PREFIX = "omb.pwa.pairRequest.";
 const OMB_PWA_AUTH_BACKUP_KEY = "omb.pwa.auth.v1";
+const IDB_OPEN_TIMEOUT_MS = 5000;
+const IDB_OPEN_BLOCKED_MS = 1500;
+const IDB_TX_TIMEOUT_MS = 5000;
+const IDB_RETRY_DELAY_MS = 150;
+
+type DpopKeyReadResult =
+  | { status: "ok"; pair: CryptoKeyPair }
+  | { status: "missing" }
+  | { status: "error" };
+
+type StoredAuthReadResult =
+  | { status: "ok"; record: PwaAuthRecord; dpop: DpopKeyReadResult | null }
+  | { status: "missing" }
+  | { status: "error" };
 
 export type PwaPairingBootResult =
   | { status: "none" }
@@ -250,18 +264,21 @@ async function pairAttemptKey(relayUrl: string, credential: string): Promise<str
 async function getOrCreatePairRequestId(relayUrl: string, credential: string): Promise<string> {
   const key = `${PAIR_REQUEST_PREFIX}${await pairAttemptKey(relayUrl, credential)}`;
   try {
-    const existing = globalThis.sessionStorage?.getItem(key);
-    if (existing) return existing;
-    const created = randomUuid();
-    globalThis.sessionStorage?.setItem(key, created);
-    return created;
+    const storage = globalThis.sessionStorage;
+    if (storage && typeof storage.getItem === "function" && typeof storage.setItem === "function") {
+      const existing = storage.getItem(key);
+      if (existing) return existing;
+      const created = randomUuid();
+      storage.setItem(key, created);
+      return created;
+    }
   } catch {
-    const existing = memoryPairRequests.get(key);
-    if (existing) return existing;
-    const created = randomUuid();
-    memoryPairRequests.set(key, created);
-    return created;
   }
+  const existing = memoryPairRequests.get(key);
+  if (existing) return existing;
+  const created = randomUuid();
+  memoryPairRequests.set(key, created);
+  return created;
 }
 
 async function clearPairRequestId(relayUrl: string, credential: string): Promise<void> {
@@ -284,7 +301,7 @@ function resolveIdbFactory(override?: IDBFactory): IDBFactory | null {
 
 export function openPwaDb(
   idbFactory?: IDBFactory,
-  { timeoutMs = 3000, blockedMs = 500 }: { timeoutMs?: number; blockedMs?: number } = {},
+  { timeoutMs = IDB_OPEN_TIMEOUT_MS, blockedMs = IDB_OPEN_BLOCKED_MS }: { timeoutMs?: number; blockedMs?: number } = {},
 ): Promise<IDBDatabase | null> {
   const idb = resolveIdbFactory(idbFactory);
   if (!idb) return Promise.resolve(null);
@@ -348,6 +365,10 @@ export function openPwaDb(
     };
     req.onsuccess = () => {
       const db = req.result;
+      if (settled) {
+        try { db?.close?.(); } catch {}
+        return;
+      }
       if (db && typeof db === "object") {
         db.onversionchange = () => {
           try {
@@ -411,49 +432,127 @@ function deleteBackupAuth(): void {
   }
 }
 
-async function readStoredAuth(idbFactory?: IDBFactory): Promise<PwaAuthRecord | null> {
-  const db = await openPwaDb(idbFactory).catch(() => null);
-  let fromIdb: PwaAuthRecord | null = null;
+function withIdbTimeout<T>(fallback: T, run: (finish: (val: T) => void) => void): Promise<T> {
+  return new Promise<T>((resolve) => {
+    let done = false;
+    const finish = (val: T) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve(val);
+    };
+    const timer = setTimeout(() => finish(fallback), IDB_TX_TIMEOUT_MS);
+    try {
+      run(finish);
+    } catch {
+      finish(fallback);
+    }
+  });
+}
+
+function hasObjectStore(db: IDBDatabase, name: string): boolean | null {
+  try {
+    return db.objectStoreNames.contains(name);
+  } catch {
+    return null;
+  }
+}
+
+async function openPwaDbState(idbFactory?: IDBFactory): Promise<{ db: IDBDatabase | null; error: boolean }> {
+  try {
+    return { db: await openPwaDb(idbFactory), error: false };
+  } catch {
+    return { db: null, error: true };
+  }
+}
+
+function readDpopKeyFromDb(db: IDBDatabase, ownerKey: string): Promise<DpopKeyReadResult> {
+  if (!ownerKey) return Promise.resolve({ status: "missing" });
+  const hasStore = hasObjectStore(db, OMB_PWA_DPOP_STORE);
+  if (hasStore !== true) return Promise.resolve({ status: hasStore === false ? "missing" : "error" });
+  return withIdbTimeout<DpopKeyReadResult>({ status: "error" }, (finish) => {
+    const tx = db.transaction(OMB_PWA_DPOP_STORE, "readonly");
+    tx.onerror = () => finish({ status: "error" });
+    tx.onabort = () => finish({ status: "error" });
+    const req = tx.objectStore(OMB_PWA_DPOP_STORE).get(ownerKey);
+    req.onsuccess = () =>
+      finish(isCryptoKeyPair(req.result) ? { status: "ok", pair: req.result } : { status: "missing" });
+    req.onerror = () => finish({ status: "error" });
+  });
+}
+
+function readStoredAuthFromDb(db: IDBDatabase): Promise<StoredAuthReadResult> {
+  const hasAuth = hasObjectStore(db, OMB_PWA_AUTH_STORE);
+  if (hasAuth !== true) return Promise.resolve({ status: hasAuth === false ? "missing" : "error" });
+  const hasDpop = hasObjectStore(db, OMB_PWA_DPOP_STORE);
+  if (hasDpop === null) return Promise.resolve({ status: "error" });
+  return withIdbTimeout<StoredAuthReadResult>({ status: "error" }, (finish) => {
+    const tx = db.transaction(hasDpop ? [OMB_PWA_AUTH_STORE, OMB_PWA_DPOP_STORE] : OMB_PWA_AUTH_STORE, "readonly");
+    tx.onerror = () => finish({ status: "error" });
+    tx.onabort = () => finish({ status: "error" });
+    const authReq = tx.objectStore(OMB_PWA_AUTH_STORE).get(OMB_PWA_AUTH_ACTIVE_KEY);
+    authReq.onerror = () => finish({ status: "error" });
+    authReq.onsuccess = () => {
+      if (!isValidStoredAuth(authReq.result)) {
+        finish({ status: "missing" });
+        return;
+      }
+      const record = authReq.result;
+      if (record.dpopBound !== true) {
+        finish({ status: "ok", record, dpop: null });
+        return;
+      }
+      if (!hasDpop) {
+        finish({ status: "ok", record, dpop: { status: "missing" } });
+        return;
+      }
+      try {
+        const dpopReq = tx.objectStore(OMB_PWA_DPOP_STORE).get(record.ownerKey);
+        dpopReq.onsuccess = () =>
+          finish({
+            status: "ok",
+            record,
+            dpop: isCryptoKeyPair(dpopReq.result) ? { status: "ok", pair: dpopReq.result } : { status: "missing" },
+          });
+        dpopReq.onerror = () => finish({ status: "ok", record, dpop: { status: "error" } });
+      } catch {
+        finish({ status: "ok", record, dpop: { status: "error" } });
+      }
+    };
+  });
+}
+
+async function readStoredAuthState(idbFactory?: IDBFactory): Promise<StoredAuthReadResult> {
+  const { db, error: openError } = await openPwaDbState(idbFactory);
+  let dbResult: StoredAuthReadResult = { status: openError ? "error" : "missing" };
+  let backup: PwaAuthRecord | null = null;
+  let backupDpop: DpopKeyReadResult | null = null;
+
   if (db) {
     try {
-      fromIdb = await new Promise<PwaAuthRecord | null>((resolve) => {
-        let done = false;
-        const finish = (val: PwaAuthRecord | null) => {
-          if (done) return;
-          done = true;
-          clearTimeout(timer);
-          resolve(val);
-        };
-        const timer = setTimeout(() => finish(null), 3000);
-        try {
-          const tx = db.transaction(OMB_PWA_AUTH_STORE, "readonly");
-          const req = tx.objectStore(OMB_PWA_AUTH_STORE).get(OMB_PWA_AUTH_ACTIVE_KEY);
-          req.onsuccess = () => finish(isValidStoredAuth(req.result) ? req.result : null);
-          req.onerror = () => finish(null);
-          tx.onerror = () => finish(null);
-          tx.onabort = () => finish(null);
-        } catch {
-          finish(null);
-        }
-      });
+      dbResult = await readStoredAuthFromDb(db);
+      if (dbResult.status === "ok") {
+        if (idbFactory === undefined && (dbResult.dpop === null || dbResult.dpop.status === "ok")) deleteBackupAuth();
+        return dbResult;
+      }
+      if (dbResult.status === "missing" && idbFactory === undefined) {
+        backup = readBackupAuth();
+        if (backup?.dpopBound === true) backupDpop = await readDpopKeyFromDb(db, backup.ownerKey);
+      }
     } finally {
       db.close();
     }
   }
-  if (fromIdb) {
-    if (idbFactory === undefined) deleteBackupAuth();
-    return fromIdb;
+
+  if (idbFactory !== undefined) return dbResult;
+  backup ??= readBackupAuth();
+  if (!backup) return dbResult;
+  if (!backup.dpopBound) {
+    void writeStoredAuth(backup).then((ok) => { if (ok) deleteBackupAuth(); }).catch(() => undefined);
+    return { status: "ok", record: backup, dpop: null };
   }
-  if (idbFactory !== undefined) return null;
-  const backup = readBackupAuth();
-  if (backup && !backup.dpopBound) {
-    void writeStoredAuth(backup)
-      .then((ok) => {
-        if (ok) deleteBackupAuth();
-      })
-      .catch(() => undefined);
-  }
-  return backup;
+  const dpop: DpopKeyReadResult = backupDpop ?? { status: dbResult.status === "error" ? "error" : "missing" };
+  return { status: "ok", record: backup, dpop };
 }
 
 async function writeStoredAuth(record: PwaAuthRecord, idbFactory?: IDBFactory): Promise<boolean> {
@@ -492,32 +591,18 @@ async function clearAllStoredPwaData(idbFactory?: IDBFactory): Promise<void> {
       }
     });
     if (storeNames.length === 0) return;
-    await new Promise<void>((resolve) => {
-      let settled = false;
-      const done = () => {
-        if (settled) return;
-        settled = true;
-        resolve();
-      };
-      try {
-        const tx = db.transaction(storeNames, "readwrite");
-        for (const name of storeNames) {
-          try {
-            const store = tx.objectStore(name);
-            if (typeof store.clear === "function") {
-              store.clear();
-            } else if (name === OMB_PWA_AUTH_STORE) {
-              store.delete(OMB_PWA_AUTH_ACTIVE_KEY);
-            }
-          } catch {
-          }
-        }
-        tx.oncomplete = done;
-        tx.onerror = done;
-        tx.onabort = done;
-      } catch {
-        done();
+    await withIdbTimeout<void>(undefined, (done) => {
+      const tx = db.transaction(storeNames, "readwrite");
+      for (const name of storeNames) {
+        try {
+          const store = tx.objectStore(name);
+          if (typeof store.clear === "function") store.clear();
+          else if (name === OMB_PWA_AUTH_STORE) store.delete(OMB_PWA_AUTH_ACTIVE_KEY);
+        } catch {}
       }
+      tx.oncomplete = () => done(undefined);
+      tx.onerror = () => done(undefined);
+      tx.onabort = () => done(undefined);
     });
   } finally {
     db.close();
@@ -545,37 +630,28 @@ async function runDpopStoreTx<T>(
   if (!db) return fallback;
   try {
     if (!db.objectStoreNames.contains(OMB_PWA_DPOP_STORE)) return fallback;
-    return await new Promise<T>((resolve) => {
-      let done = false;
-      const finish = (val: T) => {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        resolve(val);
-      };
-      const timer = setTimeout(() => finish(fallback), 3000);
-      try {
-        const tx = db.transaction(OMB_PWA_DPOP_STORE, mode);
-        tx.onerror = () => finish(fallback);
-        tx.onabort = () => finish(fallback);
-        run(tx.objectStore(OMB_PWA_DPOP_STORE), tx, finish);
-      } catch {
-        // Some runtimes reject structured clone of non-extractable CryptoKey objects.
-        finish(fallback);
-      }
+    // Some runtimes reject structured clone of non-extractable CryptoKey objects.
+    return await withIdbTimeout(fallback, (finish) => {
+      const tx = db.transaction(OMB_PWA_DPOP_STORE, mode);
+      tx.onerror = () => finish(fallback);
+      tx.onabort = () => finish(fallback);
+      run(tx.objectStore(OMB_PWA_DPOP_STORE), tx, finish);
     });
   } finally {
     db.close();
   }
 }
 
-export function readDpopKey(ownerKey: string, idbFactory?: IDBFactory): Promise<CryptoKeyPair | null> {
-  if (!ownerKey) return Promise.resolve(null);
-  return runDpopStoreTx<CryptoKeyPair | null>("readonly", null, idbFactory, (store, _tx, finish) => {
-    const req = store.get(ownerKey);
-    req.onsuccess = () => finish(isCryptoKeyPair(req.result) ? req.result : null);
-    req.onerror = () => finish(null);
-  });
+export async function readDpopKey(ownerKey: string, idbFactory?: IDBFactory): Promise<CryptoKeyPair | null> {
+  if (!ownerKey) return null;
+  const { db } = await openPwaDbState(idbFactory);
+  if (!db) return null;
+  try {
+    const result = await readDpopKeyFromDb(db, ownerKey);
+    return result.status === "ok" ? result.pair : null;
+  } finally {
+    db.close();
+  }
 }
 
 export function writeDpopKey(
@@ -644,12 +720,17 @@ export async function clearPwaAuth(idbFactory?: IDBFactory): Promise<void> {
   if (idbFactory === undefined) {
     deleteBackupAuth();
   }
-  const storedOwnerKey = activeOwnerKey ?? (await readStoredAuth(idbFactory))?.ownerKey ?? null;
+  const stored = activeOwnerKey ? null : await readStoredAuthState(idbFactory);
+  const storedOwnerKey = activeOwnerKey ?? (stored?.status === "ok" ? stored.record.ownerKey : null);
   if (storedOwnerKey) {
     await deleteDpopKey(storedOwnerKey, idbFactory);
   }
   await clearStoredDpopKeys(idbFactory);
   await clearAllStoredPwaData(idbFactory);
+}
+
+function isTransientAuthReadError(result: StoredAuthReadResult): boolean {
+  return result.status === "error" || (result.status === "ok" && result.dpop?.status === "error");
 }
 
 export function initPwaAuth(idbFactory?: IDBFactory): Promise<PwaAuthRecord | null> {
@@ -658,25 +739,37 @@ export function initPwaAuth(idbFactory?: IDBFactory): Promise<PwaAuthRecord | nu
     return Promise.resolve(null);
   }
   if (initPromise) return initPromise;
-  initPromise = readStoredAuth(idbFactory)
-    .then(async (record) => {
-      if (record?.dpopBound === true) {
-        const pair = await readDpopKey(record.ownerKey, idbFactory);
-        if (!pair?.privateKey) {
-          await clearPwaAuth(idbFactory);
-          return null;
-        }
-        setActivePwaAuth(record, pair.privateKey);
-        return record;
-      }
-      setActivePwaAuth(record, null);
-      return record;
-    })
-    .catch(() => {
+  const resetPending = () => {
+    if (initPromise === pending) {
+      initPromise = null;
+      setActivePwaAuth(null);
+    }
+    return null;
+  };
+  const pending: Promise<PwaAuthRecord | null> = (async () => {
+    let result = await readStoredAuthState(idbFactory);
+    if (isTransientAuthReadError(result)) {
+      await new Promise((resolve) => setTimeout(resolve, IDB_RETRY_DELAY_MS));
+      result = await readStoredAuthState(idbFactory);
+    }
+    if (isTransientAuthReadError(result)) return resetPending();
+    if (result.status !== "ok") {
       setActivePwaAuth(null);
       return null;
-    });
-  return initPromise;
+    }
+    if (result.record.dpopBound === true) {
+      if (result.dpop?.status === "ok" && result.dpop.pair.privateKey) {
+        setActivePwaAuth(result.record, result.dpop.pair.privateKey);
+        return result.record;
+      }
+      await clearPwaAuth(idbFactory);
+      return null;
+    }
+    setActivePwaAuth(result.record, null);
+    return result.record;
+  })().catch(resetPending);
+  initPromise = pending;
+  return pending;
 }
 
 export function pwaReady(): Promise<PwaAuthRecord | null> {
