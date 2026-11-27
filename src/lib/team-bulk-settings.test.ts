@@ -185,8 +185,8 @@ describe("team-wide settings", () => {
 
   it("is offered in the team menu only when the caller passes the owner's action", () => {
     const base = { onAddBots: vi.fn(), onRename: vi.fn(), onShare: vi.fn(), onDelete: vi.fn() };
-    expect(renderToStaticMarkup(createElement(TeamMenuItems, base))).not.toContain("Set for all bots");
-    expect(renderToStaticMarkup(createElement(TeamMenuItems, { ...base, onSetForAll: vi.fn() }))).toContain("Set for all bots in this department…");
+    expect(renderToStaticMarkup(createElement(TeamMenuItems, base))).not.toContain("Settings for all bots");
+    expect(renderToStaticMarkup(createElement(TeamMenuItems, { ...base, onSetForAll: vi.fn() }))).toContain("Settings for all bots…");
   });
 });
 

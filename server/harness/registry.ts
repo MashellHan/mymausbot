@@ -11,6 +11,7 @@ import { withUnaskedStops } from "./unasked-stop.ts";
 import { withTurnScope } from "../crash-guard.ts";
 import { withWslNotice } from "./wsl-launch.ts";
 import { modelManifest, startModelManifestRefresh } from "../model-manifest/manifest.ts";
+import { signInMethodOf } from "../sign-in-trace.ts";
 export { engineMemory } from "../engine-memory.ts";
 import { clientInstall } from "../contracts.ts";
 import type {
@@ -572,11 +573,9 @@ export class ProviderRegistry {
           install: withServerInstall(driver?.install, npmPresent, this.appStandaloneCopy(driver, cli ?? cliDefaultOf(driver))),
           authentication: inst.startAuthentication
             ? {
-                method: inst.authenticationMethod ?? (inst.getAuthentication && inst.completeAuthentication
-                  ? "paste-code" as const // a link to open, then a code pasted back (Claude)
-                  : inst.getAuthentication
-                    ? "device-code" as const // a code to enter at the provider's page (Codex)
-                    : "callback-url" as const), // a link and a callback URL (managed engines)
+                // Named, else a link then a code pasted back (Claude), a code to enter at the provider's page (Codex), or a link
+                // and a callback URL (managed engines).
+                method: signInMethodOf(inst),
                 signOut: inst.signOut !== undefined,
               }
             : undefined,

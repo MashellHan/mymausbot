@@ -7,6 +7,7 @@ import type { ModelSelection } from "../contracts.ts";
 import { journalFile } from "../memory-journal.ts";
 import * as mdb from "../message-db.ts";
 import { Store } from "../store.ts";
+import { createAttachmentReferences } from "../attachment-references.ts";
 import { createDeleteLeftovers, engineSessionFolders, type DeleteLeftoversDeps } from "./delete-leftovers.ts";
 import { memoryLayerRecords } from "./team-member-left.ts";
 
@@ -27,9 +28,9 @@ function fixture(over: Partial<DeleteLeftoversDeps> = {}) {
   const leftovers = createDeleteLeftovers({
     dataDir: DATA_DIR,
     store,
-    threadsReferencing: mdb.threadsReferencing,
+    references: createAttachmentReferences(),
     keptAttachments: () => new Set(),
-    deleteAttachment: (name) => rmSync(join(DATA_DIR, "attachments", name)),
+    deleteAttachments: (names) => { for (const name of names) rmSync(join(DATA_DIR, "attachments", name)); },
     engineFolders: () => engineSessionFolders(DATA_DIR, [{ HOME }]),
     layers: memoryLayerRecords,
     defer: () => {},
@@ -51,49 +52,50 @@ function fixture(over: Partial<DeleteLeftoversDeps> = {}) {
 describe("deleting through the store", () => {
   beforeEach(() => rmSync(DATA_DIR, { recursive: true, force: true }));
 
-  it("removes a deleted conversation's upload, engine session and box uploads, and keeps the files it made", () => {
+  it("removes a deleted conversation's upload, engine session and box uploads, and keeps the files it made", async () => {
     const { store, bot, task, files, leftovers } = fixture();
     const made = put(join(DATA_DIR, "task-workspaces", bot.id, task.threadId, "result.txt"));
     expect(store.deleteTask(bot.id, task.threadId)).not.toBeNull();
-    leftovers.flush();
+    await leftovers.flush();
     expect(Object.values(files).filter(existsSync)).toEqual([]);
     expect(existsSync(made)).toBe(true);
   });
 
-  it("keeps an upload a conversation that stays also shows", () => {
+  it("keeps an upload a conversation that stays also shows", async () => {
     const { store, bot, task, files, leftovers } = fixture();
     store.appendMessage(bot.threadId, { role: "user", kind: "text", text: `![image](/api/attachments/${UPLOAD})` });
     store.deleteTask(bot.id, task.threadId);
-    leftovers.flush();
+    await leftovers.flush();
     expect([existsSync(files.upload), existsSync(files.session)]).toEqual([true, false]);
   });
 
-  it("removes nothing when the delete itself fails", () => {
+  it("removes nothing when the delete itself fails", async () => {
     const { store, bot, task, files, leftovers } = fixture();
     vi.spyOn(store as unknown as { commitBotChange: () => void }, "commitBotChange").mockImplementationOnce(() => { throw new Error("fixture write failure"); });
     expect(() => store.deleteTask(bot.id, task.threadId)).toThrow("fixture write failure");
-    leftovers.flush();
+    await leftovers.flush();
     expect(store.messagesFor(task.threadId)).toHaveLength(1);
     expect(Object.values(files).filter((path) => !existsSync(path))).toEqual([]);
   });
 
-  it("deletes the conversation even when the cleanup fails", () => {
+  it("deletes the conversation even when the cleanup fails", async () => {
     const { store, bot, task, files, warnings, leftovers } = fixture({
-      deleteAttachment: () => { throw new Error("disk is read-only"); },
+      deleteAttachments: () => { throw new Error("disk is read-only"); },
       engineFolders: () => { throw new Error("no engine folders"); },
     });
     expect(store.deleteTask(bot.id, task.threadId)).not.toBeNull();
-    expect(() => leftovers.flush()).not.toThrow();
+    await expect(leftovers.flush()).resolves.toBeUndefined();
     expect(store.taskByThread(bot.id, task.threadId)).toBeFalsy();
     expect(mdb.threadsReferencing(UPLOAD)).toEqual([]);
     expect(existsSync(files.upload)).toBe(true);
+    // The uploads go last, after the pass over the transcripts.
     expect(warnings).toEqual([
-      `delete leftovers: the upload ${UPLOAD} stayed behind: disk is read-only`,
       "delete leftovers: engine sessions stayed behind: no engine folders",
+      `delete leftovers: the upload ${UPLOAD} stayed behind: disk is read-only`,
     ]);
   });
 
-  it("removes a deleted bot's uploads, sessions, checkpoints, memory layers and memory journal, and keeps the files it made", () => {
+  it("removes a deleted bot's uploads, sessions, checkpoints, memory layers and memory journal, and keeps the files it made", async () => {
     const { store, bot, files, leftovers } = fixture();
     const layer = `${bot.id}--member-p_bobbobbobbobbobbobbobb`;
     const mine = [
@@ -106,12 +108,12 @@ describe("deleting through the store", () => {
     const other = store.createBot({ name: "Ledger" });
     const others = [put(join(DATA_DIR, "checkpoints", other.id, "0123456789abcdef", ".git", "HEAD")), put(journalFile(other.id)), put(join(DATA_DIR, "task-workspaces", bot.id, bot.threadId, "result.txt"))];
     expect(store.deleteBot(bot.id)).toBe(true);
-    leftovers.flush();
+    await leftovers.flush();
     expect(mine.filter(existsSync)).toEqual([]);
     expect(others.filter((path) => !existsSync(path))).toEqual([]);
   });
 
-  it("removes a deleted group chat's uploads", () => {
+  it("removes a deleted group chat's uploads", async () => {
     const { store, bot, leftovers } = fixture();
     const other = store.createBot({ name: "Ledger" });
     const room = store.createGroup("Launch team", [bot.id, other.id], false);
@@ -119,7 +121,7 @@ describe("deleting through the store", () => {
     const upload = put(join(DATA_DIR, "attachments", name));
     store.appendMessage(room.threadId, { role: "user", kind: "text", text: `![image](/api/attachments/${name})` });
     expect(store.deleteGroup(room.id)).toBe(true);
-    leftovers.flush();
+    await leftovers.flush();
     expect(existsSync(upload)).toBe(false);
   });
 });

@@ -3023,7 +3023,6 @@
   "engineSetup.device.connectedAccount": "ChatGPT połączono",
   "engineSetup.device.copyCode": "Kopiuj kod logowania",
   "engineSetup.device.description": "Połącz swoje konto ChatGPT z Codex. Dokończ logowanie we własnej przeglądarce; nie potrzebujesz terminala ani udostępniania hasła.",
-  "engineSetup.device.enableHint": "Logowanie kodem urządzenia może wymagać włączenia w ustawieniach bezpieczeństwa ChatGPT lub przez administratora ChatGPT.",
   "engineSetup.device.enterCode": "Wpisz ten jednorazowy kod na stronie logowania OpenAI:",
   "engineSetup.device.expired": "Ten kod wygasł. Poproś o nowy kod, aby spróbować ponownie.",
   "engineSetup.device.expires": "Kod wygasa o {time}",
@@ -6639,7 +6638,7 @@
   "teamSettings.intro": "Dotyczy botów w tym dziale (liczba: {count}), po jednym naraz, z tymi samymi kontrolami co w ustawieniach każdego bota. Boty, które zostałyby odrzucone, są pomijane i wyświetlane z powodem.",
   "teamSettings.keepEffort": "Zachowaj wysiłek każdego bota",
   "teamSettings.keepModel": "Zachowaj model każdego bota",
-  "teamSettings.menu": "Ustaw dla wszystkich botów w tym dziale…",
+  "teamSettings.menu": "Ustawienia wszystkich botów…",
   "teamSettings.model": "Model",
   "teamSettings.preview": "Co otrzyma każdy bot",
   "teamSettings.progress": "{done} z {count}…",
@@ -7210,5 +7209,10 @@
   "decider.provider.line": "Albo użyj klucza innego dostawcy dla tych małych modeli.",
   "computer.worksOnHintServer": "Wybierz, gdzie pracuje ten bot. Komputera udostępnionego z aplikacji {app} na komputer nie wybiera się tutaj: po prostu poproś bota, żeby go użył.",
   "settings.ai.otherServicesLine": "Klucze do głosów, komputerów, aplikacji i pomocników, poza twoimi głównymi modelami.",
-  "botPanel.library.showAll": "Pokaż wszystkie"
+  "botPanel.library.showAll": "Pokaż wszystkie",
+  "server.chief.retryQueued": "Ponowna próba w wątku #{title} ({name}) czeka w kolejce",
+  "attach.previewOutsideWorkspace": "Ten plik znajduje się poza folderem roboczym tego czatu, więc nie można go tu otworzyć. Poproś bota, który go zapisał, o dołączenie kopii.",
+  "accounts.claude.emailCode": "To wygląda na kod logowania, który Claude wysyła e-mailem. Wpisz go na stronie Claude, kliknij Autoryzuj, a potem wklej dłuższy kod, który pokaże Claude.",
+  "engineSetup.device.enableNote": "Jeśli OpenAI informuje, że logowanie kodem urządzenia jest niedozwolone, włącz je w ChatGPT → Ustawienia → Bezpieczeństwo (może to wymagać administratora ChatGPT), a potem spróbuj ponownie.",
+  "engineSetup.device.interrupted": "To logowanie zostało przerwane. Zacznij od nowa."
 }

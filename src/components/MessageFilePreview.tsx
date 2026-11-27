@@ -6,6 +6,7 @@ import { t } from "@/lib/i18n";
 import { requestMessageFile, saveFailureText, useLocalFileSave } from "./AttachmentPreview";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { SaveIconButton } from "./HtmlFilePreview";
+import { OutsideWorkspacePreview, canOpenOutsideWorkspace, refusedAsOutsideWorkspace } from "./OutsideWorkspacePreview";
 import { readTableResponse, TableFileContent } from "./TableFilePreview";
 
 const WhatChangedContent = lazy(() => import("./WhatChangedView"));
@@ -45,31 +46,39 @@ export function MessageFilePreview({ file, onBack }: { file: PreviewFile; onBack
 }
 
 function MarkdownFileContent({ file }: { file: PreviewFile }) {
+  const fileKey = `${file.message.threadId}:${file.message.messageId}:${file.path}`;
   const [attempt, setAttempt] = useState(0);
   const [source, setSource] = useState<string | null>(null);
   const [error, setError] = useState<"size" | "format" | "load" | "outside_workspace" | null>(null);
+  const [canOpenOutside, setCanOpenOutside] = useState(false);
+  const [allowOutsideFor, setAllowOutsideFor] = useState<string | null>(null);
+  const allowOutside = allowOutsideFor === fileKey;
   useEffect(() => {
     const controller = new AbortController();
     setSource(null);
     setError(null);
+    setCanOpenOutside(false);
     void (async () => {
       try {
-        const response = await requestMessageFile(file.path, file.message, controller.signal);
+        const response = await requestMessageFile(file.path, file.message, controller.signal, allowOutside ? { allowOutsideWorkspace: true } : undefined);
         const text = await readTableResponse(response, controller.signal, MARKDOWN_PREVIEW_MAX_BYTES);
         if (text.includes("\0")) throw new Error("format");
         if (!controller.signal.aborted) setSource(text);
       } catch (reason) {
         if (controller.signal.aborted) return;
-        const code = (reason as { code?: unknown } | null)?.code;
-        setError(code === "outside_workspace" ? code
-          : reason instanceof Error && (reason.message === "size" || reason.message === "format") ? reason.message : "load");
+        if (refusedAsOutsideWorkspace(reason)) {
+          setCanOpenOutside(canOpenOutsideWorkspace(reason));
+          setError("outside_workspace");
+        } else {
+          setError(reason instanceof Error && (reason.message === "size" || reason.message === "format") ? reason.message : "load");
+        }
       }
     })();
     return () => controller.abort();
-  }, [file.path, file.message.threadId, file.message.messageId, attempt]);
+  }, [file.path, file.message.threadId, file.message.messageId, attempt, allowOutside]);
+  if (error === "outside_workspace") return <OutsideWorkspacePreview filePath={file.path} onOpenOutside={canOpenOutside ? () => setAllowOutsideFor(fileKey) : undefined} />;
   if (error) return <div className="py-6 text-[13px] text-ink-secondary">
-    <p role="alert">{t(error === "size" ? "file.tooLarge" : error === "format" ? "file.invalid"
-      : error === "outside_workspace" ? "attach.outsideWorkspace" : "file.loadFailed")}</p>
+    <p role="alert">{t(error === "size" ? "file.tooLarge" : error === "format" ? "file.invalid" : "file.loadFailed")}</p>
     {error === "load" && <button type="button" className="ui-button ui-button-sm mt-3" onClick={() => setAttempt((value) => value + 1)}>{t("chat.retry")}</button>}
   </div>;
   if (source === null) return <div role="status" className="flex items-center gap-2 py-6 text-[13px] text-ink-secondary">

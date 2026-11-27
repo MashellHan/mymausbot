@@ -16,6 +16,7 @@ import { classifyError } from "./drivers/retry.ts";
 import type { PerfHealth } from "./perf/perf-report.ts";
 import type { RoutineHealth } from "./routine-health.ts";
 import type { ScheduleSection } from "./routine-schedule-report.ts";
+import type { SignInSummary } from "./sign-in-trace.ts";
 import type { Message, StoreChange } from "./store.ts";
 
 /** The report's largest JSON body; incidents past it wait for the next poll. */
@@ -253,6 +254,8 @@ export interface CloudHealthDeps {
   /** Turn phase timings, usage-limit holds, process buckets and event-loop lag: at most PERF_HEALTH_MAX_BYTES. A throw
    * reads as null: the Admin restarts a home whose health read fails, so this optional part never fails it. */
   perf?: () => PerfHealth | null;
+  /** Engine sign-in attempts and how they ended (server/sign-in-trace.ts): kinds, method names, codes and times; left out on a throw. */
+  signIns?: () => SignInSummary | null;
   log?: (line: string) => void;
   now?: () => number;
 }
@@ -280,11 +283,14 @@ export function createCloudHealth(deps: CloudHealthDeps) {
   const connectors = backgroundLookup(deps.connectors, CONNECTORS_TTL_MS, now);
   const version = match(VERSION, deps.version) ?? "unknown", image = match(IMAGE, deps.image);
   let perfWarnedAt = -Infinity;
+  const leftOut = (what: string, error: unknown) => {
+    if (now() - perfWarnedAt >= 60_000) { perfWarnedAt = now(); (deps.log ?? console.warn)(`cloud health: ${what} left out: ${error instanceof Error ? error.name : "error"}`); }
+  };
   const perf = () => {
-    try { return deps.perf?.() ?? null; } catch (error) {
-      if (now() - perfWarnedAt >= 60_000) { perfWarnedAt = now(); (deps.log ?? console.warn)(`cloud health: perf left out: ${error instanceof Error ? error.name : "error"}`); }
-      return null;
-    }
+    try { return deps.perf?.() ?? null; } catch (error) { leftOut("perf", error); return null; }
+  };
+  const signIns = (): { signIns?: SignInSummary } => {
+    try { const summary = deps.signIns?.(); return summary ? { signIns: summary } : {}; } catch (error) { leftOut("signIns", error); return {}; }
   };
 
   const engines = () => {
@@ -314,7 +320,7 @@ export function createCloudHealth(deps: CloudHealthDeps) {
         engines: engines(), connectors: connectorState(),
         browser: { available: browser.available, installing: browser.installing, interrupted: browser.interrupted },
         box: boxSummary(deps.box?.()),
-        firstHour: first?.firstHour ?? null, value: first?.value ?? null, room: deps.room?.() ?? null, speed: speed.report(), perf: perf(),
+        firstHour: first?.firstHour ?? null, value: first?.value ?? null, room: deps.room?.() ?? null, speed: speed.report(), perf: perf(), ...signIns(),
         system: { ...memory, rssBytes: process.memoryUsage.rss(), load1: loadavg()[0] ?? 0, cpus: availableParallelism(), disk: diskBytes(deps.dataDir), eventLogWritable: writable(deps.eventsDir) },
       };
       let budget = CLOUD_HEALTH_MAX_BYTES - JSON.stringify({ ...base, cursor: ledger.cursor(read.seq), truncated: true, incidents: [] }).length;

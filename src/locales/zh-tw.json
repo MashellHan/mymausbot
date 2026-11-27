@@ -4145,7 +4145,6 @@
   "engineSetup.device.connectedAccount": "ChatGPT 已連線",
   "engineSetup.device.copyCode": "複製登入碼",
   "engineSetup.device.description": "將你的 ChatGPT 帳戶連線至 Codex。請在自己的瀏覽器中完成登入；不需要使用終端機，也不必共用密碼。",
-  "engineSetup.device.enableHint": "裝置碼登入可能需要在 ChatGPT 安全性設定中啟用，或由你的 ChatGPT 管理員啟用。",
   "engineSetup.device.enterCode": "請在 OpenAI 的登入頁面輸入這組一次性驗證碼：",
   "engineSetup.device.expired": "此驗證碼已過期。請要求新的驗證碼再試一次。",
   "engineSetup.device.expires": "驗證碼將於 {time} 過期",
@@ -9509,7 +9508,7 @@
   "teamSettings.keepEffort": "保留各機器人的投入程度",
   "teamSettings.keepEveryone": "保留各機器人的設定",
   "teamSettings.keepModel": "保留各機器人的模型",
-  "teamSettings.menu": "為這個部門的所有機器人設定…",
+  "teamSettings.menu": "所有機器人的設定…",
   "teamSettings.model": "模型",
   "teamSettings.noPerson": "不新增或移除任何人",
   "teamSettings.person": "一位使用者",
@@ -10314,5 +10313,10 @@
   "chat.notice.waitingReviewElsewhere": "正在 @{name} 中等待你審閱",
   "decider.provider.line": "也可以為這些小模型使用其他服務商的金鑰。",
   "computer.worksOnHintServer": "選擇這個機器人的執行位置。從 {app} 桌面應用程式分享的電腦不在這裡選：直接請機器人去用它就行。",
-  "settings.ai.otherServicesLine": "主要模型之外的金鑰：語音、電腦、應用程式和小幫手。"
+  "settings.ai.otherServicesLine": "主要模型之外的金鑰：語音、電腦、應用程式和小幫手。",
+  "server.chief.retryQueued": "已將 {name} 的對話 #{title} 的重試加入佇列",
+  "attach.previewOutsideWorkspace": "這個檔案不在此聊天的工作資料夾中，因此無法在這裡開啟。請儲存它的機器人附上一份副本。",
+  "accounts.claude.emailCode": "這看起來是 Claude 寄到你信箱的登入碼。請在 Claude 的頁面輸入它，點選「授權」，再貼上 Claude 顯示的較長代碼。",
+  "engineSetup.device.enableNote": "如果 OpenAI 表示不允許使用裝置碼登入，請到 ChatGPT → 設定 → 安全性 開啟（可能需要你的 ChatGPT 管理員開啟），然後再試一次。",
+  "engineSetup.device.interrupted": "這次登入已中斷。請重新開始。"
 }

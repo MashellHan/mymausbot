@@ -1457,7 +1457,6 @@
   "engineSetup.copyOnOpenHint": "La commande est copiée à l'ouverture du Terminal.",
   "engineSetup.device.connectedAccount": "ChatGPT connecté",
   "engineSetup.device.description": "Connectez votre compte ChatGPT à Codex. Terminez la connexion dans votre propre navigateur ; ni terminal ni partage de mot de passe.",
-  "engineSetup.device.enableHint": "La connexion par code d’appareil doit peut-être être activée dans les réglages de sécurité de ChatGPT ou par votre administrateur ChatGPT.",
   "engineSetup.device.failed": "La connexion n’a pas pu aboutir. Réessayez ou vérifiez l’installation de Codex.",
   "engineSetup.device.security": "Saisissez uniquement un code que vous avez demandé ici. Cela connecte Codex pour vos bots et utilise les limites de votre compte. Votre mot de passe reste chez OpenAI, et la connexion reste là où tournent vos bots.",
   "engineSetup.downloadNote": "Téléchargement de {mb} Mo depuis Google. {app} le vérifie avant utilisation.",
@@ -3911,5 +3910,10 @@
   "decider.provider.line": "Ou utilisez la clé d'un autre fournisseur pour ces petits modèles.",
   "computer.worksOnHintServer": "Choisissez où ce bot travaille. Un ordinateur que vous partagez depuis l'app de bureau {app} ne se choisit pas ici : demandez simplement au bot de l'utiliser.",
   "settings.ai.otherServicesLine": "Clés pour les voix, les ordinateurs, les apps et les assistants, en plus de vos modèles principaux.",
-  "botPanel.library.showAll": "Tout afficher"
+  "botPanel.library.showAll": "Tout afficher",
+  "server.chief.retryQueued": "Nouvelle tentative du fil #{title} de {name} mise en file d'attente",
+  "attach.previewOutsideWorkspace": "Ce fichier se trouve hors du dossier de travail de cette discussion et ne peut pas être ouvert ici. Demandez au bot qui l'a enregistré d'en joindre une copie.",
+  "accounts.claude.emailCode": "Cela ressemble au code de connexion que Claude vous envoie par e-mail. Saisissez-le sur la page de Claude, cliquez sur Autoriser, puis collez le code plus long que Claude affiche.",
+  "engineSetup.device.enableNote": "Si OpenAI indique que la connexion par code d’appareil n’est pas autorisée, activez-la dans ChatGPT → Paramètres → Sécurité (votre administrateur ChatGPT devra peut-être le faire), puis réessayez.",
+  "engineSetup.device.interrupted": "Cette connexion a été interrompue. Recommencez."
 }

@@ -1249,7 +1249,7 @@ export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = 
       )}
     >
       <GlassScrollFrame className="flex-1" fade><PlaceTint />
-      <GlassBar edge="top">
+      <GlassBar edge="top" className="z-20">
       <div
         data-sidebar-top-row={corner ? "corner" : true}
         className={cn(
@@ -1535,6 +1535,8 @@ export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = 
           }}>
           <TeamMenuItems
             department={teamMotion.value!.name} onRead={closeTeamMenu} onAddBots={() => { closeTeamMenu(); setMoveToTeam(teamMotion.value!.name); }}
+            onMoveUp={phone && sections.interactive ? () => { layout.header(userSectionId(teamMotion.value!.name)).onMove(-1); } : undefined}
+            onMoveDown={phone && sections.interactive ? () => { layout.header(userSectionId(teamMotion.value!.name)).onMove(1); } : undefined}
             onRename={() => { closeTeamMenu(); (advanced ? setRenameTeam : botDrag.startRename)(teamMotion.value!.name); }}
             onShare={() => { closeTeamMenu(); setShareTeam(teamMotion.value!.name); }}
             onDelete={() => { closeTeamMenu(); setDeletingTeam(teamMotion.value!.name); }}
