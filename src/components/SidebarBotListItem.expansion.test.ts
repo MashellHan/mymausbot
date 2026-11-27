@@ -24,6 +24,11 @@ vi.mock("react", async (original) => {
       else actual.useEffect(effect, dependencies);
     },
     useMemo: <T,>(factory: () => T, dependencies: unknown[]) => fixture.capturing ? factory() : actual.useMemo(factory, dependencies),
+    useSyncExternalStore: <T,>(
+      subscribe: (onStoreChange: () => void) => () => void,
+      getSnapshot: () => T,
+      getServerSnapshot?: () => T,
+    ) => fixture.capturing ? getSnapshot() : actual.useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot),
   };
 });
 vi.mock("./DesktopCapabilities", () => ({ useDesktopCapabilities: () => ({}) }));

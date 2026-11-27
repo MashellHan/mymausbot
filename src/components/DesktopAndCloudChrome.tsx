@@ -1,10 +1,33 @@
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { lazyScreen } from "./lazy-screens";
 import type { WelcomeViewer } from "@/lib/onboarding";
 import { spotlightsQuiet } from "@/lib/onboarding";
+import { MiniAppsHostContext, type MiniAppsAttach } from "./mini-apps/mini-apps-host-context";
 
-export const LazyMiniAppsHost = lazyScreen("MiniAppsHost", async () => (await import("./mini-apps/MiniAppsHost")).MiniAppsHost);
-export const LazyMiniAppDefaultsBootstrap = lazyScreen("MiniAppDefaultsBootstrap", async () => (await import("./mini-apps/MiniAppDefaultsBootstrap")).MiniAppDefaultsBootstrap);
+const LazyMiniAppsHostRuntime = lazyScreen("MiniAppsHostRuntime", async () => (await import("./mini-apps/MiniAppsHost")).MiniAppsHostRuntime);
+const LazyMiniAppDefaultsBootstrap = lazyScreen("MiniAppDefaultsBootstrap", async () => (await import("./mini-apps/MiniAppDefaultsBootstrap")).MiniAppDefaultsBootstrap);
 export const LazyWorkspaceBackupRecovery = lazyScreen("WorkspaceBackupRecovery", async () => (await import("./WorkspaceBackupRecovery")).WorkspaceBackupRecovery);
+
+/**
+ * Keeps `children` mounted synchronously inside a stable context boundary while deferring `MiniAppsHostRuntime`
+ * until the Computer panel is actually opened, preventing synchronous DOM loss or remounting when the chunk loads.
+ */
+export function DeferredMiniAppsHost({ enabled, children }: { enabled: boolean; children: ReactNode }) {
+  const [activated, setActivated] = useState(enabled);
+  const [attach, setAttach] = useState<MiniAppsAttach | null>(null);
+  const handleAttach = useCallback((next: MiniAppsAttach | null) => {
+    setAttach(() => next);
+  }, []);
+  useEffect(() => {
+    if (enabled) setActivated(true);
+  }, [enabled]);
+  return (
+    <MiniAppsHostContext value={attach}>
+      {children}
+      {activated && <LazyMiniAppsHostRuntime enabled={enabled} onAttach={handleAttach} />}
+    </MiniAppsHostContext>
+  );
+}
 export const LazyPlacesRail = lazyScreen("PlacesRail", async () => (await import("./PlacesRail")).PlacesRail);
 export const LazyNewLocalFromMenu = lazyScreen("NewLocalFromMenu", async () => (await import("./PlaceAddSheet")).NewLocalFromMenu);
 export const LazyConversationShareDialogs = lazyScreen("ConversationShareDialogs", async () => (await import("./conversation-share/ConversationShareDialogs")).ConversationShareDialogs);

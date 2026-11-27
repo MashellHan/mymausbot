@@ -641,19 +641,24 @@ describe("notification_log", () => {
     expect(rows.filter((r) => r.read).map((r) => r.id).sort()).toEqual(["n1", "n2"]);
   });
 
-  it("deduplicates identical notifications within the dedupe window by bumping the existing entry", () => {
-    const first = insertNotificationLog(entry("n1", 10_000, { title: "Alert", body: "Stopped after limit" }));
+  it("keeps separate rows by default and deduplicates when opted in", () => {
+    const first = insertNotificationLog(entry("n1", 10_000, { title: "Alert", body: "Stopped after limit" }), { dedupe: true });
     markNotificationLogRead([first.id]);
-    const second = insertNotificationLog(entry("n2", 15_000, { title: "Alert", body: "Stopped after limit" }));
+    const second = insertNotificationLog(entry("n2", 15_000, { title: "Alert", body: "Stopped after limit" }), { dedupe: true });
     expect(second.id).toBe("n1");
     expect(second.read).toBe(false);
     expect(recentNotificationLog()).toHaveLength(1);
     expect(recentNotificationLog()[0]).toMatchObject({ id: "n1", at: 15_000, read: false });
 
-    // Outside the 10-minute window, a new row is recorded normally.
-    const later = insertNotificationLog(entry("n3", 15_000 + 11 * 60_000, { title: "Alert", body: "Stopped after limit" }));
-    expect(later.id).toBe("n3");
+    // Without opt-in dedupe, an identical notification keeps a separate row.
+    const distinct = insertNotificationLog(entry("n2b", 16_000, { title: "Alert", body: "Stopped after limit" }));
+    expect(distinct.id).toBe("n2b");
     expect(recentNotificationLog()).toHaveLength(2);
+
+    // Outside the 10-minute window, a new row is recorded even with opt-in dedupe.
+    const later = insertNotificationLog(entry("n3", 15_000 + 11 * 60_000, { title: "Alert", body: "Stopped after limit" }), { dedupe: true });
+    expect(later.id).toBe("n3");
+    expect(recentNotificationLog()).toHaveLength(3);
   });
 
   it("keeps only the newest 500 rows, FIFO", () => {

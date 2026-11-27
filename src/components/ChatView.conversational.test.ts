@@ -19,6 +19,7 @@ vi.mock("@/lib/cloud-guest", () => ({ useCanWriteIn: () => true, useReactor: () 
 vi.mock("./ModelPicker", () => ({ ModelPicker: () => null }));
 
 const { ChatView } = await import("./ChatView");
+const { MESSAGE_ROW } = await import("./MessageActions");
 const { setAdvancedMode } = await import("@/lib/interface-mode");
 const { BotEditorStore, initialState } = await import("@/state/store");
 
@@ -110,6 +111,8 @@ describe("conversational replies", () => {
     setAdvancedMode(false);
     await draw(profile({}));
     const row = document.querySelector(`[data-mid="${messageId}"]`)!;
+    const hoverRow = row.querySelector(`[${MESSAGE_ROW}]`)!;
+    flushSync(() => hoverRow.dispatchEvent(new PointerEvent("pointerenter", { pointerType: "mouse" })));
     const bubble = row.querySelector('[data-chat-bubble="simple"]')!;
     const primary = row.querySelectorAll<HTMLButtonElement>('[aria-label="Reply to message"]');
     const more = row.querySelector<HTMLButtonElement>('button[aria-label="Message actions"]')!;

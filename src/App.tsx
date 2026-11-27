@@ -25,6 +25,7 @@ import {
   PluginsPanel, preloadScreens, PublishedAppsPage, RemoteAgentSettingsPanel, RemoteDesktopPanel, RoomPanel, SettingsModal, TeamFilesPage, TeamMapPage, TriggersPage,
 } from "@/components/lazy-screens";
 import {
+  DeferredMiniAppsHost,
   DesktopAndCloudHosts,
   LazyAppPreviewPanel,
   LazyCloudEngineSignIn,
@@ -36,7 +37,6 @@ import {
   LazyConversationShareDialogs,
   LazyEmptyChatShell,
   LazyForkPanel,
-  LazyMiniAppsHost,
   LazyNewLocalFromMenu,
   LazyPlacesRail,
   LazyTeamWelcome,
@@ -52,6 +52,7 @@ import {
   shouldMountDesktopRecoveryWrapper,
   shouldMountPlacesRail,
 } from "@/lib/pwa-shell-gate";
+import { hasPendingWorkspaceRestore } from "@/lib/workspace-backup-client";
 import { useInterfaceMode } from "@/lib/interface-mode";
 import { RawPresentation } from "@/lib/raw-presentation";
 import { useRoomPanelShown } from "@/lib/room-panel";
@@ -593,9 +594,9 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   return (
     <RawPresentation value={interfaceMode === "raw"}>
     {desktopCloudChrome ? (
-      <LazyMiniAppsHost enabled={state.computerOpen && (!!bot || !!group) && !remoteClient}>
+      <DeferredMiniAppsHost enabled={state.computerOpen && (!!bot || !!group) && !remoteClient}>
         {shellBody}
-      </LazyMiniAppsHost>
+      </DeferredMiniAppsHost>
     ) : (
       shellBody
     )}
@@ -625,7 +626,7 @@ function Application() {
 export default function App() {
   const ended = useSessionEnded();
   if (ended) return <PairPage initialCode={null} reason={t("pair.sessionEnded")} />;
-  if (!shouldMountDesktopRecoveryWrapper({ remotePwa: isRemotePwaMode() })) {
+  if (!shouldMountDesktopRecoveryWrapper({ remotePwa: isRemotePwaMode() }) || !hasPendingWorkspaceRestore()) {
     return <Application />;
   }
   return <LazyWorkspaceBackupRecovery><Application /></LazyWorkspaceBackupRecovery>;

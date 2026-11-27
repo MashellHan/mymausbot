@@ -51,7 +51,7 @@ beforeAll(async () => {
       posted.push({ path, body });
       return json({ ok: true, threadId: "elsewhere", queued: true, queueId: body.sendId ?? "q" });
     }
-    if (init?.method === "DELETE" && path.includes("/queue/")) return new Response(JSON.stringify({ ok: cancelStatus === 200, error: "not yours" }), { status: cancelStatus });
+    if (init?.method === "DELETE" && path.includes("/queue/")) return Promise.resolve(new Response(JSON.stringify({ ok: cancelStatus === 200, error: "not yours" }), { status: cancelStatus }));
     return json({});
   });
   const container = document.createElement("div");

@@ -73,7 +73,7 @@ describe("a text selection in a windowed transcript", () => {
     const text = selected();
     const aside = { held: null as SetAsideSelection | null };
     let widest = 0;
-    for (let steps = 0; steps < 15; steps++) {
+    for (let steps = 0; steps < 19; steps++) {
       window = step(window, windowEarlier, aside);
       widest = Math.max(widest, (window.end ?? TOTAL) - window.start);
     }
@@ -81,7 +81,7 @@ describe("a text selection in a windowed transcript", () => {
     expect(aside.held, "set aside once the reader is past the cap").not.toBeNull();
     expect(document.getSelection()!.isCollapsed).toBe(true);
     expect((window.end ?? TOTAL) - window.start).toBeLessThanOrEqual(TRANSCRIPT_WINDOW_MAX);
-    for (let steps = 0; steps < 15 && window.end !== null; steps++) window = step(window, windowLater, aside);
+    for (let steps = 0; steps < 19 && window.end !== null; steps++) window = step(window, windowLater, aside);
     expect(aside.held).toBeNull();
     expect(selected()).toBe(text);
     const selection = document.getSelection()!;

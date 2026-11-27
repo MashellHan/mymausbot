@@ -30,13 +30,13 @@ afterEach(() => setLocale("en"));
 
 it("renders key refusals without an HTTP status in the current language, but keeps HTTP technical", () => {
   fixture.servers = [{ name: "docs", type: "http", url: "https://mcp.example.com/mcp", headerKeys: ["X-Token"], enabled: true }];
-  fixture.seeded[5] = { docs: { ok: false, reason: "keys", error: "Raw server diagnostic" } };
+  fixture.seeded[6] = { docs: { ok: false, reason: "keys", error: "Raw server diagnostic" } };
   expect(render(true)).toContain("unauthorized");
   setLocale("pt-br");
   expect(render(true)).toContain("acesso não autorizado");
   expect(render(true)).toContain("X-Token");
   expect(render(true)).not.toContain("Raw server diagnostic");
-  fixture.seeded[5] = { docs: { ok: false, reason: "keys", status: 401 } };
+  fixture.seeded[6] = { docs: { ok: false, reason: "keys", status: 401 } };
   expect(render(true)).toContain("HTTP 401");
   expect(render(true)).not.toContain("acesso não autorizado");
 });
@@ -51,8 +51,8 @@ function render(embedded: boolean, cards = false, hideHosted = false) {
 }
 
 /** useState order in McpServersPanel: the server whose sign-in is open, then its flow. */
-const SIGNING_IN = 6;
-const SIGN_IN_FLOW = 7;
+const SIGNING_IN = 7;
+const SIGN_IN_FLOW = 8;
 
 beforeEach(() => {
   vi.stubGlobal("window", {});

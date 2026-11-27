@@ -142,15 +142,24 @@ describe.skipIf(process.platform === "win32")("direct final-screen settlement", 
     expect(sent.body.queued).toBe(true);
     gate("capture.gate");
     await expect.poll(async () => (await bot()).busy, { timeout: 15_000 }).toBe(false);
-    const messages = (await bot()).messages;
+    const { messages, activeLeafId } = (await api("GET", `/api/threads/${threadId}/messages`)).body as {
+      messages: any[];
+      activeLeafId: string | null;
+    };
     // The follow-up runs in the conversation's warm engine, so its prompt may lead with the instructions that changed.
     expect(messages.some((message: any) => message.role === "bot" && typeof message.text === "string" &&
       withoutTurnClock(message.text).startsWith("reply to: ") && message.text.endsWith("FOLLOWUP_AFTER_SCREEN"))).toBe(true);
     expect(messages.some((message: any) => message.tool?.name?.includes("another thread is working"))).toBe(false);
-    const screenIndex = messages.findIndex((message: any) => message.kind === "screen");
+    const byId = new Map(messages.map((message: any) => [message.id, message]));
+    const visiblePath: any[] = [];
+    for (let cursor = activeLeafId ? byId.get(activeLeafId) : undefined; cursor; cursor = cursor.parentId ? byId.get(cursor.parentId) : undefined) {
+      visiblePath.push(cursor);
+    }
+    visiblePath.reverse();
+    const screenIndex = visiblePath.findIndex((message: any) => message.kind === "screen");
     expect(screenIndex).toBeGreaterThanOrEqual(0);
     expect(screenIndex).toBeLessThan(
-      messages.findIndex((message: any) => message.text === "FOLLOWUP_AFTER_SCREEN"));
+      visiblePath.findIndex((message: any) => message.text === "FOLLOWUP_AFTER_SCREEN"));
   }, 30_000);
 
   it("sends the settled screenshot to live clients without its pixels; the image route serves them", async () => {

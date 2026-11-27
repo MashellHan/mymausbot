@@ -222,7 +222,7 @@ export function PwaNotificationBanner({
   return (
     <Layer>
       <div
-        className="pointer-events-none fixed inset-x-3 z-[55] mx-auto max-w-[420px] sm:right-4 sm:left-auto sm:mx-0 sm:w-[360px]"
+        className="pointer-events-none fixed left-[calc(var(--rail-beside,0px)_+_0.75rem)] right-3 z-[55] mx-auto max-w-[420px] sm:right-4 sm:left-auto sm:mx-0 sm:w-[360px]"
         style={{ top: "calc(env(safe-area-inset-top, 0px) + 8px)" }}
       >
         <div
