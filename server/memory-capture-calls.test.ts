@@ -476,4 +476,32 @@ describe("capture calls", () => {
     expect(captures.map((call) => call.botId)).toEqual([LEAD.id, HELPER.id]);
     expect(memory(HELPER.id)).toContain("The person keeps bees");
   });
+
+  it("supersedes outdated facts in MEMORY.md and topic files immediately at capture time", async () => {
+    bots = [LEAD];
+    const upkeep = loop();
+    const { writeMemoryFile, writeMemoryTopic } = await import("./workspace.ts");
+    writeMemoryFile(LEAD.id, "# Memory\n- 2026-08-01 · from chat \"old\" · The person lives in Pune\n");
+    writeMemoryTopic(LEAD.id, "tooling.md", "---\ntitle: Tooling\naliases: [build, bundler]\n---\n- 2026-08-01 · from chat \"old\" · Uses webpack for frontend builds\n");
+    answer = (prompt) => {
+      expect(prompt).toContain("Uses webpack for frontend builds");
+      return JSON.stringify([
+        { text: "The person lives in Bengaluru", kind: "fact", evidence: "We moved to Bengaluru last week", supersedes: "The person lives in Pune", aboutUser: true },
+        { text: "Uses vite for frontend builds", kind: "decision", evidence: "We switched our bundler to vite", supersedes: "Uses webpack for frontend builds", topic: "tooling", topicAliases: ["bundler", "build"], aboutUser: false },
+      ]);
+    };
+    await upkeep.capture({
+      botId: LEAD.id,
+      threadId: "t-move",
+      turns: [{ person: "We moved to Bengaluru last week and switched our bundler to vite.", bot: ACK }],
+    });
+    const mem = memory(LEAD.id);
+    expect(mem).toContain("~~");
+    expect(mem).toContain("The person lives in Pune");
+    expect(mem).toContain("superseded 2026-09-25");
+    expect(mem).toContain("The person lives in Bengaluru");
+    const topic = readMemoryTopic(LEAD.id, "tooling.md") ?? "";
+    expect(topic).toContain("~~Uses webpack for frontend builds~~ · superseded 2026-09-25 by ");
+    expect(topic).toContain("Uses vite for frontend builds");
+  });
 });
