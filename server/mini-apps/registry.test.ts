@@ -223,13 +223,14 @@ describe("persistent Mini Apps", () => {
       const apps = new MiniApps({ docs, data, validPublisher: () => true,
         access: { database: () => db, write: (work) => work(db) } });
       expect(apps.list(owner)).toMatchObject([{ id: "legacy", dashboard: null, dashboardIdentity: null,
-        shippedTemplateKind: null, responsibleBotId: null, capabilities: [] }]);
+        shippedTemplateKind: null, icon: null, responsibleBotId: null, capabilities: [] }]);
       expect(db.prepare("PRAGMA table_info(mini_apps)").all().some((column) => column.name === "dashboard_kind")).toBe(true);
       expect(db.prepare("PRAGMA table_info(mini_apps)").all().some((column) => column.name === "dashboard_identity")).toBe(true);
       expect(db.prepare("PRAGMA table_info(mini_apps)").all().some((column) => column.name === "native_kind")).toBe(true);
       expect(db.prepare("PRAGMA table_info(mini_apps)").all().some((column) => column.name === "native_identity")).toBe(true);
       expect(db.prepare("PRAGMA table_info(mini_apps)").all().some((column) => column.name === "shipped_template_kind")).toBe(true);
       expect(db.prepare("PRAGMA table_info(mini_apps)").all().some((column) => column.name === "responsible_bot_id")).toBe(true);
+      expect(db.prepare("PRAGMA table_info(mini_apps)").all().some((column) => column.name === "icon")).toBe(true);
     } finally { db.close(); }
   });
 
@@ -572,5 +573,92 @@ describe("persistent Mini Apps", () => {
     await expect(apps.publish(owner, publication({ slug: "agent-team", bindings: [], dashboardKind: "agent-team", requestKey: "install" })))
       .rejects.toMatchObject({ status: 409 });
     expect(apps.document(owner, unrelated.id).app).toMatchObject({ dashboard: null, dashboardIdentity: null });
+  });
+
+  it("stores, preserves, clears, rolls back, replays, and validates custom Mini App icons", async () => {
+    const { apps } = fixture();
+    const created = await apps.publish(bot(), {
+      ...publication({ slug: "work-secretary", title: "Work Secretary", requestKey: "create-preset" }),
+      icon: "microsoft",
+    });
+    const id = created.app.id;
+    expect(created.app.icon).toEqual({ kind: "preset", name: "microsoft" });
+    await expect(apps.publish(bot(), {
+      ...publication({ slug: "work-secretary", title: "Work Secretary", requestKey: "create-preset" }),
+      icon: { kind: "preset", name: "microsoft" },
+    })).resolves.toMatchObject({ app: created.app, replayed: true });
+
+    const preserved = await apps.publish(owner, publication({
+      requestKey: "preserve-icon",
+      expectedRevision: 1,
+      slug: "work-secretary",
+      title: "Work Secretary v2",
+      publisherBotIds: ["publisher"],
+    }), id);
+    expect(preserved.app.icon).toEqual({ kind: "preset", name: "microsoft" });
+
+    const emoji = await apps.publish(bot(), {
+      ...publication({ requestKey: "set-emoji", expectedRevision: 2, slug: "work-secretary", title: "Work Secretary v3" }),
+      icon: { kind: "emoji", value: "📊", tone: "#2563EB" },
+    }, id);
+    expect(emoji.app.icon).toEqual({ kind: "emoji", value: "📊", tone: "#2563eb" });
+
+    const shorthandEmoji = await apps.publish(bot(), {
+      ...publication({ requestKey: "shorthand-emoji", expectedRevision: 3, slug: "work-secretary", title: "Work Secretary v4" }),
+      icon: "🚀",
+    }, id);
+    expect(shorthandEmoji.app.icon).toEqual({ kind: "emoji", value: "🚀" });
+
+    const cleared = await apps.publish(owner, publication({
+      requestKey: "clear-icon",
+      expectedRevision: 4,
+      slug: "work-secretary",
+      title: "Work Secretary v5",
+      icon: null,
+    }), id);
+    expect(cleared.app.icon).toBeNull();
+
+    const rolledBack = await apps.rollback(bot(), id, {
+      requestKey: "rollback-to-emoji",
+      expectedRevision: 5,
+      templateVersion: 3,
+    });
+    expect(rolledBack.app.icon).toEqual({ kind: "emoji", value: "📊", tone: "#2563eb" });
+    expect(await apps.rollback(bot(), id, {
+      requestKey: "rollback-to-emoji",
+      expectedRevision: 5,
+      templateVersion: 3,
+    })).toEqual({ app: rolledBack.app, replayed: true });
+
+    closeMessageDb();
+    expect(apps.document(owner, id).app.icon).toEqual({ kind: "emoji", value: "📊", tone: "#2563eb" });
+
+    for (const invalidIcon of [
+      "<svg></svg>",
+      "https://example.com/icon.png",
+      "unknown-preset",
+      "not-an-emoji",
+      { kind: "svg", value: "<svg/>" },
+      { kind: "preset", name: "microsoft", tone: "javascript:alert(1)" },
+      { kind: "emoji", value: "<b>x</b>" },
+      { kind: "emoji", value: "📊🚀" },
+    ]) {
+      await expect(apps.publish(bot(), {
+        ...publication({ requestKey: `bad-${Math.random()}`, expectedRevision: 6, slug: "work-secretary" }),
+        icon: invalidIcon,
+      }, id)).rejects.toMatchObject({ status: 400 });
+    }
+
+    const db = applicationDatabase();
+    db.prepare("UPDATE mini_apps SET icon = ? WHERE id = ?").run("{corrupt-json", id);
+    db.prepare("UPDATE mini_app_versions SET icon = ? WHERE app_id = ? AND version = 1").run('{"kind":"svg"}', id);
+    expect(apps.list(owner).find((item) => item.id === id)?.icon).toBeNull();
+    expect(apps.document(owner, id).app.icon).toBeNull();
+    const rolledCorrupt = await apps.rollback(bot(), id, {
+      requestKey: "rollback-corrupt-icon",
+      expectedRevision: 6,
+      templateVersion: 1,
+    });
+    expect(rolledCorrupt.app.icon).toBeNull();
   });
 });
