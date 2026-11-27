@@ -3,17 +3,68 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#070707" />
+    <meta name="theme-color" content="#121212" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="mymausbot" />
     <link rel="icon" type="image/svg+xml" href="/app-icon.svg" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <title>mymausbot</title>
+    <script src="/boot-theme.js"></script>
+    <style data-boot-shell-css>
+      html, body, #root { height: 100%; margin: 0; background: var(--boot-bg, #121212); }
+      .omb-boot-shell {
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        height: 100%;
+        min-height: 100dvh;
+        padding: calc(env(safe-area-inset-top, 0px) + 12px) 16px calc(env(safe-area-inset-bottom, 0px) + 16px);
+        background: var(--boot-bg, #121212);
+      }
+      .omb-boot-bar {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 36px;
+      }
+      .omb-boot-pill {
+        width: 132px;
+        height: 32px;
+        border-radius: 9999px;
+        background: var(--boot-card, #1a1a1a);
+        border: 1px solid var(--boot-line, rgba(255, 255, 255, 0.08));
+      }
+      .omb-boot-composer {
+        width: 100%;
+        max-width: 720px;
+        height: 44px;
+        margin: 0 auto;
+        border-radius: 22px;
+        background: var(--boot-card, #1a1a1a);
+        border: 1px solid var(--boot-line, rgba(255, 255, 255, 0.08));
+      }
+      @media (prefers-reduced-motion: no-preference) {
+        .omb-boot-pill, .omb-boot-composer {
+          animation: omb-boot-fade 1.6s ease-in-out infinite alternate;
+        }
+      }
+      @keyframes omb-boot-fade {
+        from { opacity: 0.55; }
+        to { opacity: 0.9; }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="omb-boot-shell" data-boot-shell aria-hidden="true">
+        <div class="omb-boot-bar"><div class="omb-boot-pill"></div></div>
+        <div class="omb-boot-composer"></div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

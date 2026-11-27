@@ -7,8 +7,9 @@ import { pairedDestination } from "./lib/phone-pairing";
 import { bootstrapBrand, productName } from "./lib/brand";
 import { bootstrapPwaConfig, isRemotePwaMode, remoteFetch, type PwaPairingBootResult } from "./lib/pwa-config";
 import { t } from "./lib/i18n";
-import { loadPageLanguage } from "./lib/language-preference";
-import { applySkinChoice, readSkinChoice } from "./lib/skins";
+import { loadPageLanguage, startupLocaleTag } from "./lib/language-preference";
+import { applySkinChoice, readSkin, readSkinChoice, subscribeSkin } from "./lib/skins";
+import { canSkipBlockingLocaleLoad, syncDocumentThemeColor } from "./lib/boot-shell-theme";
 import { applyChatWidth, readChatWidth } from "./lib/chat-width";
 import { applyFont, readFont } from "./lib/fonts";
 import { applySoftwareRendering } from "./lib/software-rendering";
@@ -30,11 +31,15 @@ import "./styles.css";
 installStaleModuleRecovery();
 settleInterfaceMode();
 applySkinChoice(readSkinChoice());
+syncDocumentThemeColor(readSkin());
+subscribeSkin(() => syncDocumentThemeColor(readSkin()));
 applyFont(readFont());
 applySoftwareRendering();
 applyChatWidth(readChatWidth());
 startTheme();
-const pageLanguage = loadPageLanguage();
+const pageLanguage = canSkipBlockingLocaleLoad(startupLocaleTag())
+  ? Promise.resolve("en")
+  : loadPageLanguage();
 
 // The app is its own chunk, so these pages don't parse it. Everywhere else its fetch starts now, alongside the session
 // read, instead of after it. A failed fetch renders as a throw, so PageBoundary offers a reload.
