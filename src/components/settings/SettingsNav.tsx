@@ -18,7 +18,7 @@ import { useUpdaterState } from "@/lib/updater";
 import { keySection, type KeyEntry } from "../keys/key-catalog";
 import { HELP_CENTER_URL, desktopAppVersion } from "@/lib/app-links";
 
-export const NAV_ITEM = "relative flex h-8 w-full shrink-0 cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] leading-5 text-ink transition-colors motion-reduce:transition-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus";
+export const NAV_ITEM = "relative flex h-8 w-full shrink-0 cursor-pointer items-center gap-2 rounded-lg px-2 text-left text-[13px] leading-5 text-ink transition-colors motion-reduce:transition-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus";
 
 /** A place's badge as its rail circle draws it; with no colour of its own (This computer, or a Cloud in a browser) it is a
  * quiet filled tile with an edge, so it never vanishes on the sheet. */
@@ -106,7 +106,7 @@ function IdentityRow({ page, current, badge, name, line, onOpen, narrow }: {
   return (
     <button type="button" data-settings-page={page} data-settings-section={page} data-settings-identity="" aria-current={current ? "page" : undefined} onClick={onOpen}
       className={cn(
-        "flex w-full shrink-0 cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-left transition-colors motion-reduce:transition-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus",
+        "flex w-full shrink-0 cursor-pointer items-center gap-2 rounded-lg px-2 text-left transition-colors motion-reduce:transition-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus",
         narrow ? "h-11" : line ? "h-9" : "h-8",
         current ? "bg-menu-active" : "hover:bg-menu-hover",
       )}>
