@@ -1,17 +1,14 @@
 import { useRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
-import { ArrowUpRight, ChevronRight, Laptop, Search, X } from "lucide-react";
+import { ArrowUpRight, ChevronRight, Laptop, Search, SlidersHorizontal, UserRound, X, type LucideIcon } from "lucide-react";
 import { cloudColor } from "@/lib/cloud-look";
 import { placeInitials } from "@/lib/places";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import { productName } from "@/lib/brand";
-import { setInterfaceMode, useInterfaceMode, type InterfaceMode } from "@/lib/interface-mode";
-import { SIMPLE_ONLY } from "@/lib/simple-only";
 import { useStore } from "@/state/store";
 import { InitialsAvatar } from "../Avatar";
 import { PlaceMark } from "../PlacesRail";
 import { profileInitials } from "../SidebarProfileMenu";
-import { Select } from "../Select";
 import { SettingsTag } from "../SettingsPrimitives";
 import { accountLine, useAccountSummary, useYou } from "./account-summary";
 import { usePhonePlaceState } from "./phone-status";
@@ -21,11 +18,11 @@ import { useUpdaterState } from "@/lib/updater";
 import { keySection, type KeyEntry } from "../keys/key-catalog";
 import { HELP_CENTER_URL, desktopAppVersion } from "@/lib/app-links";
 
-export const NAV_ITEM = "relative flex h-8 w-full shrink-0 cursor-pointer items-center gap-2 rounded-lg px-2 text-left text-[13px] leading-5 text-ink transition-colors motion-reduce:transition-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus";
+export const NAV_ITEM = "relative flex h-8 w-full shrink-0 cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] leading-5 text-ink transition-colors motion-reduce:transition-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus";
 
 /** A place's badge as its rail circle draws it; with no colour of its own (This computer, or a Cloud in a browser) it is a
  * quiet filled tile with an edge, so it never vanishes on the sheet. */
-export function PlaceBadge({ place, size }: { place: Pick<SettingsPlace, "kind" | "name" | "color"> & { named?: boolean }; size: number }) {
+export function PlaceBadge({ place, size, icon = false }: { place: Pick<SettingsPlace, "kind" | "name" | "color"> & { named?: boolean }; size: number; icon?: boolean }) {
   if (cloudColor(place.color)) {
     return <PlaceMark place={{ kind: place.kind === "server" ? "cloud" : place.kind, name: place.name, color: place.color, ...(place.named ? { named: true as const } : {}) }} size={size} />;
   }
@@ -34,7 +31,7 @@ export function PlaceBadge({ place, size }: { place: Pick<SettingsPlace, "kind" 
     <span aria-hidden="true" data-place-badge={place.kind}
       className="grid shrink-0 place-items-center bg-ink/[0.06] font-semibold leading-none text-ink-secondary shadow-[inset_0_0_0_0.5px_var(--settings-edge)]"
       style={{ width: size, height: size, borderRadius: Math.round(size * 0.3), fontSize: Math.max(7, Math.round(size * 0.4)) }}>
-      {place.kind === "computer" && !place.named ? <Laptop size={glyph} strokeWidth={1.75} /> : placeInitials(place.name)}
+      {icon || (place.kind === "computer" && !place.named) ? <Laptop size={glyph} strokeWidth={1.75} /> : placeInitials(place.name)}
     </span>
   );
 }
@@ -51,7 +48,23 @@ export function AppIcon({ size }: { size: number }) {
 
 export function YouAvatar({ size }: { size: number }) {
   const { profile } = useYou();
-  return <InitialsAvatar initials={profileInitials(profile)} avatarUrl={profile?.avatarUrl} size={size} fontSize={Math.round(size * 0.42)} className="bg-ink/[0.08]" />;
+  const initials = profileInitials(profile);
+  const fallback = initials === "?"
+    ? <UserRound size={Math.round(size * 0.62)} strokeWidth={1.75} aria-hidden="true" className="text-ink-secondary" />
+    : undefined;
+  if (!profile?.avatarUrl && fallback) {
+    return (
+      <span
+        aria-hidden="true"
+        data-you-avatar-fallback=""
+        className="flex shrink-0 items-center justify-center rounded-full bg-ink/[0.08]"
+        style={{ width: size, height: size }}
+      >
+        {fallback}
+      </span>
+    );
+  }
+  return <InitialsAvatar initials={initials} avatarUrl={profile?.avatarUrl} size={size} fallback={fallback} fontSize={Math.round(size * 0.42)} className="bg-ink/[0.08]" />;
 }
 
 /** The place's one status line under its name: bots on This computer, power on a Cloud. */
@@ -68,21 +81,22 @@ export function usePlaceSubLine(place: SettingsPlace): string {
 
 export function useAppSubLine(desktop: boolean): string {
   const update = useUpdaterState();
-  if (!desktop) return t("settings.scope.browser");
+  if (!desktop) return "";
   if (update?.status === "downloaded") return t("settings.app.updateReadyLine", { version: desktopAppVersion() });
   if (update?.manualReleaseUrl) return t("settings.app.manualLine", { version: desktopAppVersion() });
   return t("settings.app.upToDateLine", { version: desktopAppVersion() });
 }
 
-export function ownerLabel(owner: SettingsOwner, place: SettingsPlace, desktop: boolean): string {
+export function ownerLabel(owner: SettingsOwner, place: SettingsPlace, desktop: boolean, advanced = false): string {
   if (owner === "place") return place.name;
   if (owner === "account") return t("settings.page.account");
-  return desktop ? t("settings.page.app") : t("settings.page.browser");
+  if (desktop) return t("settings.page.app");
+  return advanced ? t("settings.page.app") : t("settings.section.general");
 }
 
-export function pageLabel(page: SettingsPage, place: SettingsPlace, desktop: boolean): string {
+export function pageLabel(page: SettingsPage, place: SettingsPlace, desktop: boolean, advanced = false): string {
   if (page.id === "overview") return place.name;
-  if (page.id === "account" || page.id === "app") return ownerLabel(page.owner, place, desktop);
+  if (page.id === "account" || page.id === "app") return ownerLabel(page.owner, place, desktop, advanced);
   return t(page.labelKey);
 }
 
@@ -91,29 +105,42 @@ function IdentityRow({ page, current, badge, name, line, onOpen, narrow }: {
 }) {
   return (
     <button type="button" data-settings-page={page} data-settings-section={page} data-settings-identity="" aria-current={current ? "page" : undefined} onClick={onOpen}
-      className={cn("flex w-full shrink-0 cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-left", narrow ? "h-12" : "h-11", " transition-colors motion-reduce:transition-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus",
-        current ? "bg-menu-active" : "hover:bg-menu-hover")}>
-      <span className="flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-[6px]">{badge}</span>
+      className={cn(
+        "flex w-full shrink-0 cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-left transition-colors motion-reduce:transition-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus",
+        narrow ? "h-11" : line ? "h-9" : "h-8",
+        current ? "bg-menu-active" : "hover:bg-menu-hover",
+      )}>
+      <span className="flex size-6 shrink-0 items-center justify-center">{badge}</span>
       <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-[14px] font-medium leading-[18px] text-ink">{name}</span>
-        <span className="truncate text-[12px] leading-4 text-ink-secondary">{line}</span>
+        <span className={cn("truncate font-medium text-ink", narrow ? "text-[14px] leading-5" : "text-[13px] leading-4")}>{name}</span>
+        {line && <span className="truncate text-[12px] leading-4 text-ink-secondary">{line}</span>}
       </span>
       {narrow && <ChevronRight size={14} aria-hidden="true" className="shrink-0 text-ink-tertiary rtl:-scale-x-100" />}
     </button>
   );
 }
 
-function PageItem({ page, label, current, dot, onOpen }: { page: SettingsPage; label: string; current: boolean; dot?: "success" | "warning" | null; onOpen: () => void }) {
-  const Icon = page.icon;
+function PageItem({ page, label, icon: Icon, current, dot, narrow, onOpen }: {
+  page: SettingsPageId; label: string; icon?: LucideIcon; current: boolean; dot?: "success" | "warning" | null; narrow: boolean; onOpen: () => void;
+}) {
   return (
-    <button type="button" data-settings-page={page.id} data-settings-section={page.id} aria-current={current ? "page" : undefined} onClick={onOpen}
-      className={cn(NAV_ITEM, current ? "bg-menu-active font-medium" : "hover:bg-menu-hover")}>
-      <span className="flex w-6 shrink-0 justify-center">{Icon && <Icon size={16} strokeWidth={1.75} aria-hidden="true" className={current ? "text-ink" : "text-ink-secondary"} />}</span>
-      <span className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)] overflow-hidden" title={label}>
-        <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap [grid-area:1/1]">{label}</span>
-        <span aria-hidden="true" className="invisible h-0 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-medium [grid-area:1/1]">{label}</span>
-      </span>
+    <button type="button" data-settings-page={page} data-settings-section={page} aria-current={current ? "page" : undefined} onClick={onOpen}
+      className={cn(
+        NAV_ITEM,
+        narrow && "h-11 text-[14px] font-medium",
+        current ? "bg-menu-active font-medium" : "hover:bg-menu-hover",
+      )}>
+      <span className="flex size-6 shrink-0 items-center justify-center">{Icon && <Icon size={16} strokeWidth={1.75} aria-hidden="true" className={current ? "text-ink" : "text-ink-secondary"} />}</span>
+      {narrow ? (
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+      ) : (
+        <span className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)] overflow-hidden" title={label}>
+          <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap [grid-area:1/1]">{label}</span>
+          <span aria-hidden="true" className="invisible h-0 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-medium [grid-area:1/1]">{label}</span>
+        </span>
+      )}
       {dot && <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", dot === "success" ? "bg-success" : "bg-warning")} />}
+      {narrow && <ChevronRight size={14} aria-hidden="true" className="shrink-0 text-ink-tertiary rtl:-scale-x-100" />}
     </button>
   );
 }
@@ -133,7 +160,6 @@ export interface NavProps {
   onKey: (entry: KeyEntry) => void;
   onClose: () => void;
   narrow: boolean;
-  onMode?: (mode: InterfaceMode) => void;
 }
 
 export function SettingsSearchField({ query, onQuery, onClose, onFirst }: { query: string; onQuery: (query: string) => void; onClose: () => void; onFirst: () => void }) {
@@ -176,7 +202,7 @@ function moveFocus(event: ReactKeyboardEvent<HTMLElement>) {
   items[next]?.focus();
 }
 
-export function SettingsNav({ ctx, place, pages, current, query, hits, keyHits, onKey, onQuery, onOpen, onHit, onClose, narrow, onMode = setInterfaceMode }: NavProps) {
+export function SettingsNav({ ctx, place, pages, current, query, hits, keyHits, onKey, onQuery, onOpen, onHit, onClose, narrow }: NavProps) {
   const summary = useAccountSummary();
   const { profile } = useYou();
   // Until main shares the account with a Cloud's page, its email is the one the place knows you by.
@@ -187,9 +213,9 @@ export function SettingsNav({ ctx, place, pages, current, query, hits, keyHits, 
   const listRef = useRef<HTMLDivElement>(null);
   const openSource = ctx.desktop && !window.ogb?.cloudAccount && !window.ogb?.cloudPlan;
   const lines: Record<SettingsOwner, { badge: ReactNode; name: string; line: string; page: SettingsPageId }> = {
-    place: { badge: <PlaceBadge place={place} size={24} />, name: place.name, line: placeLine, page: "overview" },
-    account: { badge: <YouAvatar size={24} />, name: t("settings.page.account"), line: accountLine(account, { browser: !ctx.desktop, place: place.name, openSource }), page: "account" },
-    app: { badge: <AppIcon size={24} />, name: ctx.desktop ? t("settings.page.app") : t("settings.page.browser"), line: appLine, page: "app" },
+    place: { badge: <PlaceBadge place={place} size={20} icon={ctx.client} />, name: place.name, line: placeLine, page: "overview" },
+    account: { badge: <YouAvatar size={20} />, name: t("settings.page.account"), line: accountLine(account, { browser: !ctx.desktop, place: place.name, openSource }), page: "account" },
+    app: { badge: <AppIcon size={20} />, name: ownerLabel("app", place, ctx.desktop, ctx.advanced), line: appLine, page: "app" },
   };
   const dot = (page: SettingsPageId) => page === "phone" && phone.kind === "paired" && phone.connected ? "success" as const
     : page === "phone" && phone.kind === "attention" ? "warning" as const : null;
@@ -204,41 +230,26 @@ export function SettingsNav({ ctx, place, pages, current, query, hits, keyHits, 
         {searching ? <SearchResults ctx={ctx} place={place} hits={hits} keyHits={keyHits} onKey={onKey} query={query} onHit={onHit} /> : OWNERS.map((owner, index) => {
           const group = pages.filter((page) => page.owner === owner && page.id !== lines[owner].page);
           const identity = lines[owner];
+          const browserApp = owner === "app" && !ctx.desktop;
           return (
             <div key={owner} role="group" aria-label={identity.name} data-settings-group={owner} className={cn("flex flex-col gap-0.5", index > 0 && "mt-4")}>
-              <IdentityRow page={identity.page} current={current === identity.page} badge={identity.badge} name={identity.name} line={identity.line} narrow={narrow} onOpen={() => onOpen(identity.page)} />
-              <div className="mt-0.5 flex flex-col gap-0.5">
-                {group.map((page) => narrow ? (
-                  <button key={page.id} type="button" data-settings-page={page.id} data-settings-section={page.id} onClick={() => onOpen(page.id)}
-                    className="flex h-11 w-full cursor-pointer items-center gap-2 rounded-lg px-2 text-left text-[14px] leading-5 text-ink hover:bg-menu-hover">
-                    <span className="flex w-6 shrink-0 justify-center">{page.icon && <page.icon size={16} strokeWidth={1.75} aria-hidden="true" className="text-ink-secondary" />}</span>
-                    <span className="min-w-0 flex-1 truncate">{t(page.labelKey)}</span>
-                    {dot(page.id) && <span aria-hidden="true" className={cn("size-1.5 rounded-full", dot(page.id) === "success" ? "bg-success" : "bg-warning")} />}
-                    <ChevronRight size={14} aria-hidden="true" className="text-ink-tertiary rtl:-scale-x-100" />
-                  </button>
-                ) : (
-                  <PageItem key={page.id} page={page} label={t(page.labelKey)} current={current === page.id} dot={dot(page.id)} onOpen={() => onOpen(page.id)} />
-                ))}
-              </div>
+              {browserApp ? (
+                <PageItem page={identity.page} label={identity.name} icon={SlidersHorizontal} current={current === identity.page} narrow={narrow} onOpen={() => onOpen(identity.page)} />
+              ) : (
+                <IdentityRow page={identity.page} current={current === identity.page} badge={identity.badge} name={identity.name} line={identity.line} narrow={narrow} onOpen={() => onOpen(identity.page)} />
+              )}
+              {group.length > 0 && (
+                <div className={cn("flex flex-col gap-0.5", !browserApp && "mt-0.5")}>
+                  {group.map((page) => (
+                    <PageItem key={page.id} page={page.id} label={t(page.labelKey)} icon={page.icon} current={current === page.id} dot={dot(page.id)} narrow={narrow} onOpen={() => onOpen(page.id)} />
+                  ))}
+                </div>
+              )}
             </div>
           );
         })}
       </div>
-      {!SIMPLE_ONLY && <InterfaceModeFooter narrow={narrow} onChange={onMode} />}
     </nav>
-  );
-}
-
-function InterfaceModeFooter({ narrow, onChange }: { narrow: boolean; onChange: (mode: InterfaceMode) => void }) {
-  const mode = useInterfaceMode();
-  return (
-    <div data-settings-block="advanced-mode" title={t("settings.interfaceMode.subtitle")}
-      className={cn("flex shrink-0 flex-col items-stretch justify-center gap-1 py-3 shadow-[inset_0_0.5px_0_var(--settings-edge)]", narrow ? "px-4" : "px-5")}>
-      <span id="settings-interface-mode" className="text-[13px] leading-5 text-ink">{t("settings.interfaceMode.title")}</span>
-      <Select variant="ghost" value={mode} aria-labelledby="settings-interface-mode" onChange={(event) => { const next = event.target.value; if (next === "raw" || next === "simple" || next === "advanced") onChange(next); }}>
-        {(["raw", "simple", "advanced"] as const).map((choice) => <option key={choice} value={choice}>{t(`settings.interfaceMode.${choice}`)}</option>)}
-      </Select>
-    </div>
   );
 }
 
@@ -282,16 +293,16 @@ function highlight(label: string, query: string): ReactNode {
   return <>{label.slice(0, at)}<span className="font-medium">{label.slice(at, end)}</span>{label.slice(end)}</>;
 }
 
-export function hitLabel(hit: SearchHit, place: SettingsPlace, desktop: boolean): string {
+export function hitLabel(hit: SearchHit, place: SettingsPlace, desktop: boolean, advanced = false): string {
   if (hit.entry.id === "page:overview") return place.name;
   if (hit.entry.id === "page:account") return t("settings.page.account");
-  if (hit.entry.id === "page:app") return desktop ? t("settings.page.app") : t("settings.page.browser");
+  if (hit.entry.id === "page:app") return ownerLabel("app", place, desktop, advanced);
   return t(hit.entry.labelKey, { app: productName(), helper: "" });
 }
 
 function HitRow({ ctx, place, hit, query, onHit }: { ctx: SettingsContext; place: SettingsPlace; hit: SearchHit; query: string; onHit: (hit: SearchHit) => void }) {
   const entry = hit.entry;
-  const label = hitLabel(hit, place, ctx.desktop);
+  const label = hitLabel(hit, place, ctx.desktop, ctx.advanced);
   const where = searchWhere(hit, place, ctx);
   const full = searchLocation(hit, place, ctx);
   const Icon = entry.jump ? null : pageById(entry.page).icon;
@@ -339,7 +350,7 @@ export function searchWhere(hit: SearchHit, place: SettingsPlace, ctx: SettingsC
   if (entry.jump) return { owner: searchLocation(hit, place, ctx) };
   if (entry.id.startsWith("page:") && (entry.page === "overview" || entry.page === "account" || entry.page === "app")) return null;
   const owner = PAGE_OWNER[entry.page];
-  const ownerName = hit.elsewhere ? t("rail.thisComputer") : owner === "place" ? place.name : ownerLabel(owner, place, ctx.desktop);
+  const ownerName = hit.elsewhere ? t("rail.thisComputer") : owner === "place" ? place.name : ownerLabel(owner, place, ctx.desktop, ctx.advanced);
   const pageKey = PAGE_KEY[entry.page];
   return { owner: ownerName, ...(pageKey && !entry.id.startsWith("page:") ? { page: t(pageKey) } : {}) };
 }
@@ -353,11 +364,11 @@ export function searchLocation(hit: SearchHit, place: SettingsPlace, ctx: Settin
   if (entry.jump === "shortcuts") return t("settings.search.opensShortcuts");
   const owner = PAGE_OWNER[entry.page];
   // Every location starts with its owner (the place, Your account, This app), so the path reads the same everywhere.
-  const ownerName = hit.elsewhere ? t("rail.thisComputer") : owner === "place" ? place.name : ownerLabel(owner, place, ctx.desktop);
+  const ownerName = hit.elsewhere ? t("rail.thisComputer") : owner === "place" ? place.name : ownerLabel(owner, place, ctx.desktop, ctx.advanced);
   const pageKey = PAGE_KEY[entry.page];
   const parts: string[] = [ownerName];
   if (pageKey && !entry.id.startsWith("page:")) parts.push(t(pageKey));
-  const label = hitLabel(hit, place, ctx.desktop);
+  const label = hitLabel(hit, place, ctx.desktop, ctx.advanced);
   if (entry.sectionKey && t(entry.sectionKey) !== label) parts.push(t(entry.sectionKey));
   if (entry.id.startsWith("page:") && (entry.page === "overview" || entry.page === "account" || entry.page === "app")) return "";
   return parts.join(" › ");

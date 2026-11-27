@@ -6,7 +6,7 @@ import { t } from "@/lib/i18n";
 import { useStore } from "@/state/store";
 import { AboutDialog } from "../../AboutDialog";
 import { AnalyticsRow } from "../../AnalyticsRow";
-import { ChatWidthRow, FontRow, SidebarToolsLayoutRow } from "../../AppearanceSelectRows";
+import { ChatWidthRow, FontRow, PhoneHomeLayoutRow, SidebarToolsLayoutRow } from "../../AppearanceSelectRows";
 import {
   ColorUserBubblesRow, FollowUpRow, LanguageRow, PinnedCirclesRow, ReplayTourRow, RunCardRow, SendKeyRow, ShowThreadsRow,
   ToolCallsRow, UniversalPinsRow, UpdatesRow,
@@ -25,6 +25,9 @@ import { TalkShortcutRow } from "../../TalkShortcutRow";
 import { useSkinChoice, ThemeRow } from "../../ThemeRow";
 import { WindowFrameRow } from "../../WindowFrameRow";
 import { resolveSkin, SKINS } from "@/lib/skins";
+import { setInterfaceMode, useInterfaceMode } from "@/lib/interface-mode";
+import { SIMPLE_ONLY } from "@/lib/simple-only";
+import { Select } from "../../Select";
 import { versionLine } from "../settings-context";
 import { useSettingsShell } from "../settings-shell";
 import { PlaceBadge } from "../SettingsNav";
@@ -151,6 +154,32 @@ function ThemePickerRow({ open, onToggle }: { open: boolean; onToggle: () => voi
   );
 }
 
+function InterfaceModeRow() {
+  const { onMode } = useSettingsShell();
+  const mode = useInterfaceMode();
+  return (
+    <div data-settings-block="advanced-mode" className="contents">
+      <SettingRow title={t("settings.interfaceMode.title")} subtitle={t("settings.interfaceMode.subtitle")}>
+        <Select
+          size="sm"
+          variant="ghost"
+          id="settings-interface-mode"
+          value={mode}
+          aria-label={t("settings.interfaceMode.title")}
+          onChange={(event) => {
+            const next = event.target.value;
+            if (next === "raw" || next === "simple" || next === "advanced") (onMode ?? setInterfaceMode)(next);
+          }}
+        >
+          {(["raw", "simple", "advanced"] as const).map((choice) => (
+            <option key={choice} value={choice}>{t(`settings.interfaceMode.${choice}`)}</option>
+          ))}
+        </Select>
+      </SettingRow>
+    </div>
+  );
+}
+
 export function AppearancePage() {
   const { ctx, place, go, anchor } = useSettingsShell();
   const [themes, setThemes] = useState(anchor === "themes");
@@ -160,6 +189,8 @@ export function AppearancePage() {
         <ThemeRow simple />
         <ThemePickerRow open={themes} onToggle={() => setThemes((open) => !open)} />
         {themes && <div data-settings-block="themes" className="p-4"><SkinPicker /></div>}
+        {!SIMPLE_ONLY && <InterfaceModeRow />}
+        <PhoneHomeLayoutRow />
         <ColorUserBubblesRow simple />
         {!ctx.client && <SettingsLinkRow title={t("placeLook.sidebarColor")} value={place.name} badge={<PlaceBadge place={place} size={14} />} onClick={() => go("overview", "sidebar")} data={{ "data-settings-door": "sidebar-color" }} />}
       </SettingsRows>

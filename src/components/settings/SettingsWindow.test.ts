@@ -10,7 +10,7 @@ const fixture = vi.hoisted(() => ({
   advanced: false,
   mode: null as "raw" | "simple" | "advanced" | null,
   setInterfaceMode: vi.fn(),
-  selects: [] as Array<{ "aria-labelledby"?: string; value?: string; onChange?: (event: { target: { value: string } }) => void }>,
+  selects: [] as Array<{ id?: string; "aria-labelledby"?: string; value?: string; onChange?: (event: { target: { value: string } }) => void }>,
   admin: true as boolean | null,
   config: {} as Record<string, unknown>,
   setAdvancedMode: vi.fn(),
@@ -179,44 +179,64 @@ describe("the Settings window", () => {
     expect(advanced).toContain("Chat width");
     expect(simple).toContain("Light or dark");
     expect(simple).toContain("Browse themes");
+    expect(simple).toContain('data-settings-block="home-layout"');
+    expect(simple).toContain("Home layout");
+    for (const option of ["List", "Cards", "Compact"]) expect(simple).toContain(`>${option}</option>`);
   });
 
-  it.each(["raw", "simple", "advanced"] as const)("keeps %s reachable from every page without writing server settings", (mode) => {
-    for (const page of ["overview", "phone", "appearance"] as const) {
+  it.each(["raw", "simple", "advanced"] as const)("places Interface mode (%s) inside Appearance without writing server settings and keeps it out of the nav footer", (mode) => {
+    for (const page of ["overview", "phone"] as const) {
       const html = render(page);
-      expect(html).toContain('id="settings-interface-mode"');
-      for (const choice of ["Raw", "Simple", "Advanced"]) expect(html).toContain(`>${choice}</option>`);
+      expect(html).not.toContain('id="settings-interface-mode"');
+      expect(html).not.toContain('data-settings-block="advanced-mode"');
     }
-    const selector = fixture.selects.find((props) => props["aria-labelledby"] === "settings-interface-mode")!;
+    const appearance = render("appearance");
+    const nav = appearance.slice(appearance.indexOf("<nav"), appearance.indexOf("</nav>"));
+    const body = appearance.slice(appearance.indexOf('data-settings-page-body="appearance"'));
+    expect(nav).not.toContain('id="settings-interface-mode"');
+    expect(nav).not.toContain('data-settings-block="advanced-mode"');
+    expect(body).toContain('data-settings-block="advanced-mode"');
+    expect(body).toContain('id="settings-interface-mode"');
+    for (const choice of ["Raw", "Simple", "Advanced"]) expect(body).toContain(`>${choice}</option>`);
+    const selector = fixture.selects.find((props) => props.id === "settings-interface-mode")!;
     selector.onChange!({ target: { value: mode } });
     expect(fixture.setInterfaceMode).toHaveBeenCalledWith(mode);
     expect(fixture.dispatch).not.toHaveBeenCalled();
     expect(fixture.api).not.toHaveBeenCalled();
   });
 
-  it("keeps Raw selected on a paired client and returns from an Advanced-only page when leaving Advanced", () => {
+  it("keeps Raw selected on a paired client and keeps Appearance open when leaving Advanced", () => {
     fixture.mode = "raw";
     vi.stubGlobal("window", { ogb: { remoteClient: { active: true } } });
     expect(render("appearance")).toMatch(/<option value="raw" selected="">Raw<\/option>/);
     vi.stubGlobal("window", desktopHere());
     fixture.advanced = true;
     fixture.mode = "advanced";
-    render("data");
-    const selector = fixture.selects.findLast((props) => props["aria-labelledby"] === "settings-interface-mode")!;
-    selector.onChange!({ target: { value: "raw" } });
-    expect(fixture.dispatch).toHaveBeenCalledWith({ type: "toggleAppSettings", open: true, section: "overview" });
-    expect(fixture.setInterfaceMode).toHaveBeenCalledWith("raw");
-  });
-
-  it("keeps Spending open when leaving Advanced", () => {
-    vi.stubGlobal("window", desktopHere());
-    fixture.advanced = true;
-    fixture.mode = "advanced";
-    render("usage");
-    const selector = fixture.selects.findLast((props) => props["aria-labelledby"] === "settings-interface-mode")!;
+    render("appearance");
+    const selector = fixture.selects.findLast((props) => props.id === "settings-interface-mode")!;
     selector.onChange!({ target: { value: "simple" } });
     expect(fixture.dispatch).not.toHaveBeenCalled();
     expect(fixture.setInterfaceMode).toHaveBeenCalledWith("simple");
+  });
+
+  it("renders a UserRound icon fallback instead of '?' in YouAvatar when nameless", () => {
+    const html = render("overview");
+    expect(html).toContain('data-you-avatar-fallback=""');
+    expect(html).toContain("lucide-user-round");
+    expect(html).not.toContain(">?<");
+  });
+
+  it("omits the dead nameRow card in AccountPage on remote client sessions while keeping it for non-client sessions", () => {
+    const localAccount = render("account");
+    expect(localAccount).toContain('data-account-name-row=""');
+
+    vi.stubGlobal("window", { ogb: { remoteClient: { active: true } } });
+    const clientAccount = render("account");
+    expect(clientAccount).not.toContain('data-account-name-row=""');
+    expect(clientAccount).not.toContain('data-settings-block="you"');
+    expect(clientAccount).toContain('data-settings-block="mausbot-account"');
+    expect(clientAccount).toContain("Signed in to ");
+    expect(clientAccount).toContain("lucide-laptop");
   });
 
   it("keeps the session-only credential notice in the migrated settings window", () => {
@@ -261,12 +281,33 @@ describe("the Settings window", () => {
     expect(render("account")).not.toContain("On This computer");
   });
 
-  it("in a browser: This browser, saved in this browser, with no startup or window rows", () => {
+  it("in a browser: labels app as General in Simple (with icon matching Appearance) and This app in Advanced, never This browser", () => {
     vi.stubGlobal("window", {});
-    fixture.advanced = true;
     fixture.config = { cloudHome: true };
+    fixture.advanced = false;
+    const simpleHtml = render("app");
+    const simpleNav = simpleHtml.slice(simpleHtml.indexOf("<nav"), simpleHtml.indexOf("</nav>"));
+    expect(simpleNav).toContain("General");
+    expect(simpleNav).not.toContain("This browser");
+    expect(simpleNav).not.toContain("Saved in this browser");
+    expect(simpleNav).toMatch(/data-settings-page="app"[\s\S]*?lucide-sliders-horizontal[\s\S]*?General/);
+    expect(simpleNav).toMatch(/data-settings-page="appearance"[\s\S]*?lucide-palette[\s\S]*?Appearance/);
+    expect(simpleHtml).toMatch(/<h2[^>]*>General<\/h2>/);
+
+    setLocale("zh");
+    const zhHtml = render("app");
+    const zhNav = zhHtml.slice(zhHtml.indexOf("<nav"), zhHtml.indexOf("</nav>"));
+    expect(zhNav).toContain("通用");
+    expect(zhNav).not.toContain("这个浏览器");
+    expect(zhHtml).toMatch(/<h2[^>]*>通用<\/h2>/);
+    setLocale("en");
+
+    fixture.advanced = true;
     const general = render("general");
-    expect(general).toContain("This browser");
+    const advNav = general.slice(general.indexOf("<nav"), general.indexOf("</nav>"));
+    expect(advNav).toContain("This app");
+    expect(advNav).toContain("General");
+    expect(advNav).not.toContain("This browser");
     expect(general).toContain("Saved in this browser");
     expect(general).not.toContain("Open at login");
     expect(render("appearance")).not.toContain("Window frame");

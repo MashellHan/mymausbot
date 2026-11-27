@@ -3,6 +3,7 @@ import { t } from "@/lib/i18n";
 import { CHAT_WIDTH_IDS, applyChatWidth, readChatWidth, type ChatWidthId } from "@/lib/chat-width";
 import { FONT_IDS, applyFont, readFont, type FontId } from "@/lib/fonts";
 import { parseSidebarToolsLayout, setSidebarToolsLayout, SIDEBAR_TOOLS_LAYOUTS, useSidebarToolsLayout } from "@/lib/sidebar-preferences";
+import { parsePhoneHomeLayout, PHONE_HOME_LAYOUTS, setPhoneHomeLayout, usePhoneHomeLayout } from "@/lib/phone-home-layout";
 import { SettingRow } from "./SettingsPrimitives";
 import { Select } from "./Select";
 
@@ -64,5 +65,24 @@ export function SidebarToolsLayoutRow() {
         ))}
       </Select>
     </SettingRow>
+  );
+}
+
+export function PhoneHomeLayoutRow() {
+  const layout = usePhoneHomeLayout();
+  return (
+    <div data-settings-block="home-layout" className="contents">
+      <SettingRow title={t("settings.appearance.homeLayout")} subtitle={t("settings.appearance.homeLayout.subtitle")}>
+        <Select size="sm" className="w-full max-w-[240px]"
+          value={layout}
+          aria-label={t("settings.appearance.homeLayout")}
+          onChange={(event) => setPhoneHomeLayout(parsePhoneHomeLayout(event.target.value))}
+        >
+          {PHONE_HOME_LAYOUTS.map((option) => (
+            <option key={option} value={option}>{t(`settings.appearance.homeLayout.${option}`)}</option>
+          ))}
+        </Select>
+      </SettingRow>
+    </div>
   );
 }
