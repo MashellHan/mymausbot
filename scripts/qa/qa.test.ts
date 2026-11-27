@@ -855,7 +855,7 @@ describe("complete CI and trusted QA health", () => {
     }
   });
 
-  it("reads ten-shard artifact paths while retaining ZIP entry limits", async () => {
+  it("reads multi-digit shard artifact paths while retaining ZIP entry limits", async () => {
     const archive = (names: string[]) => {
       const directory = mkdtempSync(join(tmpdir(), "mausbot-qa-test-"));
       try {
@@ -874,15 +874,18 @@ describe("complete CI and trusted QA health", () => {
       const api = vi.fn(async () => bytes);
       return { result: artifactFiles({ id: 1, size_in_bytes }, api), api };
     };
-    for (const name of ["qa-plan.json", "vitest-retries.jsonl", "1/vitest.json", "8/vitest.json", "9/vitest.json", "10/vitest.json"]) {
+    for (const name of ["qa-plan.json", "vitest-retries.jsonl", "1/vitest.json", "8/vitest.json", "9/vitest.json", "10/vitest.json", "11/vitest.json", "12/vitest.json"]) {
       const { result, api } = read(archive([name]));
       await expect(result).resolves.toEqual({ [name]: "{}" });
       expect(api).toHaveBeenCalledOnce();
       expect(api).toHaveBeenCalledWith("/actions/artifacts/1/zip", { raw: true });
     }
-    for (const name of ["9/unknown.json", "0/vitest.json", "01/vitest.json", "11/vitest.json"]) {
+    for (const name of ["9/unknown.json", "0/vitest.json", "01/vitest.json", "11/evil.json"]) {
       await expect(read(archive([name])).result).rejects.toThrow("Unexpected artifact entries");
     }
+    const rootTraversal = archive(["xxx/vitest.jso"]);
+    const rootTraversalZip = Buffer.from(rootTraversal.toString("latin1").replaceAll("xxx/vitest.jso", "../vitest.json"), "latin1");
+    await expect(read(rootTraversalZip).result).rejects.toThrow("Unexpected artifact entries");
     const traversal = archive(["9/xx/vitest.json"]);
     const traversalZip = Buffer.from(traversal.toString("latin1").replaceAll("9/xx/vitest.json", "9/../vitest.json"), "latin1");
     await expect(read(traversalZip).result).rejects.toThrow("Unexpected artifact entries");
