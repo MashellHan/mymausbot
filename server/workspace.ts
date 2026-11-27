@@ -3,7 +3,7 @@ import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, open
 import { join } from "node:path";
 
 import { writeFileAtomic } from "./atomic.ts";
-import { alwaysCore, isExpired, isFuture, isMemoryDate, parseMemoryEntries, untilMark, validFromMark, withoutExpired, withoutSuperseded, type MemoryEntryLine } from "./memory-entries.ts";
+import { alwaysCore, isExpired, isFuture, isMemoryDate, parseMemoryEntries, untilMark, validFromMark, withoutExpired, type MemoryEntryLine } from "./memory-entries.ts";
 import { parseTopicHeader, readTopicHead, renderTopicIndex } from "./memory-topics.ts";
 import { indexMemoryFile, indexedMemoryFiles, recallMemory, recallMemoryEntries, removeMemoryFile, type MemoryEntryHit, type MemoryEntryRecord, type MemoryHit, type SearchMode } from "./message-db.ts";
 import { redactSecretsInText } from "./redact.ts";
