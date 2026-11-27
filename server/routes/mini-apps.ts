@@ -12,7 +12,7 @@ import { createChatApps } from "../chat-apps.ts";
 import { appDocRefs } from "../message-db.ts";
 import type { json as sendJson } from "../harness/http.ts";
 import { MINI_APP_TOOL_ROUTES } from "../drivers/agents-mini-app-tools.ts";
-import { MiniApps, MINI_APPS_OWNER, miniAppDocRefs, type MiniAppActor } from "../mini-apps/registry.ts";
+import { MiniApps, MINI_APPS_OWNER, miniAppDocRefs, type MiniAppActor, type MiniAppChangedEvent } from "../mini-apps/registry.ts";
 import type { MiniAppReleaseSource } from "../mini-apps/release-source.ts";
 import { appFailure, parsePublish } from "../mini-apps/validation.ts";
 import { agentRoleEdit } from "../mini-apps/agent-role-edit.ts";
@@ -68,12 +68,13 @@ export function createMiniAppRouteHandlers(input: Omit<MiniAppRouteDeps, "apps" 
   hongguoProvider?: HongguoProvider;
   releaseSource?: MiniAppReleaseSource;
   suggestionWriter?(botId: string): SideJobText | null;
+  onChanged?: (event: MiniAppChangedEvent) => void;
 } & Pick<Parameters<typeof createChatApps>[0], "liveRows" | "liveRoots" | "paused">) {
-  const { store, dataDir, validPublisher, dashboardProviders, releaseSource, suggestionWriter, liveRows, liveRoots, paused, ...shared } = input;
+  const { store, dataDir, validPublisher, dashboardProviders, releaseSource, suggestionWriter, onChanged, liveRows, liveRoots, paused, ...shared } = input;
   const chatApps = createChatApps({ store, dataDir,
     references: () => [...appDocRefs(), ...miniAppDocRefs()], liveRows, liveRoots, paused });
   const apps = new MiniApps({ docs: chatApps.docs, data: shared.data, validPublisher,
-    dashboardProviders: dashboardProviders ?? localDashboardProviders, releaseSource });
+    dashboardProviders: dashboardProviders ?? localDashboardProviders, releaseSource, onChanged });
   apps.initialize();
   const deps = { ...shared, apps, roleConfiguration: (dashboardProviders ?? localDashboardProviders).configuration, suggestions: new MiniAppSuggestions({ apps, store,
     writer: suggestionWriter ?? (() => null) }), reports: new ReportStore(shared.data, createReportTemplate) };
