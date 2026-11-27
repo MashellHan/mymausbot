@@ -92,7 +92,7 @@ export function MiniAppLibraryEntries({
             onClick={() => canOpen ? onOpen(app!.id) : onAdd(kind)}
             aria-label={`${text(canOpen ? "computer.miniApps.catalog.open" : "computer.miniApps.catalog.add")} ${name}`}
             title={name} className="flex min-w-0 flex-col items-center gap-1 rounded-lg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60">
-            <MiniAppIcon kind={kind} launcher />
+            <MiniAppIcon kind={kind} app={app ?? undefined} launcher />
             <span className="w-full text-[11px] leading-4 text-ink [overflow-wrap:anywhere]">{name}</span>
           </button>
           {busyKind === kind && <Loader2 size={12} className="mt-1 animate-spin text-ink-secondary" aria-hidden="true" />}

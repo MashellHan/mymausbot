@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { MINI_APP_SHIPPED_TEMPLATE_KINDS, type MiniAppDashboardRead, type MiniAppPublish, type MiniAppQuery, type MiniAppUpdateApply } from "../../shared/mini-apps.ts";
+import { MINI_APP_ICON_PRESETS, MINI_APP_SHIPPED_TEMPLATE_KINDS, type MiniAppCustomIcon, type MiniAppDashboardRead, type MiniAppIconPreset, type MiniAppPublish, type MiniAppQuery, type MiniAppUpdateApply } from "../../shared/mini-apps.ts";
 import { LOCAL_AGENT_ACTIVITY_HISTORY_CURSOR } from "../../shared/local-dashboard.ts";
 
 export const bindingNameSchema = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,62}$/);
@@ -42,6 +42,44 @@ export const mutationKey = {
   requestKey: z.string().min(1).max(128).regex(/^[A-Za-z0-9._:-]+$/),
   expectedRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER - 1),
 };
+const PRESET_SET = new Set<string>(MINI_APP_ICON_PRESETS);
+const HEX_TONE_RE = /^#[0-9a-fA-F]{6}$/;
+const EMOJI_GRAPH_RE = /\p{Extended_Pictographic}|\p{Emoji_Presentation}|(?:\p{Regional_Indicator}{2})|(?:[0-9#*]\ufe0f?\u20e3)/u;
+const graphemeSegmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
+const iconToneSchema = z.string().regex(HEX_TONE_RE).transform((value) => value.toLowerCase());
+const isValidIconEmoji = (value: string): boolean => {
+  if (value.length < 1 || value.length > 16) return false;
+  if ([...value].some((char) => {
+    const code = char.codePointAt(0)!;
+    return code < 32 || code === 127 || char === "<" || char === ">" || char === "&" || char === '"' || char === "'" || /\s/.test(char);
+  })) return false;
+  if (!EMOJI_GRAPH_RE.test(value)) return false;
+  return [...graphemeSegmenter.segment(value)].length === 1;
+};
+const emojiValueSchema = z.string().trim().min(1).max(16).refine(isValidIconEmoji);
+export const miniAppIconSchema = z.union([
+  z.object({
+    kind: z.literal("preset"),
+    name: z.enum(MINI_APP_ICON_PRESETS),
+    tone: iconToneSchema.optional(),
+  }).strict(),
+  z.object({
+    kind: z.literal("emoji"),
+    value: emojiValueSchema,
+    tone: iconToneSchema.optional(),
+  }).strict(),
+  z.string().trim().min(1).max(32).transform((value, ctx): MiniAppCustomIcon => {
+    const lower = value.toLowerCase();
+    if (PRESET_SET.has(lower)) return { kind: "preset", name: lower as MiniAppIconPreset };
+    if (isValidIconEmoji(value)) return { kind: "emoji", value };
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid Mini App icon shorthand." });
+    return z.NEVER;
+  }),
+]).transform((value): MiniAppCustomIcon => {
+  if (value.kind === "preset") return value.tone ? { kind: "preset", name: value.name, tone: value.tone } : { kind: "preset", name: value.name };
+  return value.tone ? { kind: "emoji", value: value.value, tone: value.tone } : { kind: "emoji", value: value.value };
+});
+
 export const publishSchema = z.object({
   ...mutationKey, slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
   title: z.string().trim().min(1).max(120), description: z.string().trim().max(1000),
@@ -52,6 +90,7 @@ export const publishSchema = z.object({
   dashboardKind: z.enum(["agent-team", "usage"]).nullable().optional(),
   nativeKind: z.literal("hongguo").nullable().optional(),
   shippedTemplateKind: z.enum(MINI_APP_SHIPPED_TEMPLATE_KINDS).optional(),
+  icon: miniAppIconSchema.nullable().optional(),
 }).strict();
 export const rollbackSchema = z.object({ ...mutationKey, templateVersion: z.number().int().positive() }).strict();
 export const archiveSchema = z.object(mutationKey).strict();

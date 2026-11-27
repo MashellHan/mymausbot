@@ -86,10 +86,12 @@ describe("Bot overview suggestions", () => {
     const mojo = suggestion("01d8d54b-5b1c-4e8d-be21-e60aa6e42fc7");
     mojo.app.slug = "mojo";
     mojo.app.title = "Mojo";
-    fixture.api.mockResolvedValue(response(bot(), [mojo, { ...suggestion("other"), app: { ...suggestion("other").app, slug: "mojo", title: "Other" } }]));
+    const work = { ...suggestion("work-sec"), app: { ...suggestion("work-sec").app, title: "Work Secretary", icon: { kind: "preset" as const, name: "microsoft" as const } } };
+    fixture.api.mockResolvedValue(response(bot(), [mojo, { ...suggestion("other"), app: { ...suggestion("other").app, slug: "mojo", title: "Other" } }, work]));
     await render();
     expect(card("Mojo")?.querySelector('[data-mini-app-icon="mojo"]')).not.toBeNull();
     expect(card("Other")?.querySelector('[data-mini-app-icon="custom"]')).not.toBeNull();
+    expect(card("Work Secretary")?.querySelector('[data-mini-app-icon="preset:microsoft"]')).not.toBeNull();
   });
 
   it("shows at most three active suggestions with their reasons and opens the app or full list", async () => {

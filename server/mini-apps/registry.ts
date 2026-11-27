@@ -5,7 +5,7 @@ import type { MiniAppDataBinding } from "../../shared/mini-app-data.ts";
 import { LEGACY_MINI_APP_IDS, matchesMiniAppReleasePackage } from "../../shared/mini-app-release-packages.ts";
 import type { HongguoHistoryEntry, HongguoHistoryRequest, HongguoHistoryResponse, HongguoPreferencesRequest,
   HongguoPreferencesResponse } from "../../shared/hongguo-mini-app.ts";
-import { MINI_APP_AGENT_TEAM_BASE_RESOURCES, MINI_APP_DASHBOARD_RESOURCES, MINI_APP_SHIPPED_TEMPLATE_KINDS, type MiniAppArchive, type MiniAppDashboardDeclaration, type MiniAppDashboardDiscovery,
+import { MINI_APP_AGENT_TEAM_BASE_RESOURCES, MINI_APP_DASHBOARD_RESOURCES, MINI_APP_SHIPPED_TEMPLATE_KINDS, type MiniAppArchive, type MiniAppCustomIcon, type MiniAppDashboardDeclaration, type MiniAppDashboardDiscovery,
   type MiniAppDashboardKind, type MiniAppDashboardReadResult, type MiniAppDocument, type MiniAppMutationResult,
   type MiniAppDashboardResource, type MiniAppQuery, type MiniAppQueryResult, type MiniAppReleaseProvenance,
   type MiniAppRollback, type MiniAppState, type MiniAppShippedTemplateKind, type MiniAppNativeKind,
@@ -54,6 +54,7 @@ export function ensureMiniApps(db: DatabaseSync): void {
       ${shippedKindColumn},
       responsible_bot_id TEXT, capabilities TEXT NOT NULL DEFAULT '[]',
       release_provenance TEXT,
+      icon TEXT,
       UNIQUE(owner_id, slug)
     );
     CREATE TABLE IF NOT EXISTS mini_app_versions (
@@ -61,6 +62,7 @@ export function ensureMiniApps(db: DatabaseSync): void {
       description TEXT NOT NULL, bindings TEXT NOT NULL, created_at INTEGER NOT NULL,
       dashboard_html INTEGER NOT NULL DEFAULT 0 CHECK(dashboard_html IN (0, 1)),
       release_provenance TEXT,
+      icon TEXT,
       PRIMARY KEY(app_id, version), FOREIGN KEY(app_id) REFERENCES mini_apps(id)
     );
     CREATE TABLE IF NOT EXISTS mini_app_receipts (
@@ -132,7 +134,9 @@ export function ensureMiniApps(db: DatabaseSync): void {
   if (!columns.some(({ name }) => name === "responsible_bot_id")) db.exec("ALTER TABLE mini_apps ADD COLUMN responsible_bot_id TEXT");
   if (!columns.some(({ name }) => name === "capabilities")) db.exec("ALTER TABLE mini_apps ADD COLUMN capabilities TEXT NOT NULL DEFAULT '[]'");
   if (!columns.some(({ name }) => name === "release_provenance")) db.exec("ALTER TABLE mini_apps ADD COLUMN release_provenance TEXT");
+  if (!columns.some(({ name }) => name === "icon")) db.exec("ALTER TABLE mini_apps ADD COLUMN icon TEXT");
   if (!versionColumns.some(({ name }) => name === "release_provenance")) db.exec("ALTER TABLE mini_app_versions ADD COLUMN release_provenance TEXT");
+  if (!versionColumns.some(({ name }) => name === "icon")) db.exec("ALTER TABLE mini_app_versions ADD COLUMN icon TEXT");
   ensureMiniAppDevelopment(db);
   initialized.add(db);
 }
@@ -157,10 +161,13 @@ type AppRow = {
   shipped_template_kind: MiniAppShippedTemplateKind | null;
   responsible_bot_id: string | null; capabilities: string;
   release_provenance: string | null;
+  icon: string | null;
 };
-type VersionRow = { version: number; doc: string; title: string; description: string; bindings: string; created_at: number; dashboard_html: number; release_provenance: string | null };
+type VersionRow = { version: number; doc: string; title: string; description: string; bindings: string; created_at: number; dashboard_html: number; release_provenance: string | null; icon: string | null };
 const parseProvenance = (raw: string | null | undefined): MiniAppReleaseProvenance | null =>
   raw ? JSON.parse(raw) as MiniAppReleaseProvenance : null;
+const parseIcon = (raw: string | null | undefined): MiniAppCustomIcon | null =>
+  raw ? JSON.parse(raw) as MiniAppCustomIcon : null;
 function declaration(kind: MiniAppDashboardKind | null, html: boolean, agentTeamDetails: boolean): MiniAppDashboardDeclaration | null {
   if (kind === null) return null;
   if (kind === "agent-team") return html
@@ -179,6 +186,7 @@ const summary = (row: AppRow): MiniAppSummary => ({
   dashboard: declaration(row.dashboard_kind, row.dashboard_html === 1, row.agent_team_detail_grant === 1), dashboardIdentity: row.dashboard_identity,
   nativeKind: row.native_kind, nativeIdentity: row.native_identity,
   shippedTemplateKind: row.shipped_template_kind,
+  icon: parseIcon(row.icon),
   release: parseProvenance(row.release_provenance),
   createdAt: row.created_at, updatedAt: row.updated_at,
 });
@@ -381,7 +389,7 @@ export class MiniApps {
     if (row.content_hash !== this.hash(input)) throw appFailure(409, "This request key was already used with different content.");
     const app = JSON.parse(row.result) as MiniAppSummary;
     return { app: { ...app, dashboard: app.dashboard ?? null, dashboardIdentity: app.dashboardIdentity ?? app.dashboard?.kind ?? null,
-      shippedTemplateKind: app.shippedTemplateKind ?? null, responsibleBotId: app.responsibleBotId ?? null,
+      shippedTemplateKind: app.shippedTemplateKind ?? null, icon: app.icon ?? null, responsibleBotId: app.responsibleBotId ?? null,
       capabilities: app.capabilities ?? [], release: app.release ?? null }, replayed: true };
   }
 
@@ -493,25 +501,27 @@ export class MiniApps {
         !isDeepStrictEqual(JSON.parse(previousVersion.bindings) as MiniAppDataBinding[], input.bindings);
       const releaseProvenance = developed ? null : parseProvenance(previousVersion?.release_provenance);
       const releaseProvenanceJson = releaseProvenance ? JSON.stringify(releaseProvenance) : null;
+      const icon: MiniAppCustomIcon | null = input.icon === undefined ? current?.icon ?? null : input.icon;
+      const iconJson = icon ? JSON.stringify(icon) : null;
       const app: MiniAppSummary = { id: appId, slug: input.slug, title: input.title, description: input.description,
         status: "active", revision: (current?.revision ?? 0) + 1, templateVersion: last.version + 1,
         publisherBotIds: publishers, responsibleBotId, capabilities: input.capabilities ?? current?.capabilities ?? [],
         dashboard: declaration(dashboardKind, dashboardHtml, agentTeamDetails), dashboardIdentity, nativeKind, nativeIdentity, shippedTemplateKind,
-        release: releaseProvenance, createdAt: current?.createdAt ?? now, updatedAt: now };
-      db.prepare(`INSERT INTO mini_apps (id, owner_id, slug, title, description, status, revision, template_version, publishers, created_at, updated_at, dashboard_kind, dashboard_identity, dashboard_html, agent_team_detail_grant, native_kind, native_identity, shipped_template_kind, responsible_bot_id, capabilities, release_provenance)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        icon, release: releaseProvenance, createdAt: current?.createdAt ?? now, updatedAt: now };
+      db.prepare(`INSERT INTO mini_apps (id, owner_id, slug, title, description, status, revision, template_version, publishers, created_at, updated_at, dashboard_kind, dashboard_identity, dashboard_html, agent_team_detail_grant, native_kind, native_identity, shipped_template_kind, responsible_bot_id, capabilities, release_provenance, icon)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET title=excluded.title, description=excluded.description, status=excluded.status,
         revision=excluded.revision, template_version=excluded.template_version, publishers=excluded.publishers,
         updated_at=excluded.updated_at, dashboard_kind=excluded.dashboard_kind, dashboard_identity=excluded.dashboard_identity,
         dashboard_html=excluded.dashboard_html, agent_team_detail_grant=excluded.agent_team_detail_grant,
         native_kind=excluded.native_kind, native_identity=excluded.native_identity,
         shipped_template_kind=excluded.shipped_template_kind, responsible_bot_id=excluded.responsible_bot_id,
-        capabilities=excluded.capabilities, release_provenance=excluded.release_provenance`)
+        capabilities=excluded.capabilities, release_provenance=excluded.release_provenance, icon=excluded.icon`)
         .run(appId, MINI_APPS_OWNER, app.slug, app.title, app.description, app.status, app.revision, app.templateVersion,
           JSON.stringify(publishers), app.createdAt, now, dashboardKind, dashboardIdentity, dashboardHtml ? 1 : 0, agentTeamDetails ? 1 : 0, nativeKind, nativeIdentity, shippedTemplateKind,
-          responsibleBotId, JSON.stringify(app.capabilities), releaseProvenanceJson);
-      db.prepare("INSERT INTO mini_app_versions (app_id, version, doc, title, description, bindings, created_at, dashboard_html, release_provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(appId, app.templateVersion, stored.doc, app.title, app.description, JSON.stringify(input.bindings), now, dashboardHtml ? 1 : 0, releaseProvenanceJson);
+          responsibleBotId, JSON.stringify(app.capabilities), releaseProvenanceJson, iconJson);
+      db.prepare("INSERT INTO mini_app_versions (app_id, version, doc, title, description, bindings, created_at, dashboard_html, release_provenance, icon) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(appId, app.templateVersion, stored.doc, app.title, app.description, JSON.stringify(input.bindings), now, dashboardHtml ? 1 : 0, releaseProvenanceJson, iconJson);
       if (actor.botId && developed) recordMiniAppDevelopment(db, appId, actor.botId, now);
       return this.receipt(db, actor, target, "publish", input, app);
     });
@@ -588,8 +598,8 @@ export class MiniApps {
       };
       db.prepare("UPDATE mini_apps SET revision = ?, template_version = ?, updated_at = ?, dashboard_html = ?, shipped_template_kind = ?, release_provenance = ? WHERE id = ?")
         .run(app.revision, app.templateVersion, now, dashboardHtml ? 1 : 0, app.shippedTemplateKind ?? null, releaseProvenanceJson, id);
-      db.prepare("INSERT INTO mini_app_versions (app_id, version, doc, title, description, bindings, created_at, dashboard_html, release_provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(id, app.templateVersion, stored.doc, app.title, app.description, currentVersion.bindings, now, dashboardHtml ? 1 : 0, releaseProvenanceJson);
+      db.prepare("INSERT INTO mini_app_versions (app_id, version, doc, title, description, bindings, created_at, dashboard_html, release_provenance, icon) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(id, app.templateVersion, stored.doc, app.title, app.description, currentVersion.bindings, now, dashboardHtml ? 1 : 0, releaseProvenanceJson, app.icon ? JSON.stringify(app.icon) : null);
       return this.receipt(db, actor, id, "update", input, app);
     });
   }
@@ -624,10 +634,11 @@ export class MiniApps {
     this.authorizeTemplate(actor, current, bindings);
     for (const binding of bindings) await this.data.validateBinding(MINI_APPS_OWNER, binding);
     this.authorizeTemplate(actor, this.require(actor, id, true), bindings);
-    return this.changeHead(actor, id, "rollback", input.data, (app) => {
+    return this.changeHead(actor, id, "rollback", input.data, (app, targetVersion) => {
       this.authorizeTemplate(actor, app, bindings);
       this.requireNativeBindings(Boolean(app.dashboardIdentity || app.nativeIdentity), bindings);
       return { ...app, title: managed ? app.title : version.title, description: managed ? app.description : version.description,
+        icon: managed ? app.icon ?? null : parseIcon(targetVersion.icon),
         templateVersion: version.version, status: "active" };
     });
   }
@@ -638,23 +649,25 @@ export class MiniApps {
     return this.changeHead(actor, id, "archive", input.data, (app) => ({ ...app, status: "archived", dashboard: null, nativeKind: null }));
   }
 
-  private changeHead(actor: MiniAppActor, id: string, operation: string, input: MiniAppRollback | MiniAppArchive, change: (app: MiniAppSummary) => MiniAppSummary): MiniAppMutationResult {
+  private changeHead(actor: MiniAppActor, id: string, operation: string, input: MiniAppRollback | MiniAppArchive, change: (app: MiniAppSummary, targetVersion: VersionRow) => MiniAppSummary): MiniAppMutationResult {
     this.require(actor, id, true);
     return this.access.write((db) => {
       const current = this.require(actor, id, true);
       const replay = this.replay(actor, id, operation, input);
       if (replay) return replay;
       this.expected(current, input.expectedRevision);
-      const changed = change(current);
-      const targetVersion = this.version(id, changed.templateVersion);
+      const requestedVersion = "templateVersion" in input ? input.templateVersion : current.templateVersion;
+      const targetVersion = this.version(id, requestedVersion);
+      const changed = change(current, targetVersion);
       const dashboardHtml = targetVersion.dashboard_html === 1;
       const releaseProvenance = parseProvenance(targetVersion.release_provenance);
       const releaseProvenanceJson = releaseProvenance ? JSON.stringify(releaseProvenance) : null;
+      const iconJson = changed.icon ? JSON.stringify(changed.icon) : null;
       const agentTeamDetails = changed.dashboard?.kind === "agent-team" && this.row(id)?.agent_team_detail_grant === 1;
       const app = { ...changed, dashboard: declaration(changed.dashboard?.kind ?? null, dashboardHtml, agentTeamDetails),
         release: releaseProvenance, revision: current.revision + 1, updatedAt: Date.now() };
-      db.prepare("UPDATE mini_apps SET title = ?, description = ?, status = ?, revision = ?, template_version = ?, updated_at = ?, dashboard_kind = ?, dashboard_html = ?, agent_team_detail_grant = ?, native_kind = ?, release_provenance = ? WHERE id = ?")
-        .run(app.title, app.description, app.status, app.revision, app.templateVersion, app.updatedAt, app.dashboard?.kind ?? null, dashboardHtml ? 1 : 0, agentTeamDetails ? 1 : 0, app.nativeKind ?? null, releaseProvenanceJson, id);
+      db.prepare("UPDATE mini_apps SET title = ?, description = ?, status = ?, revision = ?, template_version = ?, updated_at = ?, dashboard_kind = ?, dashboard_html = ?, agent_team_detail_grant = ?, native_kind = ?, release_provenance = ?, icon = ? WHERE id = ?")
+        .run(app.title, app.description, app.status, app.revision, app.templateVersion, app.updatedAt, app.dashboard?.kind ?? null, dashboardHtml ? 1 : 0, agentTeamDetails ? 1 : 0, app.nativeKind ?? null, releaseProvenanceJson, iconJson, id);
       return this.receipt(db, actor, id, operation, input, app);
     });
   }

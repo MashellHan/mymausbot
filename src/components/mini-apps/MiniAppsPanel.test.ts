@@ -1977,4 +1977,22 @@ describe("Mini App independent release updates", () => {
       vi.useRealTimers();
     }
   });
+
+  it("renders custom preset and emoji icons across the expanded bar, collapsed header, and All apps grid", async () => {
+    fixture.apps = [
+      { ...app("ms_work", "Work Secretary"), icon: { kind: "preset", name: "microsoft" } },
+      { ...shippedDefaults()[0]!, icon: { kind: "emoji", value: "📒" } },
+    ];
+    await render();
+    await vi.waitFor(() => expect(frame()?.dataset.id).toBe("ms_work"));
+    expect(selected()?.querySelector('[data-mini-app-icon="preset:microsoft"]')).not.toBeNull();
+    expect(host.querySelector('[data-app-id="bookkeeping"] [data-mini-app-icon="emoji"]')).not.toBeNull();
+
+    await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-bar-toggle]')!.click(); });
+    expect(host.querySelector('[data-mini-app-collapsed-current] [data-mini-app-icon="preset:microsoft"]')).not.toBeNull();
+
+    await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-all]')!.click(); });
+    expect(host.querySelector('[data-mini-app-custom="ms_work"] [data-mini-app-icon="preset:microsoft"]')).not.toBeNull();
+    expect(host.querySelector('[data-mini-app-catalog="bookkeeping"] [data-mini-app-icon="emoji"]')).not.toBeNull();
+  });
 });

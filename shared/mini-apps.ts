@@ -16,6 +16,37 @@ export const DEFAULT_MINI_APP_KINDS = ["bookkeeping", "x_ai_digest", "github_act
 export type DefaultMiniAppKind = typeof DEFAULT_MINI_APP_KINDS[number];
 export type MiniAppNativeKind = "hongguo";
 
+export const MINI_APP_ICON_PRESETS = [
+  "microsoft",
+  "briefcase",
+  "mail",
+  "inbox",
+  "message",
+  "calendar",
+  "heart",
+  "activity",
+  "book",
+  "code",
+  "chart",
+  "sparkles",
+  "folder",
+  "globe",
+  "shield",
+  "terminal",
+  "check",
+  "clock",
+  "flame",
+  "users",
+  "wallet",
+] as const;
+export type MiniAppIconPreset = typeof MINI_APP_ICON_PRESETS[number];
+
+export type MiniAppIconSpec =
+  | { kind: "preset"; name: MiniAppIconPreset; tone?: string }
+  | { kind: "emoji"; value: string; tone?: string };
+export type MiniAppCustomIcon = MiniAppIconSpec;
+export type MiniAppIconInput = MiniAppIconSpec | MiniAppIconPreset | string;
+
 /** The local owner adds bundled apps once; only an explicit restore re-adds a removed app. */
 export interface MiniAppDefaultsInput {
   bookkeepingHtml: string;
@@ -162,6 +193,8 @@ export interface MiniAppSummary {
   nativeIdentity?: MiniAppNativeKind | null;
   /** Owner-assigned display provenance; it grants no publisher, Data or dashboard access. */
   shippedTemplateKind?: MiniAppShippedTemplateKind | null;
+  /** Optional safe host-rendered icon metadata; null/omitted falls back to built-in or default icon. */
+  icon?: MiniAppCustomIcon | null;
   /** Independent release provenance bound to the current template version, or null for bundled/custom templates. */
   release?: MiniAppReleaseProvenance | null;
   createdAt: number;
@@ -210,6 +243,8 @@ export interface MiniAppPublish {
   nativeKind?: MiniAppNativeKind | null;
   /** Only the workspace owner may label an installed shipped template. */
   shippedTemplateKind?: MiniAppShippedTemplateKind;
+  /** Omitted preserves the current icon; null clears back to default; preset/emoji updates the host icon. */
+  icon?: MiniAppCustomIcon | null;
 }
 
 export interface MiniAppRollback {
