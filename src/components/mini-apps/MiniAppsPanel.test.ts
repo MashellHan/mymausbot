@@ -7,6 +7,7 @@ import { loadLocale, setLocale, t } from "@/lib/i18n";
 import type { LocalUsageResponse } from "../../../shared/local-dashboard";
 import { withGithubUsageFixture, withMergedUsageFixture } from "../../../scripts/testing/merged-usage-fixture";
 import type { MiniAppDocument, MiniAppRollback, MiniAppState, MiniAppSummary } from "../../../shared/mini-apps";
+import { MINI_APP_FALLBACK_POLL_MS } from "./mini-app-live-sync";
 import { MINI_APP_RUNTIME_READY_TIMEOUT_MS, type MiniAppUpdateInfo, type MiniAppUpdateRequest } from "./mini-app-update";
 
 const fixture = vi.hoisted(() => ({
@@ -697,7 +698,7 @@ describe("Mini Apps panel", () => {
     const polls: Array<() => Promise<void>> = [];
     const actualSetTimeout = globalThis.setTimeout;
     vi.spyOn(globalThis, "setTimeout").mockImplementation((handler, timeout, ...args) => {
-      if (timeout === 15_000 && typeof handler === "function") {
+      if (timeout === MINI_APP_FALLBACK_POLL_MS && typeof handler === "function") {
         polls.push(async () => { await handler(...args); });
         return 0 as unknown as ReturnType<typeof setTimeout>;
       }

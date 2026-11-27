@@ -12,7 +12,7 @@ import { createChatApps } from "../chat-apps.ts";
 import { appDocRefs } from "../message-db.ts";
 import type { json as sendJson } from "../harness/http.ts";
 import { MINI_APP_TOOL_ROUTES } from "../drivers/agents-mini-app-tools.ts";
-import { MiniApps, MINI_APPS_OWNER, miniAppDocRefs, type MiniAppActor } from "../mini-apps/registry.ts";
+import { MiniApps, MINI_APPS_OWNER, miniAppDocRefs, type MiniAppActor, type MiniAppChangedEvent } from "../mini-apps/registry.ts";
 import type { MiniAppReleaseSource } from "../mini-apps/release-source.ts";
 import { appFailure, parsePublish } from "../mini-apps/validation.ts";
 import { agentRoleEdit } from "../mini-apps/agent-role-edit.ts";
@@ -35,7 +35,7 @@ import { PASS, type RouteHandler } from "./table.ts";
 
 const ROOT = "/api/mini-apps";
 const REPORT_SOURCE = `${ROOT}/report-source`;
-const APP_PATH = /^\/api\/mini-apps\/([0-9a-f-]{36})(?:\/(state|query|dashboard|publish|rollback|archive|update|agent-md))?$/;
+const APP_PATH = /^\/api\/mini-apps\/([0-9a-f-]{36})(?:\/(state|query|query-batch|dashboard|publish|rollback|archive|update|agent-md))?$/;
 const HONGGUO_ACTION = /^\/api\/mini-apps\/([0-9a-f-]{36})\/hongguo\/(catalog|series|playback|history|preferences)$/;
 const HONGGUO_MEDIA = /^\/api\/mini-apps\/([0-9a-f-]{36})\/hongguo\/media\/([A-Za-z0-9_-]{1,256})$/;
 const HONGGUO_COVER = /^\/api\/mini-apps\/([0-9a-f-]{36})\/hongguo\/cover$/;
@@ -68,12 +68,13 @@ export function createMiniAppRouteHandlers(input: Omit<MiniAppRouteDeps, "apps" 
   hongguoProvider?: HongguoProvider;
   releaseSource?: MiniAppReleaseSource;
   suggestionWriter?(botId: string): SideJobText | null;
+  onChanged?: (event: MiniAppChangedEvent) => void;
 } & Pick<Parameters<typeof createChatApps>[0], "liveRows" | "liveRoots" | "paused">) {
-  const { store, dataDir, validPublisher, dashboardProviders, releaseSource, suggestionWriter, liveRows, liveRoots, paused, ...shared } = input;
+  const { store, dataDir, validPublisher, dashboardProviders, releaseSource, suggestionWriter, onChanged, liveRows, liveRoots, paused, ...shared } = input;
   const chatApps = createChatApps({ store, dataDir,
     references: () => [...appDocRefs(), ...miniAppDocRefs()], liveRows, liveRoots, paused });
   const apps = new MiniApps({ docs: chatApps.docs, data: shared.data, validPublisher,
-    dashboardProviders: dashboardProviders ?? localDashboardProviders, releaseSource });
+    dashboardProviders: dashboardProviders ?? localDashboardProviders, releaseSource, onChanged });
   apps.initialize();
   const deps = { ...shared, apps, roleConfiguration: (dashboardProviders ?? localDashboardProviders).configuration, suggestions: new MiniAppSuggestions({ apps, store,
     writer: suggestionWriter ?? (() => null) }), reports: new ReportStore(shared.data, createReportTemplate) };
@@ -363,8 +364,9 @@ export function createMiniAppRoutes(deps: MiniAppRouteDeps): RouteHandler {
       }
       if (method !== "POST") throw appFailure(405, "Method not allowed.");
       if (action === "dashboard") return json(res, 200, await deps.apps.dashboardRead(owner, id, await readBody(req, 4096)));
-      const body: unknown = await readBody(req, action === "publish" ? 900_000 : 20_000);
+      const body: unknown = await readBody(req, action === "publish" ? 900_000 : action === "query-batch" ? 64 * 1024 : 20_000);
       if (action === "query") return json(res, 200, await deps.apps.query(owner, id, body));
+      if (action === "query-batch") return json(res, 200, await deps.apps.queryBatch(owner, id, body));
       if (action === "publish") return json(res, 200, await deps.apps.publish(owner, body, id));
       if (action === "rollback") return json(res, 200, await deps.apps.rollback(owner, id, body));
       if (action === "archive") return json(res, 200, deps.apps.archive(owner, id, body));
