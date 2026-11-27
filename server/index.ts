@@ -509,6 +509,7 @@ import {
 } from "./skill-library.ts";
 import { runSkillsLibraryBootSweep } from "./skills-library-migration.ts";
 import { installedPlaybookInstructions } from "./installed-playbooks.ts";
+import { readPlaybook, selectPlaybookRulesForTurn } from "./memory-playbook.ts";
 import type { PackageImportDeps } from "./package-import.ts";
 import { createPresetStore } from "./presets.ts"; import { createShareWiring } from "./host/share.ts";
 import { OrgLibrary } from "./org-library.ts";
@@ -7843,7 +7844,8 @@ async function beginTurn(
       const skillInstructions = renderSkillInstructions(selectedSkills, {
         includeRoot: worksInWorkspace,
       });
-      const packagePlaybooks = installedPlaybookInstructions(providerText, bot.playbooks);
+      const learnedPlaybook = bot.memoryEnabled === false ? "" : selectPlaybookRulesForTurn({ rules: readPlaybook(bot.id), message: providerText, today: memoryDate() }).promptText;
+      const packagePlaybooks = `${installedPlaybookInstructions(providerText, bot.playbooks)}${learnedPlaybook}`;
       // A legacy task with a live provider session pins to null, since moving it breaks resume; a Cloud guest's conversation pins its own private folder.
       const pinnedCwd =
         privateWorkspace

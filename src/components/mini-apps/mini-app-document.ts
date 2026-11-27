@@ -2,6 +2,7 @@ import type { AppDocument } from "../../../shared/app";
 import { APP_PROTOCOL_VERSION } from "../../../shared/app";
 import { buildSrcdoc, stripDocumentPreamble } from "../../../shared/app-frame/document";
 import { APP_THEME_STYLE } from "../../../shared/app-frame/helper";
+import { hasMausUiOptIn, MAUS_MINI_APP_UI_CSS, MAUS_UI_SDK_HELPERS_SOURCE } from "../../../shared/mini-app-ui-kit";
 import type { MiniAppDocument } from "../../../shared/mini-apps";
 import { isEligibleGithubActivityDocument } from "./github-activity-host";
 import { HONGGUO_FRAME_SDK_SOURCE } from "./hongguo-frame-sdk";
@@ -112,7 +113,7 @@ function buildMiniAppSdkSource(githubActivity: boolean, managedRelease: boolean,
       siteListeners.forEach(function (listener) {
         listener({ site: message.site, opening: message.opening, phase: message.phase });
       });
-    } else if ((message.type === "query-result" || message.type === "dashboard-result" || message.type === "site-result") && pending.has(message.id)) {
+    } else if ((message.type === "query-result" || message.type === "query-batch-result" || message.type === "dashboard-result" || message.type === "site-result") && pending.has(message.id)) {
       var answer = pending.get(message.id);
       pending.delete(message.id);
       if (message.error) answer.reject(new Error(String(message.error)));
@@ -133,6 +134,18 @@ function buildMiniAppSdkSource(githubActivity: boolean, managedRelease: boolean,
   var base = {
     query: function (queryId, parameters, options) {
       return ready.then(function () { return request({ mausMiniApp: 1, type: "query", queryId: queryId, parameters: parameters, options: options }); });
+    },
+    queryBatch: function (items) {
+      if (!Array.isArray(items)) return Promise.reject(new TypeError("An array of queries is required."));
+      return ready.then(function () {
+        return request({ mausMiniApp: 1, type: "query-batch", queries: items.map(function (item) {
+          return {
+            queryId: item && item.queryId,
+            parameters: (item && item.parameters) || {},
+            options: item && item.options
+          };
+        }) });
+      });
     },
     dashboard: Object.freeze({ read: function (selection) {
       return ready.then(function () { return request({ mausMiniApp: 1, type: "dashboard-read", selection: selection }); });
@@ -204,6 +217,7 @@ function buildMiniAppSdkSource(githubActivity: boolean, managedRelease: boolean,
     });
   }
   ${hongguo ? HONGGUO_FRAME_SDK_SOURCE : ""}
+  ${MAUS_UI_SDK_HELPERS_SOURCE}
   var api = Object.freeze(base);
   Object.defineProperty(window, "mausApp", { value: api, enumerable: true });
 })();`;
@@ -216,7 +230,8 @@ export function isCustomLocalMiniApp(app: Pick<MiniAppDocument["app"], "dashboar
 export function miniAppFrameDocument(document: MiniAppDocument, desktopOpenerAvailable: boolean, scope: { site?: MiniAppSite; hongguo?: boolean; roleEditor?: boolean } = {}): AppDocument {
   const managedRelease = document.app.status === "active" && Boolean((document.app as { release?: unknown }).release);
   const sdk = buildMiniAppSdkSource(isEligibleGithubActivityDocument(document), managedRelease, scope.site, scope.hongguo === true, scope.roleEditor === true);
-  const html = `<style>${APP_THEME_STYLE}</style><script>${sdk}</script>${stripDocumentPreamble(document.html)}`;
+  const uiStyle = hasMausUiOptIn(document.html) ? `<style>${MAUS_MINI_APP_UI_CSS}</style>` : "";
+  const html = `<style>${APP_THEME_STYLE}</style>${uiStyle}<script>${sdk}</script>${stripDocumentPreamble(document.html)}`;
   return {
     v: 1,
     messageId: document.app.id,
