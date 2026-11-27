@@ -310,9 +310,9 @@ export function createAppSettings(deps: AppSettingsDeps) {
   return {
     async handle(body: Record<string, unknown>, turn: Turn, ended?: AbortSignal): Promise<{ status: number; body: Record<string, unknown> }> {
       if (typeof body.action === "string" && THEME_ACTIONS.includes(body.action)) return theme(turn, body);
+      if (deps.guestDriven(turn.threadId) || deps.turnOwner(turn) === null) return refuse(403, "Settings are available only in the owner's own conversation.");
       if (body.action === "set") return set(turn, body, ended);
       if (body.action === "show_card") return showCard(turn, body);
-      if (deps.guestDriven(turn.threadId) || deps.turnOwner(turn) === null) return refuse(403, "Settings are available only in the owner's own conversation.");
       if (body.action === "find") {
         const query = typeof body.query === "string" ? body.query : "";
         const hits = findSettings(entries, query, FIND_LIMIT).map(describe);

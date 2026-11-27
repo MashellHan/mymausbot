@@ -24,7 +24,7 @@ export interface LiveGoalRun {
 export interface GoalCardDeps {
   store: Pick<Store, "appendMessage" | "bot" | "messagesFor" | "patchMessage">;
   routines(): Pick<RoutineManager, "finishGoalRun"> | null;
-  notify(notification: Notification | null): void;
+  notify(notification: Notification | null, how?: { routine?: boolean; summary?: boolean }): void;
   routineSourceOwner(run: RoutineRun): { bot: BotRecord } | null;
   routineSourceThread(run: RoutineRun): string | null;
 }
@@ -119,7 +119,7 @@ export function createGoalCards(deps: GoalCardDeps) {
           deps.routineSourceThread(routineRun) ?? routineRun.threadId ?? threadId,
           safeDetail || `${routineRun.routineName} needs your input`,
           { avatarUrl: notificationBot.avatarUrl },
-        ));
+        ), { routine: true });
       }
     }
     if (routineRun?.status === "completed") {
@@ -132,7 +132,7 @@ export function createGoalCards(deps: GoalCardDeps) {
           deps.routineSourceThread(routineRun) ?? routineRun.threadId ?? threadId,
           safeDetail || routineRun.routineName,
           { avatarUrl: notificationBot.avatarUrl },
-        ));
+        ), { routine: true });
       }
     }
     if (!stillHere()) return;

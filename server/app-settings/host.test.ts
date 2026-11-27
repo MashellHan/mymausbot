@@ -194,30 +194,29 @@ describe("reads", () => {
     expect(helperCalls).toEqual([]);
   });
 
-  it("says why a turn is not the owner's own and what the person can do instead, and still changes nothing", async () => {
-    const said = async (options: Parameters<typeof fixture>[0]) => {
-      const { turn, set, saved } = fixture(options);
-      const { host: reader } = fixture();
-      const where = (JSON.parse(String((await reader.handle({ action: "get", id: "general.language" }, turn)).body.text)) as { where: string }).where;
-      const refused = await set("general.language", "de");
-      expect(refused.status).toBe(403);
+  it("blocks every settings action in non-owner and guest turns without revealing read access", async () => {
+    for (const options of [
+      { owner: false, ownerRefusal: "shared" as const },
+      { owner: false, ownerRefusal: "service" as const },
+      { guest: true },
+      { owner: false, ownerRefusal: "someone-else" as const },
+      { owner: false, ownerRefusal: "not-owner" as const },
+      { owner: false, ownerRefusal: "memory-changed" as const },
+      { owner: false, ownerRefusal: "unproven" as const },
+      { owner: false },
+    ]) {
+      const { host, turn, set, saved } = fixture(options);
+      for (const result of [
+        await set("general.language", "de"),
+        await host.handle({ action: "show_card", card: "phone" }, turn),
+        await host.handle({ action: "get", id: "general.language" }, turn),
+        await host.handle({ action: "find", query: "language" }, turn),
+      ]) {
+        expect(result.status).toBe(403);
+        expect(result.body.error).toBe("Settings are available only in the owner's own conversation.");
+      }
       expect(saved).toEqual([]);
-      const error = String(refused.body.error);
-      expect(error).toMatch(/^Settings change only in the owner's own conversation\. Nothing changed; you may still read settings\. /);
-      expect(error).toContain(`The person can change it themselves in ${where}.`);
-      return error;
-    };
-    expect(await said({ owner: false, ownerRefusal: "shared" })).toContain("Several people share this server");
-    expect(await said({ owner: false, ownerRefusal: "service" })).toContain("set up as a shared or hosted server");
-    expect(await said({ guest: true })).toContain("A guest writes in this conversation");
-    const someoneElse = await said({ owner: false, ownerRefusal: "someone-else" });
-    expect(someoneElse).toContain("asking again here won't work");
-    expect(someoneElse).toContain("a new conversation with this bot that only they write in");
-    expect(await said({ owner: false, ownerRefusal: "not-owner" })).toContain("started by someone other than the owner");
-    expect(await said({ owner: false, ownerRefusal: "memory-changed" })).toContain("tap Mark reviewed");
-    expect(await said({ owner: false, ownerRefusal: "unproven" })).toContain("can't be tied to a message the owner sent here");
-    // No reason given: the plain words, still refused.
-    expect(await said({ owner: false })).toContain("can't be tied to a message the owner sent here");
+    }
   });
 
   it("refuses writes in a guest-driven conversation", async () => {

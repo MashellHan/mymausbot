@@ -18,7 +18,7 @@ import { readThreadEvents } from "../thread-events.ts";
 import { parseUsageRange } from "../usage-ledger.ts";
 import type { ConfigStatus } from "./config.ts";
 import type { PrivateRecords } from "../host/private-records.ts";
-import type { RequestAuth } from "../request-auth.ts";
+import { ownerOrAdmin, type RequestAuth } from "../request-auth.ts";
 import { PASS, type RouteHandler } from "./table.ts";
 
 export interface StatusRouteDeps {
@@ -231,6 +231,9 @@ export function createStatusRoutes(deps: StatusRouteDeps): RouteHandler {
 
     m = path.match(/^\/api\/bots\/([\w-]+)\/activity$/);
     if (m && method === "GET") {
+      if (!ownerOrAdmin(auth) && !(auth.kind === "session" && auth.session.pwa === true && !auth.session.teamRole)) {
+        return json(res, 403, { error: "forbidden: admin scope required" });
+      }
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
       const rawLimit = url.searchParams.get("limit");
