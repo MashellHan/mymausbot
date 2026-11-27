@@ -290,14 +290,20 @@ const rowToNotificationLogEntry = (row: {
   read: row.read !== 0,
 });
 
-export function insertNotificationLog(entry: NotificationLogEntry): void {
-  transaction((database) => {
-    database.prepare(
-      "INSERT INTO notification_log(id, at, kind, bot_id, bot_name, thread_id, group_id, title, body, avatar_url, for_person, read) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
-    ).run(entry.id, entry.at, entry.kind, entry.botId, entry.botName, entry.threadId, entry.groupId ?? null, entry.title, entry.body, entry.avatarUrl ?? null, entry.forPerson ?? null);
-    database.prepare(
-      "DELETE FROM notification_log WHERE id NOT IN (SELECT id FROM notification_log ORDER BY at DESC, rowid DESC LIMIT ?)",
-    ).run(NOTIFICATION_LOG_LIMIT);
+const NOTIFICATION_DEDUPE_WINDOW_MS = 10 * 60_000;
+
+export function insertNotificationLog(entry: NotificationLogEntry): NotificationLogEntry {
+  return transaction((database) => {
+    const existing = database.prepare("SELECT id FROM notification_log WHERE kind = ? AND bot_id = ? AND thread_id = ? AND title = ? AND body = ? AND coalesce(for_person, '') = ? AND at >= ? ORDER BY at DESC, rowid DESC LIMIT 1")
+      .get(entry.kind, entry.botId, entry.threadId, entry.title, entry.body, entry.forPerson ?? "", entry.at - NOTIFICATION_DEDUPE_WINDOW_MS) as { id: string } | undefined;
+    if (existing) {
+      database.prepare("UPDATE notification_log SET at = ?, read = 0, read_by = NULL WHERE id = ?").run(entry.at, existing.id);
+      return { ...entry, id: existing.id, read: false };
+    }
+    database.prepare("INSERT INTO notification_log(id, at, kind, bot_id, bot_name, thread_id, group_id, title, body, avatar_url, for_person, read) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)")
+      .run(entry.id, entry.at, entry.kind, entry.botId, entry.botName, entry.threadId, entry.groupId ?? null, entry.title, entry.body, entry.avatarUrl ?? null, entry.forPerson ?? null);
+    database.prepare("DELETE FROM notification_log WHERE id NOT IN (SELECT id FROM notification_log ORDER BY at DESC, rowid DESC LIMIT ?)").run(NOTIFICATION_LOG_LIMIT);
+    return entry;
   });
 }
 
@@ -305,7 +311,7 @@ export function insertNotificationLog(entry: NotificationLogEntry): void {
 export function logNotification(notification: Notification): NotificationLogEntry {
   const entry: NotificationLogEntry = { ...notification, id: randomUUID(), at: Date.now(), read: false };
   try {
-    insertNotificationLog(entry);
+    return insertNotificationLog(entry);
   } catch (error) {
     console.error("[notify] could not save the notification to the feed:", error);
   }

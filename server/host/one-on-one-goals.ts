@@ -219,9 +219,9 @@ export function createOneOnOneGoals(deps: OneOnOneGoalDeps) {
     return true;
   }
 
-  function isLive(threadId: string, runId: string): boolean {
+  function isLive(threadId: string, runId?: string): boolean {
     const goal = live.get(threadId);
-    return Boolean(goal && !goal.cancelled && goal.run.runId === runId);
+    return Boolean(goal && !goal.cancelled && (runId === undefined || goal.run.runId === runId));
   }
 
   return { start, stop, isLive };

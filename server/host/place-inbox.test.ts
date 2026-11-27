@@ -98,6 +98,19 @@ describe("finished work reaches the inbox once", () => {
     expect(infoRows(f)).toMatchObject([{ kind: "result", from: { name: "Eli" }, text: "All three pages are live.", origin: { threadId: "eli-main" } }]);
   });
 
+  it("deduplicates identical open routine or delegation results on the same thread by bumping the existing row", () => {
+    const f = setup();
+    const first: Notification = { kind: "delegation-settled", botId: "eli", botName: "Eli", threadId: "eli-main", title: "Results", body: "Results in from Mira" };
+    f.inbox.route(first, { summary: true });
+    const rowId = infoRows(f)[0]!.id;
+    f.inbox.markRead(OWNER, rowId);
+    f.tick(5_000);
+    f.inbox.route({ ...first, body: "Results in from  Mira" }, { summary: true });
+    const rows = infoRows(f);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: rowId, unread: true, at: 6_000 });
+  });
+
   it("still files a failure in work another bot handed on, saying whose work it was", () => {
     const f = setup();
     f.handed.set("eli-pricing", "mira");

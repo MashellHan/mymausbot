@@ -13,6 +13,7 @@ import { InboxRowItem } from "./InboxRow";
 import { matchesSearch, nextAfter } from "./inbox-answer";
 import { listedRows, waitingCount } from "./inbox-view";
 import { useInboxActions } from "./use-inbox-actions";
+import { INBOX_ADVANCED_DEFAULT_WIDTH, INBOX_DEFAULT_WIDTH, INBOX_WIDE_WIDTH, useSidePanelResize } from "./inbox-panel-resize";
 import { roundButtonCls } from "../bot-panel/rows";
 
 
@@ -22,6 +23,15 @@ export function InboxPanel() {
   const markingAll = useInboxMarkingAll();
   const phone = useMediaQuery(PHONE_LAYOUT);
   const simple = !useAdvancedMode();
+  const {
+    panelWidth, panelMinWidth, panelMaxWidth, separatorRef, separatorWidth,
+    onSeparatorKeyDown, onResizeStart, onResizeMove, onResizeEnd, onDoubleClick, resetToPreset,
+  } = useSidePanelResize({
+    defaultWidth: simple ? INBOX_DEFAULT_WIDTH : INBOX_ADVANCED_DEFAULT_WIDTH,
+    wideWidth: INBOX_WIDE_WIDTH,
+    wide: Boolean(panel.wide),
+    onWideChange: widenInbox,
+  });
   const { run } = useInboxActions(view);
   const [now, setNow] = useState(() => Date.now());
   const [query, setQuery] = useState("");
@@ -75,7 +85,7 @@ export function InboxPanel() {
           </button>
         )}
         {!phone && (
-          <button type="button" onClick={() => widenInbox(!panel.wide)} aria-pressed={Boolean(panel.wide)} aria-label={t(panel.wide ? "inbox.action.narrow" : "inbox.action.widen")}
+          <button type="button" onClick={() => resetToPreset(!panel.wide)} aria-pressed={Boolean(panel.wide)} aria-label={t(panel.wide ? "inbox.action.narrow" : "inbox.action.widen")}
             title={t(panel.wide ? "inbox.action.narrow" : "inbox.action.widen")} className={roundButtonCls}>
             {panel.wide ? <Minimize2 size={15} aria-hidden="true" /> : <Maximize2 size={15} aria-hidden="true" />}
           </button>
@@ -128,9 +138,27 @@ export function InboxPanel() {
   }
   return (
     <aside aria-label={t("inbox.panel.title")} data-inbox-panel="side" data-look="inbox" data-wide={panel.wide ? "" : undefined} onKeyDown={onKeyDown}
-      className={cn("animate-panel-in motion-reduce:animate-none flex h-full max-w-full shrink-0 flex-col max-md:absolute max-md:inset-y-0 max-md:right-0 max-md:z-30",
-        simple ? "border-l-[0.5px] border-ink/[0.06] bg-app" : "border-l border-hairline/40 bg-panel",
-        panel.wide ? "w-[min(640px,60vw)]" : simple ? "w-[320px]" : "w-[380px]")}>
+      style={{ width: panelWidth, maxWidth: panelMaxWidth }}
+      className={cn("animate-panel-in motion-reduce:animate-none relative flex h-full max-w-full shrink-0 flex-col max-md:absolute max-md:inset-y-0 max-md:right-0 max-md:z-30",
+        simple ? "border-l-[0.5px] border-ink/[0.06] bg-app" : "border-l border-hairline/40 bg-panel")}>
+      <div
+        ref={separatorRef}
+        role="separator"
+        data-inbox-resize
+        aria-orientation="vertical"
+        aria-label={t("computer.resizeAria")}
+        aria-valuemin={panelMinWidth}
+        aria-valuemax={panelMaxWidth}
+        aria-valuenow={separatorWidth}
+        tabIndex={0}
+        onKeyDown={onSeparatorKeyDown}
+        onPointerDown={onResizeStart}
+        onPointerMove={onResizeMove}
+        onPointerUp={onResizeEnd}
+        onPointerCancel={onResizeEnd}
+        onDoubleClick={onDoubleClick}
+        className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize hover:bg-accent/40 focus-visible:bg-accent/60 max-md:hidden"
+      />
       {body}
     </aside>
   );

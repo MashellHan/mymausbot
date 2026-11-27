@@ -28,7 +28,7 @@ export function reduceNotificationFeed(feed: NotificationLogEntry[], action: Not
         .slice(0, NOTIFICATION_FEED_LIMIT);
     }
     case "notificationReceived":
-      return feed.some((entry) => entry.id === action.entry.id) ? feed : [action.entry, ...feed].slice(0, NOTIFICATION_FEED_LIMIT);
+      return [action.entry, ...feed.filter((entry) => entry.id !== action.entry.id)].slice(0, NOTIFICATION_FEED_LIMIT);
     case "notificationRead":
       return feed.map((entry) => (entry.id === action.id && !entry.read ? { ...entry, read: true } : entry));
     case "notificationsRead": {

@@ -107,6 +107,14 @@ describe("the inbox panel", () => {
     expect(document.querySelector("[data-inbox-mark-all]")).toBeNull();
   });
 
+  it("exposes a vertical drag resize separator on desktop", async () => {
+    openInbox();
+    await mount(createElement(InboxPanel));
+    const sep = document.querySelector<HTMLElement>("[data-inbox-resize]");
+    expect(sep?.getAttribute("role")).toBe("separator");
+    expect(sep?.getAttribute("aria-orientation")).toBe("vertical");
+  });
+
   it("is a sheet at phone width", async () => {
     vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("max-width"), addEventListener() {}, removeEventListener() {} }));
     openInbox();

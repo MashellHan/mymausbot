@@ -641,6 +641,21 @@ describe("notification_log", () => {
     expect(rows.filter((r) => r.read).map((r) => r.id).sort()).toEqual(["n1", "n2"]);
   });
 
+  it("deduplicates identical notifications within the dedupe window by bumping the existing entry", () => {
+    const first = insertNotificationLog(entry("n1", 10_000, { title: "Alert", body: "Stopped after limit" }));
+    markNotificationLogRead([first.id]);
+    const second = insertNotificationLog(entry("n2", 15_000, { title: "Alert", body: "Stopped after limit" }));
+    expect(second.id).toBe("n1");
+    expect(second.read).toBe(false);
+    expect(recentNotificationLog()).toHaveLength(1);
+    expect(recentNotificationLog()[0]).toMatchObject({ id: "n1", at: 15_000, read: false });
+
+    // Outside the 10-minute window, a new row is recorded normally.
+    const later = insertNotificationLog(entry("n3", 15_000 + 11 * 60_000, { title: "Alert", body: "Stopped after limit" }));
+    expect(later.id).toBe("n3");
+    expect(recentNotificationLog()).toHaveLength(2);
+  });
+
   it("keeps only the newest 500 rows, FIFO", () => {
     for (let i = 0; i < 503; i++) insertNotificationLog(entry(`n${i}`, i));
     const rows = recentNotificationLog(1000);
