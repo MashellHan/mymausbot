@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import { cjkSearchText, ensureSearchIndex, withoutSearchMarks } from "./cjk-search.ts";
+import { deleteTopicEdges, ensureMemoryGraph, replaceTopicEdges } from "./memory-graph.ts";
 
 export interface MemoryEntryRecord {
   entryId: string;
@@ -60,6 +61,7 @@ export function ensureMemoryIndex(db: DatabaseSync): void {
   `);
   ensureSearchIndex(db, { table: "memory_files", fts: "memory_fts", view: "memory_search", triggerPrefix: "memory_fts" });
   ensureSearchIndex(db, { table: "memory_entries", fts: "memory_entries_fts", view: "memory_entries_search", triggerPrefix: "memory_entries_fts" });
+  ensureMemoryGraph(db);
 }
 
 export interface MemoryFileStat {
@@ -81,6 +83,7 @@ export function upsertMemoryFile(
   text: string,
   stat: { mtimeMs: number; bytes: number },
   entries?: readonly MemoryEntryRecord[],
+  rawText?: string,
 ): void {
   const mtimeMs = Math.trunc(stat.mtimeMs);
   database
@@ -90,16 +93,19 @@ export function upsertMemoryFile(
     )
     .run(botId, path, text, mtimeMs, stat.bytes, cjkSearchText(text));
   if (entries !== undefined) replaceMemoryEntries(database, botId, path, mtimeMs, entries);
+  replaceTopicEdges(database, botId, path, rawText ?? text);
 }
 
 export function deleteMemoryFileRows(database: DatabaseSync, botId: string, path?: string): void {
   if (path !== undefined) {
     database.prepare("DELETE FROM memory_files WHERE bot_id = ? AND path = ?").run(botId, path);
     database.prepare("DELETE FROM memory_entries WHERE bot_id = ? AND path = ?").run(botId, path);
+    deleteTopicEdges(database, botId, path);
     return;
   }
   database.prepare("DELETE FROM memory_files WHERE bot_id = ?").run(botId);
   database.prepare("DELETE FROM memory_entries WHERE bot_id = ?").run(botId);
+  deleteTopicEdges(database, botId);
 }
 
 export function listIndexedMemoryFiles(database: DatabaseSync, botId: string): MemoryFileStat[] {
