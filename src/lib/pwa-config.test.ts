@@ -42,7 +42,15 @@ function encodeBase64Url(value: unknown): string {
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
-function createMemoryIdb(options: { rejectDpopPut?: boolean | ((key: string) => boolean) } = {}): IDBFactory {
+function createMemoryIdb(
+  options: {
+    rejectDpopPut?: boolean | ((key: string) => boolean);
+    failOpen?: () => boolean;
+    failDpopGet?: () => boolean;
+    onOpen?: () => void;
+    onTransaction?: (storeNames: string | string[]) => void;
+  } = {},
+): IDBFactory {
   const stores = new Map<string, Map<string, unknown>>();
   const ensureStore = (name: string) => {
     let store = stores.get(name);
@@ -73,6 +81,7 @@ function createMemoryIdb(options: { rejectDpopPut?: boolean | ((key: string) => 
 
   return {
     open(_name: string) {
+      options.onOpen?.();
       const openReq: {
         result?: IDBDatabase;
         error?: DOMException | null;
@@ -80,6 +89,14 @@ function createMemoryIdb(options: { rejectDpopPut?: boolean | ((key: string) => 
         onsuccess: ((ev: Event) => void) | null;
         onerror: ((ev: Event) => void) | null;
       } = { onupgradeneeded: null, onsuccess: null, onerror: null };
+
+      if (options.failOpen?.()) {
+        queueMicrotask(() => {
+          openReq.error = new DOMException("IndexedDB temporarily unavailable", "UnknownError");
+          openReq.onerror?.(new Event("error"));
+        });
+        return openReq as unknown as IDBOpenDBRequest;
+      }
 
       const db = {
         objectStoreNames: {
@@ -90,7 +107,9 @@ function createMemoryIdb(options: { rejectDpopPut?: boolean | ((key: string) => 
           return {} as IDBObjectStore;
         },
         close: () => {},
-        transaction: (storeName: string) => {
+        transaction: (storeName: string | string[]) => {
+          options.onTransaction?.(storeName);
+          const defaultStore = Array.isArray(storeName) ? storeName[0] : storeName;
           const tx: {
             error?: DOMException | null;
             oncomplete: ((ev: Event) => void) | null;
@@ -102,15 +121,22 @@ function createMemoryIdb(options: { rejectDpopPut?: boolean | ((key: string) => 
             onerror: null,
             onabort: null,
             objectStore: (name: string) => {
-              const store = ensureStore(name || storeName);
+              const targetStore = name || defaultStore;
+              const store = ensureStore(targetStore);
               return {
-                get: (key: string) => makeRequest(() => store.get(key)),
+                get: (key: string) =>
+                  makeRequest(() => {
+                    if (targetStore === OMB_PWA_DPOP_STORE && options.failDpopGet?.()) {
+                      throw new DOMException("Transient IDB read failure", "AbortError");
+                    }
+                    return store.get(key);
+                  }),
                 put: (value: unknown, key: string) => {
                   const shouldReject =
                     typeof options.rejectDpopPut === "function"
                       ? options.rejectDpopPut(key)
                       : Boolean(options.rejectDpopPut);
-                  if (shouldReject && (name || storeName) === OMB_PWA_DPOP_STORE) {
+                  if (shouldReject && targetStore === OMB_PWA_DPOP_STORE) {
                     throw new DOMException("CryptoKey cannot be cloned", "DataCloneError");
                   }
                   const req = makeRequest(() => {
@@ -1244,5 +1270,198 @@ describe("pwa pairing lifecycle, IndexedDB persistence, and authenticated fetch"
     expect(afterCall).not.toBeNull();
     expect(new Headers(afterCall!.init?.headers).get("authorization")).toBe("Bearer tok-s2");
     expect(await verifySignature(afterCall!, jwk2!)).toBe(true);
+  });
+
+  it("restores a dpopBound pairing in initPwaAuth using a single IndexedDB open and transaction", async () => {
+    let openCount = 0;
+    const txScopes: Array<string | string[]> = [];
+    const idb = createMemoryIdb({
+      onOpen: () => { openCount += 1; },
+      onTransaction: (stores) => { txScopes.push(stores); },
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/pair")) {
+        return new Response(JSON.stringify({ token: "tok-single-open", device: { id: "d-single" }, serverName: "Mac" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/auth/session")) {
+        return new Response(
+          JSON.stringify({ kind: "session", id: "s-single", environmentId: "e-single", scopes: ["client"] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ environmentId: "e-single", label: "Mac" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const paired = await activatePwaPairing(
+      { relayUrl: "https://relay.mxhan.com", credential: `omb_pair_${"s".repeat(43)}` },
+      { idb, fetchImpl: fetchMock },
+    );
+    expect(paired.ok).toBe(true);
+
+    resetPwaConfigForTests();
+    openCount = 0;
+    txScopes.length = 0;
+
+    const restored = await initPwaAuth(idb);
+    expect(restored?.token).toBe("tok-single-open");
+    expect(restored?.dpopBound).toBe(true);
+    expect(getActiveDpopKey()).not.toBeNull();
+    expect(openCount).toBe(1);
+    expect(txScopes).toEqual([[OMB_PWA_AUTH_STORE, OMB_PWA_DPOP_STORE]]);
+  });
+
+  it("preserves stored pairing and resets initPromise on transient dpop_keys read error so a later initPwaAuth succeeds", async () => {
+    let failDpopGet = false;
+    const idb = createMemoryIdb({
+      failDpopGet: () => failDpopGet,
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/pair")) {
+        return new Response(JSON.stringify({ token: "tok-transient-tx", device: { id: "d-tx" }, serverName: "Mac" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/auth/session")) {
+        return new Response(
+          JSON.stringify({ kind: "session", id: "s-tx", environmentId: "e-tx", scopes: ["client"] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ environmentId: "e-tx", label: "Mac" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const paired = await activatePwaPairing(
+      { relayUrl: "https://relay.mxhan.com", credential: `omb_pair_${"t".repeat(43)}` },
+      { idb, fetchImpl: fetchMock },
+    );
+    expect(paired.ok).toBe(true);
+    const ownerKey = paired.ok ? paired.auth.ownerKey : "";
+
+    resetPwaConfigForTests();
+    failDpopGet = true;
+
+    const failedAttempt = await initPwaAuth(idb);
+    expect(failedAttempt).toBeNull();
+    expect(getPwaAuth()).toBeNull();
+    expect(getActiveDpopKey()).toBeNull();
+
+    // Neither auth nor dpop_keys was wiped, and initPromise was reset so calling initPwaAuth again recovers.
+    failDpopGet = false;
+    expect(await readDpopKey(ownerKey, idb)).not.toBeNull();
+
+    const recovered = await initPwaAuth(idb);
+    expect(recovered?.token).toBe("tok-transient-tx");
+    expect(recovered?.dpopBound).toBe(true);
+    expect(getPwaAuth()?.token).toBe("tok-transient-tx");
+    expect(getActiveDpopKey()).not.toBeNull();
+  });
+
+  it("preserves localStorage backup and dpop_keys on transient IndexedDB open error and recovers on subsequent initPwaAuth", async () => {
+    const lsStore = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => lsStore.get(k) ?? null,
+      setItem: (k: string, v: string) => { lsStore.set(k, v); },
+      removeItem: (k: string) => { lsStore.delete(k); },
+    });
+    let failOpen = false;
+    const idb = createMemoryIdb({
+      failOpen: () => failOpen,
+    });
+    vi.stubGlobal("indexedDB", idb);
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/pair")) {
+        return new Response(JSON.stringify({ token: "tok-transient-open", device: { id: "d-open" }, serverName: "Mac" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/auth/session")) {
+        return new Response(
+          JSON.stringify({ kind: "session", id: "s-open", environmentId: "e-open", scopes: ["client"] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ environmentId: "e-open", label: "Mac" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const paired = await activatePwaPairing(
+      { relayUrl: "https://relay.mxhan.com", credential: `omb_pair_${"o".repeat(43)}` },
+      { fetchImpl: fetchMock },
+    );
+    expect(paired.ok).toBe(true);
+    if (paired.ok) {
+      lsStore.set("omb.pwa.auth.v1", JSON.stringify(paired.auth));
+    }
+
+    resetPwaConfigForTests();
+    failOpen = true;
+
+    const failedAttempt = await initPwaAuth();
+    expect(failedAttempt).toBeNull();
+    expect(lsStore.has("omb.pwa.auth.v1")).toBe(true);
+
+    failOpen = false;
+    const recovered = await initPwaAuth();
+    expect(recovered?.token).toBe("tok-transient-open");
+    expect(recovered?.dpopBound).toBe(true);
+    expect(getActiveDpopKey()).not.toBeNull();
+  });
+
+  it("retries once automatically after a single transient dpop_keys read error", async () => {
+    let remainingFailures = 1;
+    const idb = createMemoryIdb({
+      failDpopGet: () => {
+        if (remainingFailures > 0) {
+          remainingFailures -= 1;
+          return true;
+        }
+        return false;
+      },
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/pair")) {
+        return new Response(JSON.stringify({ token: "tok-auto-retry", device: { id: "d-retry1" }, serverName: "Mac" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/auth/session")) {
+        return new Response(
+          JSON.stringify({ kind: "session", id: "s-retry1", environmentId: "e-retry1", scopes: ["client"] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ environmentId: "e-retry1", label: "Mac" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const paired = await activatePwaPairing(
+      { relayUrl: "https://relay.mxhan.com", credential: `omb_pair_${"k".repeat(43)}` },
+      { idb, fetchImpl: fetchMock },
+    );
+    expect(paired.ok).toBe(true);
+
+    resetPwaConfigForTests();
+    const restored = await initPwaAuth(idb);
+    expect(restored?.token).toBe("tok-auto-retry");
+    expect(restored?.dpopBound).toBe(true);
+    expect(getActiveDpopKey()).not.toBeNull();
+    expect(remainingFailures).toBe(0);
   });
 });

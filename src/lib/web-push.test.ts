@@ -6,10 +6,15 @@ import {
   deleteWebPushSubscription,
   detectWebPushEnvironment,
   enableWebPush,
+  getWebPushClientSnapshot,
   installWebPushSwSync,
+  isWebPushOptedOut,
+  requestWebPushPermissionOnGesture,
   resetWebPushClientStateForTests,
   sendTestWebPush,
   syncAppBadge,
+  syncPushSubscriptionOnForeground,
+  unsubscribeWebPush,
   updateWebPushPreferences,
   urlBase64ToUint8Array,
 } from "./web-push";
@@ -261,5 +266,190 @@ describe("web-push subscription & preference lifecycle", () => {
     expect(result.ok).toBe(true);
     expect(staleUnsubscribe).toHaveBeenCalledOnce();
     expect(subscribe).toHaveBeenCalledOnce();
+  });
+
+  function installMemoryStorage() {
+    const store = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, String(value));
+      },
+      removeItem: (key: string) => {
+        store.delete(key);
+      },
+      clear: () => {
+        store.clear();
+      },
+    };
+    vi.stubGlobal("localStorage", storage);
+    return { store, storage };
+  }
+
+  function makePushServerFetch(options: {
+    getResponse?: { subscription: unknown; vapidPublicKey: string | null };
+  } = {}) {
+    const vapidKey = btoa("1234").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const puts: Array<Record<string, unknown>> = [];
+    const gets: string[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/api/push/web/vapid-key")) {
+        return jsonResponse({ enabled: true, publicKey: vapidKey });
+      }
+      if (url.endsWith("/api/push/web/subscription") && method === "GET") {
+        gets.push(url);
+        return jsonResponse(options.getResponse ?? { subscription: null, vapidPublicKey: vapidKey });
+      }
+      if (url.endsWith("/api/push/web/subscription") && method === "PUT") {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        puts.push(body);
+        return jsonResponse({
+          subscription: {
+            endpoint: body.endpoint,
+            endpointOrigin: "https://web.push.apple.com",
+            deviceLabel: body.deviceLabel,
+            preferences: body.preferences,
+            createdAt: 100,
+            updatedAt: 200,
+            hasKeys: true,
+          },
+          vapidPublicKey: vapidKey,
+        });
+      }
+      if (url.includes("/api/push/web/subscription") && method === "DELETE") {
+        return jsonResponse({ deleted: true });
+      }
+      return jsonResponse({}, 404);
+    });
+    return { fetchMock, puts, gets, vapidKey };
+  }
+
+  it("auto-subscribes & syncs on foreground when permission is granted and no cached subscription exists", async () => {
+    installMemoryStorage();
+    const { requestPermission, subscribe } = installBrowserPush("granted", "granted");
+    const { fetchMock, puts } = makePushServerFetch();
+
+    await Promise.all([
+      syncPushSubscriptionOnForeground({ fetchImpl: fetchMock }),
+      syncPushSubscriptionOnForeground({ fetchImpl: fetchMock }),
+    ]);
+
+    expect(requestPermission).not.toHaveBeenCalled();
+    expect(subscribe).toHaveBeenCalledOnce();
+    expect(puts).toHaveLength(1);
+    expect(puts[0]?.endpoint).toBe("https://web.push.apple.com/sub-1");
+    expect(getWebPushClientSnapshot().subscription?.endpoint).toBe("https://web.push.apple.com/sub-1");
+    expect(getWebPushClientSnapshot().loaded).toBe(true);
+  });
+
+  it("re-subscribes on first foreground load when server reports subscription: null for a granted device", async () => {
+    const { storage } = installMemoryStorage();
+    const { getSubscription, browserSub } = installBrowserPush("granted", "granted");
+    getSubscription.mockResolvedValue(browserSub as unknown as PushSubscription);
+    storage.setItem(
+      `omb.webPush.sub.v1:${AUTH_FIXTURE.ownerKey}`,
+      JSON.stringify({
+        endpoint: browserSub.endpoint,
+        endpointOrigin: "https://web.push.apple.com",
+        deviceLabel: "My iPhone",
+        preferences: {
+          enabled: true,
+          urgent: true,
+          finished: true,
+          failures: true,
+          mentions: true,
+          spend: true,
+          liveActivities: true,
+        },
+        createdAt: 10,
+        updatedAt: 10,
+        hasKeys: true,
+      }),
+    );
+    resetWebPushClientStateForTests();
+
+    const { fetchMock, gets, puts } = makePushServerFetch();
+    await syncPushSubscriptionOnForeground({ fetchImpl: fetchMock });
+
+    expect(gets).toHaveLength(1);
+    expect(puts).toHaveLength(1);
+    expect((puts[0]?.preferences as { liveActivities?: boolean } | undefined)?.liveActivities).toBe(true);
+    expect(getWebPushClientSnapshot().loaded).toBe(true);
+
+    // Once loaded and matching, subsequent foreground syncs do not re-fetch or re-PUT.
+    await syncPushSubscriptionOnForeground({ fetchImpl: fetchMock });
+    expect(gets).toHaveLength(1);
+    expect(puts).toHaveLength(1);
+  });
+
+  it("respects explicit opt-out via unsubscribeWebPush and updateWebPushPreferences({ enabled: false }) until re-enabled", async () => {
+    const { store } = installMemoryStorage();
+    const { getSubscription, browserSub } = installBrowserPush("granted", "granted");
+    const { fetchMock, puts } = makePushServerFetch();
+
+    // Start subscribed.
+    const enabled = await enableWebPush({ fetchImpl: fetchMock });
+    expect(enabled.ok).toBe(true);
+    expect(isWebPushOptedOut()).toBe(false);
+
+    // Explicit unsubscribe sets opt-out and prevents foreground auto-re-enable.
+    getSubscription.mockResolvedValue(browserSub as unknown as PushSubscription);
+    await unsubscribeWebPush({ fetchImpl: fetchMock });
+    expect(isWebPushOptedOut()).toBe(true);
+    expect(store.get("omb.webPush.optOut.v1")).toBe("1");
+
+    const putsBeforeSync = puts.length;
+    await syncPushSubscriptionOnForeground({ fetchImpl: fetchMock });
+    expect(puts.length).toBe(putsBeforeSync);
+
+    // Re-enabling clears opt-out.
+    const reenabled = await enableWebPush({ fetchImpl: fetchMock });
+    expect(reenabled.ok).toBe(true);
+    expect(isWebPushOptedOut()).toBe(false);
+    expect(store.has("omb.webPush.optOut.v1")).toBe(false);
+
+    // Disabling via preferences sets opt-out and blocks foreground sync.
+    const disabled = await updateWebPushPreferences({ enabled: false }, { fetchImpl: fetchMock });
+    expect(disabled.ok).toBe(true);
+    expect(isWebPushOptedOut()).toBe(true);
+    expect(store.get("omb.webPush.optOut.v1")).toBe("1");
+
+    const putsAfterDisable = puts.length;
+    getSubscription.mockResolvedValueOnce(null);
+    await syncPushSubscriptionOnForeground({ fetchImpl: fetchMock });
+    expect(puts.length).toBe(putsAfterDisable);
+
+    // Re-enabling via preferences clears opt-out.
+    getSubscription.mockResolvedValue(browserSub as unknown as PushSubscription);
+    const toggledOn = await updateWebPushPreferences({ enabled: true }, { fetchImpl: fetchMock });
+    expect(toggledOn.ok).toBe(true);
+    expect(isWebPushOptedOut()).toBe(false);
+    expect(store.has("omb.webPush.optOut.v1")).toBe(false);
+  });
+
+  it("requestWebPushPermissionOnGesture requests permission only when default and not opted out", async () => {
+    const { storage } = installMemoryStorage();
+    const { requestPermission } = installBrowserPush("default", "granted");
+
+    requestWebPushPermissionOnGesture();
+    expect(requestPermission).toHaveBeenCalledOnce();
+
+    // Skips when opted out.
+    requestPermission.mockClear();
+    storage.setItem("omb.webPush.optOut.v1", "1");
+    requestWebPushPermissionOnGesture();
+    expect(requestPermission).not.toHaveBeenCalled();
+
+    // Skips when already granted or denied.
+    storage.removeItem("omb.webPush.optOut.v1");
+    const granted = installBrowserPush("granted", "granted");
+    requestWebPushPermissionOnGesture();
+    expect(granted.requestPermission).not.toHaveBeenCalled();
+
+    const denied = installBrowserPush("denied", "denied");
+    requestWebPushPermissionOnGesture();
+    expect(denied.requestPermission).not.toHaveBeenCalled();
   });
 });
