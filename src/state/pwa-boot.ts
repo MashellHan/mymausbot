@@ -10,6 +10,7 @@ import {
   resolvePwaLaunchSelection,
   writePwaSnapshot,
 } from "@/lib/pwa-cache";
+import { createPwaSnapshotScheduler, type SnapshotScheduler } from "@/lib/pwa-snapshot-scheduler";
 import {
   defaultOutboxManager,
   overlayPwaOutboxOnState,
@@ -160,42 +161,62 @@ export function usePwaCacheSync(
     }).catch(() => {});
   }, [ownerKey, state.hydrated, selectedId, selectedThreadId]);
 
-  const snapshotTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const savedFirstLive = useRef(false);
+  const schedulerRef = useRef<SnapshotScheduler | null>(null);
   useEffect(() => {
-    if (!ownerKey || !state.hydrated || state.cachedHydrated) return;
-    const persist = () => {
-      const current = latestRef.current;
-      if (!current.hydrated || current.cachedHydrated) return;
-      const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
-      void writePwaSnapshot({
-        ownerKey,
-        bots: current.bots,
-        groups: current.groups,
-        sections: current.sections ?? [],
-        config: current.config,
-      })
-        .then(() => {
-          const elapsed = (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt;
-          pwaPerf.recordSnapshotWrite(elapsed);
+    if (!ownerKey) return;
+    const scheduler = createPwaSnapshotScheduler({
+      persist: () => {
+        const current = latestRef.current;
+        if (!current.hydrated || current.cachedHydrated) return;
+        const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+        void writePwaSnapshot({
+          ownerKey,
+          bots: current.bots,
+          groups: current.groups,
+          sections: current.sections ?? [],
+          config: current.config,
         })
-        .catch(() => {});
-    };
-    if (!savedFirstLive.current) {
-      savedFirstLive.current = true;
-      persist();
-      return;
-    }
-    if (snapshotTimer.current) clearTimeout(snapshotTimer.current);
-    snapshotTimer.current = setTimeout(() => {
-      snapshotTimer.current = null;
-      persist();
-    }, 300);
-    return () => {
-      if (snapshotTimer.current) {
-        clearTimeout(snapshotTimer.current);
-        snapshotTimer.current = null;
+          .then(() => {
+            const elapsed = (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt;
+            pwaPerf.recordSnapshotWrite(elapsed);
+          })
+          .catch(() => {});
+      },
+    });
+    schedulerRef.current = scheduler;
+    const flushOnHide = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        scheduler.flushNow();
       }
     };
-  }, [ownerKey, state.hydrated, state.cachedHydrated, state.bots, state.groups, state.sections, state.config]);
+    const flushOnPageHide = () => scheduler.flushNow();
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", flushOnHide);
+    }
+    if (typeof window !== "undefined") {
+      window.addEventListener("pagehide", flushOnPageHide);
+    }
+    return () => {
+      scheduler.flushNow();
+      scheduler.dispose();
+      schedulerRef.current = null;
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", flushOnHide);
+      }
+      if (typeof window !== "undefined") {
+        window.removeEventListener("pagehide", flushOnPageHide);
+      }
+    };
+  }, [ownerKey]);
+
+  useEffect(() => {
+    if (!ownerKey || !state.hydrated || state.cachedHydrated) return;
+    schedulerRef.current?.notify({
+      selectedId: state.selectedId,
+      bots: state.bots,
+      groups: state.groups,
+      sections: state.sections,
+      config: state.config,
+    });
+  }, [ownerKey, state.hydrated, state.cachedHydrated, state.selectedId, state.bots, state.groups, state.sections, state.config]);
 }
