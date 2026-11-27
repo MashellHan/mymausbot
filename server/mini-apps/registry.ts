@@ -201,10 +201,18 @@ const summary = (row: AppRow): MiniAppSummary => ({
   createdAt: row.created_at, updatedAt: row.updated_at,
 });
 
+export interface MiniAppChangedEvent {
+  appId: string;
+  revision: number;
+  templateVersion: number;
+  status: "active" | "archived";
+}
+
 export class MiniApps {
   private readonly access: MiniAppDatabaseAccess;
   private readonly rate = rowRate(240, 60_000);
   private readonly running = new Map<string, number>();
+  private readonly listeners = new Set<(event: MiniAppChangedEvent) => void>();
   readonly docs: AppDocs;
   readonly data: Pick<DataEngine, "validateBinding" | "readNamed" | "listDatasets"> & Partial<Pick<DataEngine, "datasetRevisions" | "onChanged">>;
   readonly queryCache = new MiniAppQueryCache();
@@ -219,6 +227,7 @@ export class MiniApps {
     dashboardProviders?: LocalDashboardProviders;
     access?: MiniAppDatabaseAccess;
     releaseSource?: MiniAppReleaseSource;
+    onChanged?: (event: MiniAppChangedEvent) => void;
   }) {
     this.docs = deps.docs;
     this.data = deps.data;
@@ -229,6 +238,24 @@ export class MiniApps {
     this.data.onChanged?.((event) => {
       this.queryCache.evictDataset(event.datasetId, event.revision);
     });
+    if (deps.onChanged) this.listeners.add(deps.onChanged);
+  }
+
+  onChanged(listener: (event: MiniAppChangedEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private notifyChanged(app: MiniAppSummary): void {
+    const event: MiniAppChangedEvent = {
+      appId: app.id,
+      revision: app.revision,
+      templateVersion: app.templateVersion,
+      status: app.status,
+    };
+    for (const listener of this.listeners) {
+      try { listener(event); } catch {}
+    }
   }
 
   private db(): DatabaseSync {
@@ -440,6 +467,7 @@ export class MiniApps {
 
   private receipt(db: DatabaseSync, actor: MiniAppActor, target: string, operation: string, input: { requestKey: string }, app: MiniAppSummary): MiniAppMutationResult {
     db.prepare("INSERT INTO mini_app_receipts VALUES (?, ?, ?, ?, ?, ?, ?)").run(actor.botId ?? MINI_APPS_OWNER, target, operation, input.requestKey, this.hash(input), JSON.stringify(app), Date.now());
+    this.notifyChanged(app);
     return { app, replayed: false };
   }
 

@@ -19,45 +19,25 @@ import { MiniAppUpdateToast } from "./MiniAppUpdateToast";
 import { forgetHongguoHome } from "./HongguoView";
 import { miniAppDisplayName } from "./mini-app-display";
 import {
-  MINI_APP_RUNTIME_READY_TIMEOUT_MS,
-  clearPendingUpdateRecovery,
-  hasAnnouncedUpdateVersion,
-  isPendingUpdateApplied,
-  matchesAppliedUpdateIntent,
-  parseMiniAppUpdateInfo,
-  readAppPackageId,
-  readPendingUpdate,
-  reconcilePendingUpdateWithSummary,
-  rememberAnnouncedUpdateVersion,
-  writePendingUpdate,
-  type MiniAppUpdateCandidate,
-  type MiniAppUpdateInfo,
-  type MiniAppUpdateRequest,
-  type PendingMiniAppUpdate,
-  type PendingMiniAppUpdateIntent,
-  type PendingMiniAppUpdateRecovery,
+  MINI_APP_RUNTIME_READY_TIMEOUT_MS, clearPendingUpdateRecovery, hasAnnouncedUpdateVersion,
+  isPendingUpdateApplied, matchesAppliedUpdateIntent, parseMiniAppUpdateInfo, readAppPackageId,
+  readPendingUpdate, reconcilePendingUpdateWithSummary, rememberAnnouncedUpdateVersion, writePendingUpdate,
+  type MiniAppUpdateCandidate, type MiniAppUpdateInfo, type MiniAppUpdateRequest,
+  type PendingMiniAppUpdate, type PendingMiniAppUpdateIntent, type PendingMiniAppUpdateRecovery,
 } from "./mini-app-update";
 import { miniAppNativeFrameGuard } from "./native-frame-guard";
 import { applyMiniAppOrder } from "./mini-app-reorder";
+import { applyMiniAppDataChanged, MINI_APP_FALLBACK_POLL_MS, shouldCheckMiniAppUpdate, useMiniAppLiveSync } from "./mini-app-live-sync";
 
-const REFRESH_MS = 15_000;
+const REFRESH_MS = MINI_APP_FALLBACK_POLL_MS;
 const RELEASE_REQUEST_TIMEOUT_MS = 30_000;
 const ROLLBACK_RETRY_MS = 5_000;
 const DEFAULT_BAR_COLLAPSED_KEY = "omb-mini-apps-bar-collapsed";
 type Inventory = { apps: MiniAppSummary[] };
 
-function savedApp(key: string): string | null {
-  try { return localStorage.getItem(key); } catch { return null; }
-}
-
-function rememberApp(key: string | null, id: string): void {
-  if (!key) return;
-  try { localStorage.setItem(key, id); } catch {}
-}
-
-function barKey(storageKey: string | null): string {
-  return storageKey ? `${storageKey}:bar-collapsed` : DEFAULT_BAR_COLLAPSED_KEY;
-}
+function savedApp(key: string): string | null { try { return localStorage.getItem(key); } catch { return null; } }
+function rememberApp(key: string | null, id: string): void { if (!key) return; try { localStorage.setItem(key, id); } catch {} }
+function barKey(storageKey: string | null): string { return storageKey ? `${storageKey}:bar-collapsed` : DEFAULT_BAR_COLLAPSED_KEY; }
 
 function savedBarCollapsed(storageKey: string | null): boolean {
   try {
@@ -130,6 +110,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
   const mountedRef = useRef(true);
   const manualRefreshRef = useRef(false);
   const updateCheckSeqRef = useRef(0);
+  const updateCheckedAtRef = useRef<Record<string, { at: number; revision: number }>>({});
   const mutationEpochRef = useRef(0);
   const pendingUpdatesRef = useRef<Record<string, PendingMiniAppUpdate>>({});
   const recoveryAuthBlockedRef = useRef(false);
@@ -613,7 +594,9 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
         }
         setStale(false);
         setError("");
-        if (owner === true && nativeGuard && listed.status === "active") {
+        const prevCheck = updateCheckedAtRef.current[target];
+        const checkDue = shouldCheckMiniAppUpdate(prevCheck?.revision === listed.revision ? prevCheck.at : undefined, Date.now(), isManualCheck);
+        if (owner === true && nativeGuard && listed.status === "active" && checkDue) {
           const checkSeq = ++updateCheckSeqRef.current;
           try {
             const rawUpdate = await api<unknown>(`/api/mini-apps/${encodeURIComponent(target)}/update`, {
@@ -622,6 +605,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
             if (!active || controller.signal.aborted || target !== selectedRef.current || checkSeq !== updateCheckSeqRef.current) return;
             const parsed = parseMiniAppUpdateInfo(rawUpdate);
             if (!parsed) throw new Error(t("computer.miniApps.update.checkFailed"));
+            updateCheckedAtRef.current[target] = { at: Date.now(), revision: listed.revision };
             setUpdateByApp((prev) => ({ ...prev, [target]: parsed }));
             if (parsed.status !== "available") {
               setToast((prev) => prev?.appId === target ? null : prev);
@@ -669,6 +653,18 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     return () => { active = false; controller.abort(); clearTimeout(timer); };
   }, [selectedId, refreshKey, visible, owner, nativeGuard, defaultsReady, storageKey]);
 
+  useMiniAppLiveSync({
+    enabled: Boolean(visible && owner === true && nativeGuard && defaultsReady),
+    onAppChanged: (event) => { delete updateCheckedAtRef.current[event.appId]; setRefreshKey((current) => current + 1); },
+    onDataChanged: (event) => {
+      const next = applyMiniAppDataChanged(stateRef.current, event.datasetId, event.revision);
+      if (!next) return;
+      stateRef.current = next;
+      setAppState(next);
+    },
+    onMissed: () => { setRefreshKey((current) => current + 1); },
+  });
+
   useEffect(() => {
     if (!environmentResolved || owner !== true || !nativeGuard || !selected || selected.status !== "active"
       || document?.app.id !== selected.id) {
@@ -693,6 +689,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
   const choose = (id: string) => {
     rememberApp(storageKey, id);
     if (id === selectedRef.current) return;
+    delete updateCheckedAtRef.current[id];
     setSelectedId(id);
     setDocument(null);
     setAppState(null);
