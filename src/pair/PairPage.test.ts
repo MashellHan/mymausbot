@@ -163,3 +163,13 @@ it("renders a confirmation prompt before replacing an existing PWA session", () 
   expect(html).toContain(en["common.cancel"]);
   expect(f.activatePwa).not.toHaveBeenCalled();
 });
+
+it("uses 16px mobile input font-size and never reads clipboard automatically on render", () => {
+  const readText = vi.fn().mockResolvedValue("ABCD-EFGH-JK23");
+  vi.stubGlobal("window", { isSecureContext: true });
+  vi.stubGlobal("navigator", { clipboard: { readText } });
+  const html = render(null);
+  expect(html).toContain("text-[16px]");
+  expect(html).toContain("data-pair-paste");
+  expect(readText).not.toHaveBeenCalled();
+});
