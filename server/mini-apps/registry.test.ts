@@ -648,5 +648,17 @@ describe("persistent Mini Apps", () => {
         icon: invalidIcon,
       }, id)).rejects.toMatchObject({ status: 400 });
     }
+
+    const db = applicationDatabase();
+    db.prepare("UPDATE mini_apps SET icon = ? WHERE id = ?").run("{corrupt-json", id);
+    db.prepare("UPDATE mini_app_versions SET icon = ? WHERE app_id = ? AND version = 1").run('{"kind":"svg"}', id);
+    expect(apps.list(owner).find((item) => item.id === id)?.icon).toBeNull();
+    expect(apps.document(owner, id).app.icon).toBeNull();
+    const rolledCorrupt = await apps.rollback(bot(), id, {
+      requestKey: "rollback-corrupt-icon",
+      expectedRevision: 6,
+      templateVersion: 1,
+    });
+    expect(rolledCorrupt.app.icon).toBeNull();
   });
 });

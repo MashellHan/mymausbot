@@ -76,4 +76,11 @@ it("renders microsoft preset with 4-color SVG tiles, lucide presets, emojis, cus
   }));
   expect(fallbackHtml).toContain('data-mini-app-icon="custom"');
   expect(fallbackHtml).toContain("lucide-app-window");
+
+  const unknownPresetHtml = renderToStaticMarkup(createElement(MiniAppIcon, {
+    kind: null,
+    app: { ...base, icon: { kind: "preset", name: "unknown-preset" } as unknown as MiniAppSummary["icon"] },
+  }));
+  expect(unknownPresetHtml).toContain('data-mini-app-icon="custom"');
+  expect(unknownPresetHtml).toContain("lucide-app-window");
 });

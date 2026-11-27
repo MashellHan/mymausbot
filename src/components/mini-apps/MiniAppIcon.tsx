@@ -68,27 +68,30 @@ export function MiniAppIcon({ kind, app, large = false, launcher = false }: { ki
   const iconSize = launcher ? 26 : large ? 19 : 14;
   const custom: MiniAppCustomIcon | null = app?.icon ?? null;
   if (custom) {
-    if (custom.kind === "preset" && custom.name === "microsoft") {
-      return <span data-mini-app-icon="preset:microsoft"
-        className={`inline-flex shrink-0 items-center justify-center ${plateCls}`}
-        style={{ backgroundColor: `color-mix(in oklab, ${custom.tone ?? MICROSOFT_DEFAULT_TONE} 12%, var(--color-inset))` }}>
-        <MicrosoftMark size={iconSize} />
-      </span>;
-    }
     if (custom.kind === "preset") {
+      if (custom.name === "microsoft") {
+        return <span data-mini-app-icon="preset:microsoft"
+          className={`inline-flex shrink-0 items-center justify-center ${plateCls}`}
+          style={{ backgroundColor: `color-mix(in oklab, ${custom.tone ?? MICROSOFT_DEFAULT_TONE} 12%, var(--color-inset))` }}>
+          <MicrosoftMark size={iconSize} />
+        </span>;
+      }
       const preset = presetIcons[custom.name];
-      const Icon = preset.Icon;
-      return <span data-mini-app-icon={`preset:${custom.name}`}
-        className={`inline-flex shrink-0 items-center justify-center ${plateCls}`}
-        style={tonedPlateStyle(custom.tone ?? preset.tone)}>
-        <Icon size={iconSize} strokeWidth={1.8} aria-hidden="true" />
+      if (preset) {
+        const Icon = preset.Icon;
+        return <span data-mini-app-icon={`preset:${custom.name}`}
+          className={`inline-flex shrink-0 items-center justify-center ${plateCls}`}
+          style={tonedPlateStyle(custom.tone ?? preset.tone)}>
+          <Icon size={iconSize} strokeWidth={1.8} aria-hidden="true" />
+        </span>;
+      }
+    } else if (custom.kind === "emoji" && custom.value) {
+      return <span data-mini-app-icon="emoji"
+        className={`inline-flex shrink-0 items-center justify-center leading-none select-none ${plateCls} ${custom.tone ? "" : "bg-inset"} ${launcher ? "text-[24px]" : large ? "text-[18px]" : "text-[13px]"}`}
+        style={custom.tone ? tonedPlateStyle(custom.tone) : undefined}>
+        <span aria-hidden="true">{custom.value}</span>
       </span>;
     }
-    return <span data-mini-app-icon="emoji"
-      className={`inline-flex shrink-0 items-center justify-center leading-none select-none ${plateCls} ${custom.tone ? "" : "bg-inset"} ${launcher ? "text-[24px]" : large ? "text-[18px]" : "text-[13px]"}`}
-      style={custom.tone ? tonedPlateStyle(custom.tone) : undefined}>
-      <span aria-hidden="true">{custom.value}</span>
-    </span>;
   }
 
   const mojo = kind === "mojo" || app?.id === LEGACY_MINI_APP_IDS.mojo && app.slug === "mojo";

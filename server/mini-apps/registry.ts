@@ -15,7 +15,7 @@ import { rowRate } from "../chat-apps.ts";
 import type { DataEngine } from "../data/types.ts";
 import { applicationDatabase, withApplicationWrite } from "../message-db.ts";
 import type { LocalDashboardProviders } from "../routes/local-dashboard.ts";
-import { appFailure, archiveSchema, parseDashboardRead, parsePublish, parseQuery, parseReleaseUpdateApply, rollbackSchema } from "./validation.ts";
+import { appFailure, archiveSchema, miniAppIconSchema, parseDashboardRead, parsePublish, parseQuery, parseReleaseUpdateApply, rollbackSchema } from "./validation.ts";
 import { developedMiniApps, ensureMiniAppDevelopment, recordMiniAppDevelopment } from "./development.ts";
 import { AGENT_TEAM_NATIVE_PLACEHOLDER_SHA256, REVIEWED_AGENT_TEAM_HTML_SHA256 } from "./default-template-history.ts";
 import { parseHongguoHistory, parseHongguoPreferences } from "./hongguo-validation.ts";
@@ -166,8 +166,15 @@ type AppRow = {
 type VersionRow = { version: number; doc: string; title: string; description: string; bindings: string; created_at: number; dashboard_html: number; release_provenance: string | null; icon: string | null };
 const parseProvenance = (raw: string | null | undefined): MiniAppReleaseProvenance | null =>
   raw ? JSON.parse(raw) as MiniAppReleaseProvenance : null;
-const parseIcon = (raw: string | null | undefined): MiniAppCustomIcon | null =>
-  raw ? JSON.parse(raw) as MiniAppCustomIcon : null;
+const parseIcon = (raw: string | null | undefined): MiniAppCustomIcon | null => {
+  if (!raw) return null;
+  try {
+    const parsed = miniAppIconSchema.safeParse(JSON.parse(raw));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+};
 function declaration(kind: MiniAppDashboardKind | null, html: boolean, agentTeamDetails: boolean): MiniAppDashboardDeclaration | null {
   if (kind === null) return null;
   if (kind === "agent-team") return html
