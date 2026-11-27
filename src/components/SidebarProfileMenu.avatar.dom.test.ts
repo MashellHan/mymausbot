@@ -43,8 +43,8 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-const mount = async (props: Parameters<typeof SidebarProfileMenu>[0] = { iconOnly: true, circle: true }) => {
-  await act(async () => { root.render(createElement(SidebarProfileMenu, props)); });
+const mount = async (props: { iconOnly?: boolean; circle?: boolean } = { iconOnly: true, circle: true }) => {
+  await act(async () => { root.render(createElement<{ iconOnly?: boolean; circle?: boolean }>(SidebarProfileMenu, props)); });
   await act(async () => { await Promise.resolve(); });
 };
 

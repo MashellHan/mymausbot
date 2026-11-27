@@ -31,12 +31,12 @@ it.each([false, true])("retains error attention when no separate update button i
 });
 
 it("renders a UserRound icon instead of ? when the profile has no name or email in iconOnly circle and full modes", () => {
-  const circleHtml = renderToStaticMarkup(createElement(SidebarProfileMenu, { iconOnly: true, circle: true }));
+  const circleHtml = renderToStaticMarkup(createElement<{ iconOnly?: boolean; circle?: boolean }>(SidebarProfileMenu, { iconOnly: true, circle: true }));
   expect(circleHtml).toContain("lucide-user-round");
   expect(circleHtml).toContain('width="18"');
   expect(circleHtml).not.toContain(">?<");
 
-  const iconHtml = renderToStaticMarkup(createElement(SidebarProfileMenu, { iconOnly: true }));
+  const iconHtml = renderToStaticMarkup(createElement<{ iconOnly?: boolean }>(SidebarProfileMenu, { iconOnly: true }));
   expect(iconHtml).toContain("lucide-user-round");
   expect(iconHtml).toContain('width="16"');
   expect(iconHtml).not.toContain(">?<");
