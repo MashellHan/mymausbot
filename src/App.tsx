@@ -104,6 +104,7 @@ import { PairPage } from "./pair/PairPage";
 import { refreshPublishedApps } from "@/lib/own-published-apps";
 import { isRemoteClientSession, isRemotePwaMode } from "@/lib/pwa-transport";
 import { usePwaViewportVars } from "@/lib/pwa-viewport";
+import { MOBILE_DRAWER_TRIGGER_CLASS } from "@/lib/pwa-header-status";
 
 function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   usePwaViewportVars();
@@ -412,7 +413,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
         aria-label={t("app.openBotList")}
         aria-expanded={drawerOpen}
         onClick={openDrawer}
-        className="absolute left-3 top-3 z-30 rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink max-md:flex max-md:size-9 max-md:items-center max-md:justify-center max-md:rounded-full max-md:border max-md:border-hairline max-md:bg-card max-md:p-0 max-md:text-ink md:hidden"
+        className={MOBILE_DRAWER_TRIGGER_CLASS}
       >
         <Menu size={18} className="max-md:hidden" />
         <ChevronLeft size={20} aria-hidden="true" className="hidden max-md:block" />
