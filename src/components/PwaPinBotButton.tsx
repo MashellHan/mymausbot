@@ -19,7 +19,7 @@ export function PwaPinBotButton({ botId }: { botId: string }) {
       title={label}
       onClick={() => { void togglePinnedPwaBot(botId); }}
       className={cn(
-        "flex size-8 shrink-0 items-center justify-center rounded-full transition-colors",
+        "flex size-8 touch:size-11 shrink-0 items-center justify-center rounded-full transition-colors active:scale-95 motion-reduce:transition-none",
         ELEVATED_FLOAT,
         ELEVATED_HOVER,
         pinned ? "text-accent" : "text-ink-secondary hover:text-ink",

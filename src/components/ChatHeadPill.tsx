@@ -4,6 +4,8 @@ import type { ComponentProps, MouseEvent } from "react";
 
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
+import { resolvePwaHeaderStatus } from "@/lib/pwa-header-status";
+import { isRemotePwaMode } from "@/lib/pwa-transport";
 import type { Bot } from "@/state/store"; import { useStoreSelector } from "@/state/store-select";
 import { awayFromMainThread } from "@/state/thread-navigation";
 import { BotAvatar } from "./Avatar";
@@ -38,6 +40,15 @@ export function ChatHeadPill({ bot, avatar, privacy, remoteClient = false, onTog
   onToggle: (event: MouseEvent<HTMLButtonElement>) => void;
 }) {
   const open = useStoreSelector((state) => remoteClient ? state.settingsOpen : state.computerOpen), pendingQueued = useStoreSelector((state) => state.pendingQueued);
+  const connected = useStoreSelector((state) => state.connected);
+  const cachedHydrated = useStoreSelector((state) => Boolean(state.cachedHydrated));
+  const pwaStatus = resolvePwaHeaderStatus({
+    remotePwa: isRemotePwaMode(),
+    connected,
+    cachedHydrated,
+    busy: Boolean(bot.busy),
+    waitingOnYou: bot.activity === "waiting-on-you",
+  });
   const elsewhere = sidebarBotActivityTasks(bot, pendingQueued).filter((task) => task.threadId !== bot.threadId).length;
   const privacyLabel = privacyLabelOf(privacy);
   const PrivacyIcon = privacy ? PRIVACY_ICONS[privacy.kind] : Users;
@@ -60,6 +71,14 @@ export function ChatHeadPill({ bot, avatar, privacy, remoteClient = false, onTog
     >
       <BotAvatar bot={bot} size={28} {...avatar} />
       <span dir="auto" className="min-w-0 truncate text-[14px] font-medium leading-5">{bot.name}</span>
+      {pwaStatus.tone !== "none" && (
+        <span
+          role="img"
+          data-chathead-pwa-status={pwaStatus.tone}
+          aria-label={pwaStatus.labelKey ? t(pwaStatus.labelKey) : pwaStatus.tone}
+          className={cn("size-2 shrink-0 rounded-full", pwaStatus.dotClass)}
+        />
+      )}
       {conversation && (
         <>
           <ChevronRight size={12} aria-hidden="true" className="shrink-0 text-ink-tertiary" />
