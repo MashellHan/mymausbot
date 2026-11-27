@@ -37,7 +37,7 @@ const ANSWERS: Record<string, string> = {
 type Report = { id: string; status: string; text?: string; conversationId?: string; bot?: { id: string; name: string }; openUrl?: string };
 type Task = { threadId: string; title: string; private?: boolean; shared?: boolean; busy?: boolean };
 type Bot = { id: string; name: string; threadId: string; mainThreadId?: string; busy?: boolean; defaultBot?: { person?: string }; tasks?: Task[] };
-type Row = { id: string; role: string; kind: string; text?: string; relayed?: boolean; tool?: { name: string }; stoppedBy?: { name: string } };
+type Row = { id: string; role: string; kind: string; text?: string; relayed?: boolean; queueId?: string; intake?: { mode: string; state: string }; tool?: { name: string }; stoppedBy?: { name: string } };
 
 const admin = {
   /** Every request to the report path, as the real Admin would judge it. */
@@ -244,14 +244,18 @@ it("a line written while the bot works waits in the queue and runs after, as its
   const second = await slack(ownerSlack, { audience: "team", conversationId: thread, text: "Is the report out?" });
   expect(second.status, JSON.stringify(second.body)).toBe(202);
   expect(second.body.conversationId).toBe(thread);
-  expect((await rows(thread)).filter((row) => row.role === "user")).toHaveLength(1);
+  const queuedRows = (await rows(thread)).filter((row) => row.role === "user");
+  expect(queuedRows.map((row) => row.text)).toEqual(["Watch the build", "Is the report out?"]);
+  expect(queuedRows[1]).toMatchObject({ queueId: expect.any(String), intake: { mode: "progressive-continue", state: "received" } });
   expect(statuses(first.id)).toEqual(["running"]);
   writeFileSync(file("release"), "");
   await finished(first.id);
   await finished(second.id);
   expect(lastReport(first.id).text).toBe(ANSWERS["Watch the build"]);
   expect(lastReport(second.id).text).toBe(ANSWERS["Is the report out?"]);
-  expect((await rows(thread)).filter((row) => row.role === "user").map((row) => row.text)).toEqual(["Watch the build", "Is the report out?"]);
+  const settledRows = (await rows(thread)).filter((row) => row.role === "user");
+  expect(settledRows.map((row) => row.text)).toEqual(["Watch the build", "Is the report out?"]);
+  expect(settledRows[1]?.intake?.state).toBe("answered");
 }, hostTimeout(180_000));
 
 it("Stop from Slack ends the owner's run and is reported; an id never taken is 404", async () => {

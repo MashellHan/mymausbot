@@ -12,6 +12,7 @@
 import { isPersistentQuestionCard } from "../../shared/ask-question.ts";
 import { atLeast } from "../../shared/bot-access.ts";
 import { defaultBotPerson } from "../../shared/default-bot.ts";
+import { isPendingIntakeState, transitionProgressiveIntakeState } from "../../shared/progressive-intake.ts";
 import type { ResolvedSender } from "../../shared/wire.ts";
 import { memberAudience, type Audience } from "../audience.ts";
 import type { VisibleSet } from "../bot-visibility.ts";
@@ -22,7 +23,7 @@ import { personKey } from "../person-key.ts";
 import type { RequestAuth } from "../request-auth.ts";
 import { isStopCommand } from "../room-holds.ts";
 import { serverLine } from "../server-lines.ts";
-import { cancelSteeredMessage, onSteeredQueueChange, queuedSteeredMessage, queuedSteerSender } from "../steer-queue.ts";
+import { cancelSteeredMessage, onSteeredQueueChange, queuedSteeredMessage, queuedSteerRowId, queuedSteerSender } from "../steer-queue.ts";
 import type { BotRecord, Message, Store } from "../store.ts";
 import {
   TEAM_SLACK_ANSWER_MAX, TEAM_SLACK_FINAL, TEAM_SLACK_RUNNING_EVERY_MS, createTeamSlackMessages, createTeamSlackReporter, teamSlackKey, teamSlackOver,
@@ -47,7 +48,7 @@ export interface TeamSlackHostDeps {
   messages?: TeamSlackMessages;
   /** On a personal Cloud: its owner's person key when the session is the owner's, else null. A Team Cloud never asks. */
   owner(auth: RequestAuth): string | null;
-  store: Pick<Store, "bot" | "bots" | "botByThread" | "taskByThread" | "createTask" | "activePath" | "onChange">;
+  store: Pick<Store, "bot" | "bots" | "botByThread" | "taskByThread" | "createTask" | "activePath" | "messagesFor" | "patchMessage" | "onChange">;
   visibleFor(auth: RequestAuth): Pick<VisibleSet, "bot" | "level" | "thread">;
   sender(auth: RequestAuth): ResolvedSender | undefined;
   trigger(auth: RequestAuth): UsageTrigger;
@@ -87,6 +88,12 @@ export const teamSlackShared = (bot: BotRecord): boolean => !defaultBotPerson(bo
 
 const openCard = (message: Message): boolean => Boolean(message.card?.requestId && !message.card.answered && !message.card.dismissed && !message.card.expired);
 const isRequest = (message: Message): boolean => message.requestPending !== undefined || message.requestCancelled === true;
+const isWaitingIntake = (message: Message): boolean =>
+  message.intake !== undefined && isPendingIntakeState(message.intake.state);
+const isCancelledQueued = (message: Message): boolean =>
+  message.requestCancelled === true && message.requestPending === undefined;
+const belongsToRequest = (message: Message, requestId: string): boolean =>
+  message.requestMessageId === undefined || message.requestMessageId === requestId;
 
 /** The member's line and the request it runs under: that line, or the one it joined (one person's lines that waited
  * together are answered by one turn, the last of them its request). */
@@ -96,8 +103,14 @@ export function teamSlackLines(path: readonly Message[], sendId: string): { at: 
   let request = at;
   if (path[at]!.steered) {
     while (request >= 0 && !(path[request]!.role === "user" && isRequest(path[request]!))) request--;
-  } else {
-    while (!isRequest(path[request]!) && path[request + 1]?.role === "user" && !path[request + 1]!.steered) request++;
+  } else if (!isWaitingIntake(path[at]!) && !isCancelledQueued(path[at]!)) {
+    while (
+      !isRequest(path[request]!) &&
+      path[request + 1]?.role === "user" &&
+      !path[request + 1]!.steered &&
+      !isWaitingIntake(path[request + 1]!) &&
+      !isCancelledQueued(path[request + 1]!)
+    ) request++;
   }
   return { at, request: request >= 0 && isRequest(path[request]!) ? request : -1 };
 }
@@ -111,15 +124,27 @@ export function teamSlackPhase(path: readonly Message[], sendId: string, live: {
   const line = path[lines.request]!;
   if (line.requestCancelled) return { state: "stopped" };
   const after = path.slice(lines.request + 1);
-  const next = after.findIndex((message) => message.role === "user" && !message.steered);
+  const next = after.findIndex(
+    (message) =>
+      message.role === "user" &&
+      !message.steered &&
+      !isWaitingIntake(message) &&
+      !isCancelledQueued(message),
+  );
   const run = next < 0 ? after : after.slice(0, next);
   if (line.requestPending === false) {
-    const reply = lines.request === lines.at ? run.findLast((message) => message.role === "bot" && message.kind === "text" && message.turnTerminal) : undefined;
+    // A progressive follow-up row can be appended mid-turn before the running request's own terminal reply lands.
+    const ownReply = after.findLast(
+      (message) => message.role === "bot" && message.kind === "text" && message.turnTerminal && message.requestMessageId === line.id,
+    );
+    const reply = lines.request === lines.at
+      ? ownReply ?? run.findLast((message) => message.role === "bot" && message.kind === "text" && message.turnTerminal && belongsToRequest(message, line.id))
+      : undefined;
     return { state: "completed", ...(reply?.text ? { text: reply.text } : {}) };
   }
   if (next >= 0) return { state: "failed" };
   // A question outlives the turn that asked it, so it holds this run only while that turn is still blocked on it.
-  const card = run.find((message) => requestNeedsInput(message) || (live.busy && openCard(message)));
+  const card = after.find((message) => belongsToRequest(message, line.id) && (requestNeedsInput(message) || (live.busy && openCard(message))));
   if (card) return { state: "waiting", waiting: card.card?.requestId && !isPersistentQuestionCard(card.card) ? "approval" : "question" };
   return live.busy || live.handedOn ? { state: "running" } : "unsettled";
 }
@@ -337,7 +362,18 @@ export function createTeamSlackHost(deps: TeamSlackHostDeps) {
       const waiting = queuedSteeredMessage(record.botId, record.threadId, id);
       if (waiting) {
         if (deps.removeRefusal(record.threadId, queuedSteerSender(record.botId, record.threadId, waiting.id)?.sender, by)) return notTheirs;
+        const persistedRowId = queuedSteerRowId(record.botId, record.threadId, waiting.id);
         cancelSteeredMessage(record.botId, waiting.id, record.threadId);
+        if (persistedRowId) {
+          const existing = store.messagesFor(record.threadId).find((message) => message.id === persistedRowId);
+          if (existing) {
+            const intake = transitionProgressiveIntakeState(existing.intake, "superseded");
+            store.patchMessage(record.threadId, existing.id, {
+              requestCancelled: true,
+              ...(intake ? { intake } : {}),
+            });
+          }
+        }
         settle(id);
         return { status: 200, body: { stopped: true } };
       }

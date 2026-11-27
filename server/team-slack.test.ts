@@ -80,6 +80,26 @@ describe("teamSlackPhase", () => {
     path[0] = { ...path[0]!, requestPending: false };
     expect(teamSlackPhase([...path, reply("Done.")], ID, idle)).toEqual({ state: "completed" });
   });
+  it("a queued progressive-intake row waiting behind a running turn does not fail it, and cancelling one marks it stopped", () => {
+    const first = row({ sendId: ID, requestPending: true });
+    const queued = row({ sendId: LATER, intake: { mode: "progressive-continue", state: "received", updatedAt: 1 } });
+    expect(teamSlackPhase([first, queued], ID, busy)).toEqual({ state: "running" });
+    expect(teamSlackPhase([{ ...first, requestPending: false }, queued, reply("First answer.", { requestMessageId: first.id }), row({ sendId: LATER, requestPending: true }), reply("Second answer.")], ID, busy)).toEqual({ state: "completed", text: "First answer." });
+    const settledSecond = row({ sendId: LATER, requestPending: true, intake: { mode: "progressive-continue", state: "processing", updatedAt: 2 } });
+    expect(teamSlackPhase([{ ...first, requestPending: false }, settledSecond, reply("First answer.", { requestMessageId: first.id })], ID, busy)).toEqual({ state: "completed", text: "First answer." });
+    expect(teamSlackPhase([{ ...first, requestPending: false }, { ...settledSecond, requestPending: false }, reply("First answer.", { requestMessageId: first.id })], LATER, idle)).toEqual({ state: "completed" });
+    const coalescedA = row({ sendId: ID, intake: { mode: "progressive-continue", state: "answered", updatedAt: 3 } });
+    const coalescedB = row({ sendId: LATER, requestPending: false, intake: { mode: "progressive-continue", state: "answered", updatedAt: 3 } });
+    expect(teamSlackPhase([coalescedA, coalescedB, reply("Both answered.")], ID, idle)).toEqual({ state: "completed" });
+    expect(teamSlackPhase([coalescedA, coalescedB, reply("Both answered.")], LATER, idle)).toEqual({ state: "completed", text: "Both answered." });
+    const cancelledQueued = row({
+      sendId: LATER,
+      requestCancelled: true,
+      intake: { mode: "progressive-continue", state: "superseded", updatedAt: 2 },
+    });
+    expect(teamSlackPhase([first, cancelledQueued], ID, busy)).toEqual({ state: "running" });
+    expect(teamSlackPhase([first, cancelledQueued], LATER, busy)).toEqual({ state: "stopped" });
+  });
 });
 
 describe("the record of Slack messages", () => {

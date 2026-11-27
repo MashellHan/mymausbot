@@ -201,7 +201,8 @@ it("Stop cancels a stalled summary without writing a late record or starting an 
 }, true), 60_000);
 
 it.each([
-  { native: undefined, tokens: 190_000, compactions: 1 },
+  { native: undefined, tokens: 990_000, compactions: 1 },
+  { native: "200000", tokens: 190_000, compactions: 1 },
   { native: "100000", tokens: 95_000, compactions: 1 },
   { native: "off", tokens: 190_000, compactions: 0 },
   { native: "auto", tokens: 190_000, compactions: 0 },
@@ -215,7 +216,7 @@ it.each([
   expect((await f.messages()).filter(m => m.kind === "compaction")).toHaveLength(compactions);
   const launch = JSON.parse(readFileSync(f.session.fixtureDumpPath, "utf8"));
   if (native === "off") expect(launch.argv).not.toContain("--autocompact");
-  else expect(launch.argv[launch.argv.indexOf("--autocompact") + 1]).toBe(native ?? "200000");
+  else expect(launch.argv[launch.argv.indexOf("--autocompact") + 1]).toBe(native ?? "1000000");
   if (compactions) {
     await f.send("NEXT keep the native headroom after the first fold");
     expect((await f.messages()).filter(m => m.kind === "compaction")).toHaveLength(2);
