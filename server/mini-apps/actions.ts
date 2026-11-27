@@ -148,22 +148,23 @@ export class MiniAppActionBridge {
         context: input.action.context,
       });
     } else {
+      const appendAction = input.action;
       const versionRow = db.prepare(
         "SELECT bindings FROM mini_app_versions WHERE app_id = ? AND version = ?",
       ).get(appId, appRow.template_version) as { bindings: string } | undefined;
       const bindings = versionRow ? (JSON.parse(versionRow.bindings) as Array<{ datasetId: string }>) : [];
-      if (!bindings.some((binding) => binding.datasetId === input.action.bindingDatasetId)) {
+      if (!bindings.some((binding) => binding.datasetId === appendAction.bindingDatasetId)) {
         throw appFailure(403, "Dataset is not bound to this Mini App.", "unbound_dataset");
       }
-      if (Object.keys(input.action.row).length === 0) {
+      if (Object.keys(appendAction.row).length === 0) {
         throw appFailure(400, "Record row must include at least one column.");
       }
       if (!this.handlers.appendRecord) throw appFailure(503, "Dataset append is unavailable for Mini Apps.");
       detail = await this.handlers.appendRecord({
         appId,
-        datasetId: input.action.bindingDatasetId,
-        table: input.action.table,
-        row: input.action.row,
+        datasetId: appendAction.bindingDatasetId,
+        table: appendAction.table,
+        row: appendAction.row,
       });
     }
 
