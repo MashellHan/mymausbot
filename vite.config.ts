@@ -8,6 +8,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { DurationSequencer } from "./scripts/testing/duration-sequencer.ts";
 import { hostE2eOnly, portableE2eFiles } from "./scripts/testing/host-e2e.ts";
 import { hostTimeout } from "./server/testing/host-timeout.ts";
+import { resolveManualChunk } from "./src/lib/build-chunks.ts";
 
 // The About dialog's version, inlined at build time: the preload bridge is
 // absent in dev.
@@ -62,7 +63,10 @@ const include = [
 export default defineConfig({
   plugins: [react(), tailwindcss(), railPage(), pwaCloudflareHeaders()],
   build: {
-    rollupOptions: { input: { index: page("./index.html"), rail: page("./rail.html") } },
+    rollupOptions: {
+      input: { index: page("./index.html"), rail: page("./rail.html") },
+      output: { manualChunks: resolveManualChunk },
+    },
   },
   define: {
     __APP_VERSION__: JSON.stringify(version),

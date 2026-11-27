@@ -68,12 +68,13 @@ export function LiveConnectionStrip({ connected, hydrated, cachedHydrated = fals
           : help
             ? "liveConnection.help"
             : "liveConnection.reconnecting";
-  return <div role="status" data-live-connection={notice ?? "outbox"} className="flex flex-wrap items-center justify-center gap-2 border-b border-hairline/40 bg-panel px-3 py-1.5 text-[13px] text-ink-secondary">
+  const actionPill = "inline-flex min-h-8 touch:min-h-10 shrink-0 items-center rounded-full border border-hairline bg-card px-3 text-[12px] font-medium text-ink transition-colors hover:bg-raised active:bg-raised focus-visible:outline-2 focus-visible:outline-offset-2";
+  return <div role="status" data-live-connection={notice ?? "outbox"} className="flex flex-wrap items-center justify-center gap-2 border-b border-hairline/50 bg-panel/95 px-3 py-2 text-[13px] text-ink-secondary tabular-nums">
     {notice && (
       <>
-        {notice === "offline" || notice === "mac-offline" ? <CloudOff size={14} className="shrink-0" aria-hidden="true" /> : <Loader2 size={14} className="shrink-0 animate-spin" aria-hidden="true" />}
+        {notice === "offline" || notice === "mac-offline" ? <CloudOff size={14} className="shrink-0 text-ink-tertiary" aria-hidden="true" /> : <Loader2 size={14} className="shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />}
         <span>{t(messageKey)}</span>
-        {(notice === "reconnecting" || notice === "mac-offline") && help && <button type="button" onClick={retryLiveEvents} className="shrink-0 rounded px-2 py-1 text-ink underline underline-offset-2 hover:bg-raised focus-visible:outline-2 focus-visible:outline-offset-2">
+        {(notice === "reconnecting" || notice === "mac-offline") && help && <button type="button" onClick={retryLiveEvents} className={actionPill}>
           {t("liveConnection.retry")}
         </button>}
       </>
@@ -83,7 +84,7 @@ export function LiveConnectionStrip({ connected, hydrated, cachedHydrated = fals
         type="button"
         data-outbox-retry-all
         onClick={() => void retryAllOutboxSends()}
-        className="shrink-0 rounded px-2 py-1 text-ink underline underline-offset-2 hover:bg-raised focus-visible:outline-2 focus-visible:outline-offset-2"
+        className={actionPill}
       >
         {t("liveConnection.retryAll", { count: outbox.failedCount })}
       </button>
@@ -95,7 +96,7 @@ export function LiveConnectionStrip({ connected, hydrated, cachedHydrated = fals
           type="button"
           data-outbox-import-prior
           onClick={() => void importPriorSessionOutbox()}
-          className="shrink-0 rounded px-2 py-1 text-ink underline underline-offset-2 hover:bg-raised focus-visible:outline-2 focus-visible:outline-offset-2"
+          className={actionPill}
         >
           {t("liveConnection.importAndResend")}
         </button>
@@ -103,7 +104,7 @@ export function LiveConnectionStrip({ connected, hydrated, cachedHydrated = fals
           type="button"
           data-outbox-discard-prior
           onClick={() => void discardPriorSessionOutbox()}
-          className="shrink-0 rounded px-2 py-1 text-ink-tertiary underline underline-offset-2 hover:bg-raised hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2"
+          className="inline-flex min-h-8 touch:min-h-10 shrink-0 items-center rounded-full px-2.5 text-[12px] text-ink-tertiary hover:bg-raised hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2"
         >
           {t("chat.outbox.discard")}
         </button>
