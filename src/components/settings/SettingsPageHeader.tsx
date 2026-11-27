@@ -39,7 +39,7 @@ export function ScopeLine({ page, ctx, place }: { page: SettingsPage; ctx: Setti
       </p>
     );
   }
-  const badge = page.owner === "place" ? <PlaceBadge place={place} size={14} /> : page.owner === "account" ? <YouAvatar size={14} /> : <AppIcon size={14} />;
+  const badge = page.owner === "place" ? <PlaceBadge place={place} size={14} icon={ctx.client} /> : page.owner === "account" ? <YouAvatar size={14} /> : <AppIcon size={14} />;
   const text = page.owner === "place" ? forPlace(place.name)
     : page.owner === "account"
       ? ctx.desktop ? <><span className="text-ink">{t("settings.scope.account", { app: productName() })}</span>{everyPlace(ctx)}</> : <span className="text-ink-secondary">{t("settings.scope.browserAccount", { place: place.name })}</span>
@@ -61,7 +61,7 @@ export function SettingsPageHeader({ page, ctx, place, narrow, missing }: {
   const intro = page.id !== "app" ? INTRO[page.id]
     : !ctx.desktop ? ctx.advanced ? "settings.app.introBrowserAdvanced" : "settings.app.introBrowser"
     : ctx.advanced ? INTRO.app : "settings.app.introSimple";
-  const title = page.id === "account" ? t("settings.page.account") : pageLabel(page, place, ctx.desktop);
+  const title = page.id === "account" ? t("settings.page.account") : pageLabel(page, place, ctx.desktop, ctx.advanced);
   return (
     // No fill and not sticky: on a glass skin any opaque fill reads as a white block over the sheet.
     <header data-settings-header="" className={cn("flex flex-col gap-1 pb-5", narrow ? "px-8 pt-1" : "pl-4 pt-4")}>

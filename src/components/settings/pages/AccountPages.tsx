@@ -34,13 +34,15 @@ export function AccountPage() {
   const sheet = window.ogb?.accountSheet;
   const computerBadge = <PlaceBadge place={{ kind: "computer", name: computer.name, color: null }} size={14} />;
   return <>
-    <SettingsGroup block="you">
-      <SettingsRows>
-        {elsewhere && computer.open
-          ? <SettingsLinkRow title={t("settings.account.nameRow")} badge={computerBadge} value={t("settings.account.onPlace", { place: computer.name })} external onClick={computer.open} data={{ "data-account-name-row": "" }} />
-          : <SettingsLinkRow title={t("settings.account.nameRow")} badge={<PlaceBadge place={place} size={14} />} value={profileLabel(profile)} onClick={() => go("bots", "about-you")} data={{ "data-account-name-row": "" }} />}
-      </SettingsRows>
-    </SettingsGroup>
+    {!ctx.client && (
+      <SettingsGroup block="you">
+        <SettingsRows>
+          {elsewhere && computer.open
+            ? <SettingsLinkRow title={t("settings.account.nameRow")} badge={computerBadge} value={t("settings.account.onPlace", { place: computer.name })} external onClick={computer.open} data={{ "data-account-name-row": "" }} />
+            : <SettingsLinkRow title={t("settings.account.nameRow")} badge={<PlaceBadge place={place} size={14} />} value={profileLabel(profile)} onClick={() => go("bots", "about-you")} data={{ "data-account-name-row": "" }} />}
+        </SettingsRows>
+      </SettingsGroup>
+    )}
     {bridge && <CloudAccountSettings part="account" advanced={ctx.advanced} linkRequest={state.appSettingsCloudLink} avatar={<YouAvatar size={32} />}
       onSignIn={() => dispatch({ type: "openCloudAdd", source: "app_settings", signIn: true })} />}
     {elsewhere && (
@@ -55,7 +57,7 @@ export function AccountPage() {
         </SettingsRows>
       </SettingsGroup>
     )}
-    {!ctx.desktop && (
+    {(!ctx.desktop || ctx.client) && (
       <SettingsGroup block="mausbot-account">
         <SettingsRows>
           <SettingRow title={t("settings.account.signedInTo", { place: place.name })} subtitle={profile?.email}>{null}</SettingRow>

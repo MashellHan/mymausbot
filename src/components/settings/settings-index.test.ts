@@ -168,6 +168,9 @@ describe("search", () => {
   it.each(["notifications", "sounds"])("puts General › Notifications first for “%s”", (query) => expect(first(query)?.anchor).toBe("notifications"));
   it.each(["password", "login"])("puts Vault first for “%s”", (query) => expect(first(query)?.page).toBe("vault"));
   it.each(["dark mode", "night mode"])("puts Light or dark first for “%s”", (query) => expect(first(query)?.id).toBe("light-dark"));
+  it("finds Interface mode inside Appearance at advanced-mode", () => {
+    expect(first("interface mode")).toMatchObject({ id: "interface-mode", page: "appearance", anchor: "advanced-mode" });
+  });
   it.each(["sign in", "log in", "log out"])("puts Your account first for “%s”", (query) => expect(first(query)?.page).toBe("account"));
   it.each(["wallpaper", "background"])("puts Sidebar picture first for “%s”", (query) => expect(first(query)?.id).toBe("sidebar-picture"));
   it.each(["cancel", "billing", "invoice", "subscription", "refund"])("puts Plan & billing first for “%s”", (query) => expect(first(query)?.page).toBe("plan"));

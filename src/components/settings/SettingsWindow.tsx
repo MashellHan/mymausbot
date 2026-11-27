@@ -77,8 +77,8 @@ export function SettingsWindow() {
   useEffect(() => window.ogb?.onOpenAppSettings?.(() => setQuery("")), []);
   useEffect(markOpened, []);
 
-  const hits = useMemo(() => searchSettings(query, ctx, (entry) => hitLabel({ entry, elsewhere: false, score: 0 }, place, ctx.desktop),
-    (candidate) => pageLabel(candidate, place, ctx.desktop)), [query, ctx, place]);
+  const hits = useMemo(() => searchSettings(query, ctx, (entry) => hitLabel({ entry, elsewhere: false, score: 0 }, place, ctx.desktop, ctx.advanced),
+    (candidate) => pageLabel(candidate, place, ctx.desktop, ctx.advanced)), [query, ctx, place]);
 
   const keyHits = useMemo(() => (ctx.client || !query.trim() ? [] : KEY_CATALOG.filter((entry) => !keyHidden(entry.id, state.config) && keyMatches(entry, query.trim().toLowerCase(), state.config)).slice(0, 8)), [ctx.client, query, state.config]);
   const openKey = (entry: KeyEntry) => { setQuery(""); setNarrowPage(true); dispatch(entry.uses ? openKeySettings(entry.uses, entry.id) : openKeySettings(entry.id)); };
@@ -136,13 +136,13 @@ export function SettingsWindow() {
     return () => { window.removeEventListener("keydown", onKey); previousFocus?.focus(); };
   }, [dispatch, isTop]);
 
-  const shell: SettingsShell = { ctx, place, page: target.page, anchor, go };
-  const missing = target.missing ? pageLabel(pageById(target.missing), place, ctx.desktop) : undefined;
+  const shell: SettingsShell = { ctx, place, page: target.page, anchor, go, onMode: setMode };
+  const missing = target.missing ? pageLabel(pageById(target.missing), place, ctx.desktop, ctx.advanced) : undefined;
   const showList = narrow && !narrowPage;
   // Narrow header: the back label and the centred page title share 48 px of height; when the pair can't fit (half the
   // width each side of the centre), the back button keeps only its chevron.
   const compactBack = narrow && typeof window !== "undefined"
-    && window.innerWidth / 2 - 16 - (30 + t("settings.title").length * 7) < (pageLabel(page, place, ctx.desktop).length * 9) / 2;
+    && window.innerWidth / 2 - 16 - (30 + t("settings.title").length * 7) < (pageLabel(page, place, ctx.desktop, ctx.advanced).length * 9) / 2;
   const closeButton = (
     <button type="button" onClick={close} aria-label={t("settings.close")} title={`${t("settings.close")} (${shortcutLabel("close-panel")})`}
       className={cn("ui-icon-button z-20 size-8 shrink-0 cursor-pointer rounded-full text-ink-secondary hover:bg-menu-hover hover:text-ink", !narrow && "absolute right-3 top-3")}>
@@ -171,7 +171,7 @@ export function SettingsWindow() {
                         className={cn("flex h-8 shrink-0 cursor-pointer items-center gap-0.5 rounded-full text-[13px] font-medium leading-5 text-ink-secondary hover:bg-menu-hover hover:text-ink", compactBack ? "w-8 justify-center" : "pl-1 pr-2")}>
                         <ChevronLeft size={16} aria-hidden="true" className="rtl:-scale-x-100" />{!compactBack && t("settings.title")}
                       </button>
-                      <h2 className={cn("pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 truncate text-center text-[16px] font-semibold leading-[22px] text-ink", compactBack ? "max-w-[calc(100%-96px)]" : "max-w-[calc(100%-224px)]")}>{pageLabel(page, place, ctx.desktop)}</h2>
+                      <h2 className={cn("pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 truncate text-center text-[16px] font-semibold leading-[22px] text-ink", compactBack ? "max-w-[calc(100%-96px)]" : "max-w-[calc(100%-224px)]")}>{pageLabel(page, place, ctx.desktop, ctx.advanced)}</h2>
                     </>
                   )}
                   {closeButton}
@@ -181,7 +181,7 @@ export function SettingsWindow() {
             <div className="flex min-h-0 flex-1">
               {(!narrow || showList) && (
                 <SettingsNav ctx={ctx} place={place} pages={pages} current={narrow ? null : target.page} query={query} hits={hits} narrow={narrow}
-                  onQuery={setQuery} onOpen={(next) => go(next)} onHit={openHit} keyHits={keyHits} onKey={openKey} onClose={close} onMode={setMode} />
+                  onQuery={setQuery} onOpen={(next) => go(next)} onHit={openHit} keyHits={keyHits} onKey={openKey} onClose={close} />
               )}
               {(!narrow || !showList) && (
                 <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">

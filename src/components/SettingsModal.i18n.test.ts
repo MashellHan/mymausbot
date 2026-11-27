@@ -34,8 +34,22 @@ afterEach(() => {
 
 describe("Settings in another language", () => {
   const NAV = ["settings.page.bots", "settings.page.desktops", "settings.page.spending", "settings.page.data", "settings.page.account",
-    "settings.page.browser", "settings.section.general", "settings.section.appearance", "settings.section.phoneDevices",
-    "settings.interfaceMode.title", "settings.interfaceMode.raw", "settings.interfaceMode.simple", "settings.interfaceMode.advanced"] as const;
+    "settings.page.app", "settings.section.general", "settings.section.appearance", "settings.section.phoneDevices"] as const;
+  const MODE = ["settings.interfaceMode.title", "settings.interfaceMode.raw", "settings.interfaceMode.simple", "settings.interfaceMode.advanced"] as const;
+
+  async function renderAppearance(): Promise<string> {
+    const [{ AppearancePage }, { SettingsShellContext }, { fullContext }] = await Promise.all([
+      import("./settings/pages/AppPages"),
+      import("./settings/settings-shell"),
+      import("./settings/settings-index"),
+    ]);
+    return renderToStaticMarkup(
+      createElement(StoreProvider, null,
+        createElement(SettingsShellContext.Provider, {
+          value: { ctx: fullContext({ desktop: false, here: false, home: false }), place: { name: "My Cloud", kind: "cloud", color: null, named: true }, page: "appearance", anchor: null, go: () => {} },
+        }, createElement(AppearancePage))),
+    );
+  }
 
   it("renders in the language the picker selected, and re-renders in the next one", async () => {
     for (const locale of ["pt-br", "ja"] as const) {
@@ -45,6 +59,11 @@ describe("Settings in another language", () => {
         expect(locales[locale][key], `${locale} ${key}`).toBeTruthy();
         expect(html, `${locale} ${key}`).toContain(locales[locale][key]!.replaceAll("&", "&amp;"));
       }
+      const appearance = await renderAppearance();
+      for (const key of MODE) {
+        expect(locales[locale][key], `${locale} ${key}`).toBeTruthy();
+        expect(appearance, `${locale} ${key}`).toContain(locales[locale][key]!.replaceAll("&", "&amp;"));
+      }
     }
     expect(await renderSettings()).not.toContain(locales["pt-br"]["settings.page.bots"]!);
   });
@@ -53,13 +72,13 @@ describe("Settings in another language", () => {
     setLocale("en");
     const html = await renderSettings();
     for (const key of NAV) expect(html, key).toContain(en[key].replaceAll("&", "&amp;"));
+    const appearance = await renderAppearance();
+    for (const key of MODE) expect(appearance, key).toContain(en[key].replaceAll("&", "&amp;"));
   });
 
   it("has no page picker of its own: the nav is the list, and the dialog keeps its name", async () => {
     const html = await renderSettings();
-    const selectors = html.match(/<select\b[^>]*>/g);
-    expect(selectors).toHaveLength(1);
-    expect(selectors![0]).toContain('aria-labelledby="settings-interface-mode"');
+    expect(html.match(/<select\b[^>]*>/g)).toBeNull();
     expect(html).toMatch(/<nav[^>]*aria-label="Settings"/);
     expect(html).toContain('id="app-settings-title" class="sr-only"');
   });
