@@ -68,8 +68,11 @@ function assertActiveOwnerApp(db: DatabaseSync, actor: MiniAppActor, appId: stri
 
 export class MiniAppKvStore {
   private readonly writeRates = new Map<string, number[]>();
+  private readonly dbAccess: { database(): DatabaseSync; write<T>(work: (db: DatabaseSync) => T): T };
 
-  constructor(private readonly dbAccess: { database(): DatabaseSync; write<T>(work: (db: DatabaseSync) => T): T }) {}
+  constructor(dbAccess: { database(): DatabaseSync; write<T>(work: (db: DatabaseSync) => T): T }) {
+    this.dbAccess = dbAccess;
+  }
 
   private checkWriteRate(appId: string, now: number): void {
     const recent = (this.writeRates.get(appId) ?? []).filter((ts) => now - ts < 60_000);
