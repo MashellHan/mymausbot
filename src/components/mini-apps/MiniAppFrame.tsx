@@ -17,6 +17,7 @@ import { MiniAppSiteOverlay } from "./MiniAppSiteOverlay";
 import { isCustomLocalMiniApp, miniAppFrameDocument } from "./mini-app-document";
 import { createMiniAppSitePresentation, managedMiniAppSite, type MiniAppSite, type MiniAppSiteView } from "./mini-app-site";
 import { miniAppNativeFrameGuard } from "./native-frame-guard";
+import { miniAppPerfTelemetry } from "./mini-app-telemetry";
 
 const MAX_ARGUMENT_BYTES = 64 * 1024;
 const MAX_RESULT_BYTES = 1_000_000;
@@ -221,6 +222,7 @@ export function mountMiniAppFrame(options: {
     if (sitePresentation?.receive(event, host.iframe, frameInitialized)) return;
     if (record(event.data) && event.data.jsonrpc === "2.0" && event.data.method === "ui/notifications/initialized") {
       frameInitialized = true;
+      miniAppPerfTelemetry().markIframeInit(document.app.id);
       postHostSelection(currentGithubSelection);
       return;
     }
@@ -246,6 +248,7 @@ export function mountMiniAppFrame(options: {
         return;
       }
       runtimeReadyNotified = true;
+      miniAppPerfTelemetry().markReady(document.app.id);
       options.onRuntimeReady?.({
         appId: document.app.id,
         revision: document.app.revision,

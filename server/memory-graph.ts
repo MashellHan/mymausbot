@@ -97,6 +97,93 @@ export function listTopicNeighbors(db: DatabaseSync, botId: string, slug: string
     .sort((a, b) => b.weight - a.weight || a.topic.localeCompare(b.topic));
 }
 
+export interface SpreadActivationResult {
+  topic: string;
+  score: number;
+  viaTopic: string;
+}
+
+/** 2-hop damped Personalized PageRank over memory_edges with inverse-degree hub damping (HippoRAG 2-lite). */
+export function spreadActivation(
+  db: DatabaseSync,
+  botId: string,
+  seeds: ReadonlyMap<string, number>,
+  options: { alpha?: number; hops?: number; maxCandidates?: number } = {},
+): SpreadActivationResult[] {
+  if (!seeds.size) return [];
+  const alpha = options.alpha ?? 0.35;
+  const hops = options.hops ?? 2;
+  const maxCandidates = options.maxCandidates ?? 24;
+  const rows = db
+    .prepare("SELECT src, dst, weight FROM memory_edges WHERE bot_id = ?")
+    .all(botId) as Array<{ src: string; dst: string; weight: number }>;
+  if (!rows.length) return [];
+
+  const adj = new Map<string, Map<string, number>>();
+  const addUndirected = (u: string, v: string, w: number) => {
+    let m = adj.get(u);
+    if (!m) { m = new Map(); adj.set(u, m); }
+    m.set(v, Math.max(m.get(v) ?? 0, w));
+  };
+  for (const row of rows) {
+    addUndirected(row.src, row.dst, row.weight);
+    addUndirected(row.dst, row.src, row.weight);
+  }
+
+  let seedTotal = 0;
+  const p0 = new Map<string, number>();
+  for (const [slug, weight] of seeds) {
+    if (weight <= 0) continue;
+    const node = slug.startsWith("topic:") || slug.startsWith("entity:") ? slug : `topic:${slug}`;
+    p0.set(node, (p0.get(node) ?? 0) + weight);
+    seedTotal += weight;
+  }
+  if (seedTotal <= 0) return [];
+  for (const [node, val] of p0) p0.set(node, val / seedTotal);
+
+  let p = new Map<string, number>(p0);
+  const origin = new Map<string, { topic: string; mass: number }>();
+  for (const [node, mass] of p0) {
+    if (node.startsWith("topic:")) origin.set(node, { topic: node.slice("topic:".length), mass });
+  }
+
+  for (let step = 0; step < hops; step += 1) {
+    const next = new Map<string, number>();
+    for (const [node, val] of p0) next.set(node, (1 - alpha) * val);
+    for (const [u, mass] of p) {
+      const neighbors = adj.get(u);
+      if (!neighbors || !neighbors.size) continue;
+      let degree = 0;
+      for (const w of neighbors.values()) degree += w;
+      if (degree <= 0) continue;
+      const srcOrigin = origin.get(u)?.topic ?? (u.startsWith("topic:") ? u.slice("topic:".length) : undefined);
+      for (const [v, w] of neighbors) {
+        const flow = alpha * mass * (w / degree);
+        next.set(v, (next.get(v) ?? 0) + flow);
+        if (srcOrigin) {
+          const prev = origin.get(v);
+          if (!prev || flow > prev.mass) origin.set(v, { topic: srcOrigin, mass: flow });
+        }
+      }
+    }
+    p = next;
+  }
+
+  const seedTopics = new Set(
+    [...p0.keys()].filter((k) => k.startsWith("topic:")).map((k) => k.slice("topic:".length)),
+  );
+  const out: SpreadActivationResult[] = [];
+  for (const [node, score] of p) {
+    if (!node.startsWith("topic:")) continue;
+    const topic = node.slice("topic:".length);
+    if (seedTopics.has(topic) || score <= 0.01) continue;
+    out.push({ topic, score, viaTopic: origin.get(node)?.topic ?? [...seedTopics][0] ?? topic });
+  }
+  return out
+    .sort((a, b) => b.score - a.score || a.topic.localeCompare(b.topic))
+    .slice(0, maxCandidates);
+}
+
 export function patchBacklinks(input: {
   sourceSlug: string;
   targetSlugs: readonly string[];

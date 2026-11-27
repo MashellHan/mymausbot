@@ -1,6 +1,7 @@
 // Recall rides in front of the turn's message, never the system prompt; fence markers are neutralised so a note cannot close the block.
-import { recallMessages, recallTerms, type MemoryEntryHit, type MemoryHit, type RecallHit } from "./message-db.ts";
-import { parseTopicHeader, readTopicHead, topicBody, topicWords } from "./memory-topics.ts";
+import { applicationDatabase, recallMessages, recallTerms, type MemoryEntryHit, type MemoryHit, type RecallHit } from "./message-db.ts";
+import { normalizeTopicSlug, parseTopicHeader, readTopicHead, topicBody, topicWords } from "./memory-topics.ts";
+import { spreadActivation } from "./memory-graph.ts";
 import { listMemoryTopics, memoryDate, readMemoryTopic, searchMemoryEntries, searchMemoryFiles, workspaceDir } from "./workspace.ts";
 import { isFuture, parseMemoryEntries, withoutExpired, withoutSuperseded } from "./memory-entries.ts";
 import { hasCjk } from "./cjk-search.ts";
@@ -241,19 +242,92 @@ export function conversationPassages(input: RecallInput, query: string): RecallP
     }));
 }
 
+export function associativePassages(botId: string, directLabels: readonly string[]): RecallPassage[] {
+  const seeds = new Map<string, number>();
+  for (let i = 0; i < directLabels.length; i += 1) {
+    const label = directLabels[i]!;
+    if (!label.startsWith("memory/") || label === "memory/archive.md" || label.startsWith("memory/log/")) continue;
+    const slug = normalizeTopicSlug(label);
+    if (slug) seeds.set(slug, Math.max(seeds.get(slug) ?? 0, 1 / (i + 1)));
+  }
+  if (!seeds.size) return [];
+  const today = memoryDate();
+  const bySlug = new Map(listMemoryTopics(botId).map((topic) => [normalizeTopicSlug(topic.name), topic.name]));
+  let spread: ReturnType<typeof spreadActivation> = [];
+  try {
+    spread = spreadActivation(applicationDatabase(), botId, seeds, { alpha: 0.35, hops: 2, maxCandidates: 4 });
+  } catch {
+    return [];
+  }
+  const out: RecallPassage[] = [];
+  for (const hit of spread) {
+    const name = bySlug.get(hit.topic);
+    if (!name || name === "archive.md") continue;
+    const visible = withoutFuture(withoutSuperseded(withoutExpired(readMemoryTopic(botId, name) ?? "", today).text), today);
+    const body = topicBody(visible);
+    if (!body) continue;
+    const viaName = bySlug.get(hit.viaTopic) ?? `${hit.viaTopic}.md`;
+    out.push({
+      source: "memory",
+      label: `memory/${name} (linked via memory/${viaName})`,
+      snippet: body.length > TOPIC_PASSAGE_CHARS ? `${body.slice(0, TOPIC_PASSAGE_CHARS)}…` : body,
+    });
+    if (out.length >= 2) break;
+  }
+  return out;
+}
+
+function tokenJaccard(a: string, b: string): number {
+  const sa = new Set(recallTerms(a));
+  const sb = new Set(recallTerms(b));
+  if (!sa.size || !sb.size) return 0;
+  let inter = 0;
+  for (const t of sa) if (sb.has(t)) inter += 1;
+  return inter / (sa.size + sb.size - inter);
+}
+
+/** Diversity rerank (MMR) so recalled passages cover distinct facets instead of near-duplicates. */
+export function rerankDiversePassages(candidates: readonly RecallPassage[], limit = MEMORY_HITS, lambda = 0.75): RecallPassage[] {
+  if (candidates.length <= 1) return [...candidates];
+  const remaining = candidates.map((passage, index) => ({ passage, relevance: 1 / (index + 1) }));
+  const picked: RecallPassage[] = [];
+  while (picked.length < limit && remaining.length > 0) {
+    let bestIdx = 0;
+    let bestScore = -Infinity;
+    for (let i = 0; i < remaining.length; i += 1) {
+      const item = remaining[i]!;
+      let maxSim = 0;
+      for (const chosen of picked) {
+        const sim = tokenJaccard(item.passage.snippet, chosen.snippet);
+        if (sim > maxSim) maxSim = sim;
+      }
+      const mmr = lambda * item.relevance - (1 - lambda) * maxSim;
+      if (mmr > bestScore) {
+        bestScore = mmr;
+        bestIdx = i;
+      }
+    }
+    picked.push(remaining.splice(bestIdx, 1)[0]!.passage);
+  }
+  return picked;
+}
+
 export function buildRecall(input: RecallInput): RecallResult | null {
   const query = recallQuery(input.message);
   if (!query) return null;
   const memoryIds = input.memoryIds?.length ? input.memoryIds : [input.botId];
   const topics = memoryIds.flatMap((id) => topicPassages(id, query));
-  const notes = selectMemoryPassages(memoryIds.flatMap((id) => memoryPassages(id, query)), topics);
+  const directMatches = memoryIds.flatMap((id) => memoryPassages(id, query));
+  const associative = memoryIds.flatMap((id) => associativePassages(id, [...topics, ...directMatches].map((p) => p.label)));
+  const notes = selectMemoryPassages([...directMatches, ...associative], topics);
   return renderRecall([...notes, ...conversationPassages(input, query)]);
 }
 
 export function selectMemoryPassages(matches: readonly RecallPassage[], topics: readonly RecallPassage[]): RecallPassage[] {
   const named = topics.map(topic => matches.find(match => match.label === topic.label) ?? topic);
   const namedFiles = new Set(named.map(passage => passage.label));
-  return [...named, ...matches.filter(passage => !namedFiles.has(passage.label))].slice(0, MEMORY_HITS);
+  const extras = rerankDiversePassages(matches.filter(passage => !namedFiles.has(passage.label)), MEMORY_HITS);
+  return [...named, ...extras].slice(0, MEMORY_HITS);
 }
 
 export function withRecalled(recalled: string, text: string): string {

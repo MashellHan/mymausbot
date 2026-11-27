@@ -21,11 +21,13 @@ import { HomeScreen, SignedOutAtHome } from "./components/HomeScreen";
 import { PageBoundary } from "./components/PageBoundary";
 import { preloadPwaBootCache, type PwaBootCache } from "./lib/pwa-cache";
 import { registerPwaServiceWorker } from "./lib/pwa-sw";
+import { installStaleModuleRecovery } from "./lib/stale-module-recovery";
 import { markSessionEnded, endedBeforeReload, forgetEndedSession } from "./lib/session-ended";
 import { startDesktopLaunchMarks } from "./lib/launch-marks";
 import "./styles.css";
 
 // Before first paint; settleInterfaceMode must run before applySkin writes omb-skin.
+installStaleModuleRecovery();
 settleInterfaceMode();
 applySkinChoice(readSkinChoice());
 applyFont(readFont());
