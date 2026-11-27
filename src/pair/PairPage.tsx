@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import { ClipboardPaste } from "lucide-react";
 import { DesktopWorkspaceSwitcher } from "../components/DesktopWorkspaceSwitcher";
 import { productName } from "../lib/brand";
+import { canUseClipboardPaste, extractPairCandidateFromClipboard } from "./pair-clipboard";
 
 import {
   defaultDeviceLabel,
@@ -23,8 +25,8 @@ import { t } from "../lib/i18n";
 import { formatPairingCode, PAIRING_INPUT_PROBLEM_KEY, readPairingInput } from "../../shared/pairing-code";
 import { isPrivateHost } from "../../shared/private-host";
 
-const input = "mt-1 w-full rounded-md border border-hairline/40 bg-inset px-3 py-2 text-[14px] text-ink outline-none focus:border-accent-border";
-const button = "mt-5 w-full rounded-md bg-accent px-4 py-2 text-[14px] font-medium text-accent-ink disabled:opacity-50";
+const input = "mt-1 min-h-11 md:min-h-9 w-full rounded-lg border border-hairline/50 bg-inset px-3.5 py-2.5 md:px-3 md:py-2 text-[16px] md:text-[14px] text-ink outline-none focus:border-accent-border";
+const button = "mt-5 min-h-11 md:min-h-10 w-full rounded-lg bg-accent px-4 py-2.5 md:py-2 text-[15px] md:text-[14px] font-medium text-accent-ink disabled:opacity-50";
 const fieldLabel = "mt-4 block text-[12px] font-medium text-ink-secondary";
 
 /** Only the desktop app pairs from a link at once; a browser asks, so a sent link cannot sign it in unseen. */
@@ -134,6 +136,8 @@ export function PairPage({
   const [otp, setOtp] = useState("");
   const [sent, setSent] = useState(false);
   const [opening, setOpening] = useState(() => !pendingPwaReplace && pairsAutomatically(initialCode));
+  const [pasteNotice, setPasteNotice] = useState<string | null>(null);
+  const clipboardAvailable = canUseClipboardPaste();
 
   useEffect(() => {
     if (!opening || !initialCode) return;
@@ -220,12 +224,35 @@ export function PairPage({
   function switchMode(next: "email" | "code") {
     setMode(next);
     setError(null);
+    setPasteNotice(null);
+  }
+
+  async function pasteFromClipboard() {
+    setPasteNotice(null);
+    setError(null);
+    try {
+      const text = await navigator.clipboard.readText();
+      const match = extractPairCandidateFromClipboard(text);
+      if (match) {
+        setCode(match.value);
+        setAttemptId(newAttemptId());
+        return;
+      }
+      if (text.trim()) {
+        setCode(text.trim());
+        setAttemptId(newAttemptId());
+      } else {
+        setPasteNotice(t("pair.intro.code"));
+      }
+    } catch {
+      setPasteNotice(t("common.tryAgain"));
+    }
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-app px-6 text-ink">
-      <div className="absolute left-3 top-12 max-w-[280px]"><DesktopWorkspaceSwitcher /></div>
-      <div className="w-full max-w-[420px]">
+    <main className="flex min-h-[100dvh] items-center justify-center bg-app px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))] text-ink">
+      <div className="absolute left-3 top-[max(1rem,env(safe-area-inset-top))] max-w-[280px]"><DesktopWorkspaceSwitcher /></div>
+      <div className="w-full max-w-[420px] rounded-2xl border border-hairline/50 bg-card p-6 max-md:p-5 shadow-sm">
         {where && unencryptedPublic(where) ? <p role="alert" className="mb-4 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-[13px] text-warning">{t("pair.notEncrypted")}</p> : null}
         {pendingPwaReplace ? (
           <form onSubmit={confirmPwaReplace}>
@@ -300,7 +327,7 @@ export function PairPage({
                   autoComplete="one-time-code"
                   inputMode="numeric"
                   spellCheck={false}
-                  className={`${input} font-mono text-[15px] tracking-[0.12em]`}
+                  className={`${input} font-mono text-[16px] md:text-[15px] tabular-nums tracking-[0.12em]`}
                 />
                 <label className={fieldLabel} htmlFor="signin-label">
                   {t("pair.deviceLabel")}
@@ -323,14 +350,28 @@ export function PairPage({
           </form>
         ) : (
           <form onSubmit={submitCode}>
-            <label className={fieldLabel} htmlFor="pair-code">
-              {t("pair.code")}
-            </label>
+            <div className="mt-4 flex items-center justify-between gap-2">
+              <label className="block text-[12px] font-medium text-ink-secondary" htmlFor="pair-code">
+                {t("pair.code")}
+              </label>
+              {clipboardAvailable ? (
+                <button
+                  type="button"
+                  data-pair-paste
+                  onClick={() => { void pasteFromClipboard(); }}
+                  className="inline-flex min-h-8 touch:min-h-10 items-center gap-1.5 rounded-full border border-hairline/60 bg-control px-3 text-[12px] font-medium text-ink hover:bg-raised active:bg-raised"
+                >
+                  <ClipboardPaste size={13} aria-hidden="true" />
+                  <span>{t("accounts.claude.codePlaceholder")}</span>
+                </button>
+              ) : null}
+            </div>
             <input
               id="pair-code"
               value={code}
               onChange={(e) => {
                 setCode(e.target.value);
+                setPasteNotice(null);
                 setAttemptId(newAttemptId());
               }}
               placeholder="XXXX-XXXX-XXXX"
@@ -338,8 +379,9 @@ export function PairPage({
               autoComplete="one-time-code"
               autoCapitalize="characters"
               spellCheck={false}
-              className={`${input} font-mono text-[15px] tracking-[0.12em]`}
+              className={`${input} font-mono text-[16px] md:text-[15px] tracking-[0.12em]`}
             />
+            {pasteNotice ? <p role="status" className="mt-1.5 text-[12px] text-ink-secondary">{pasteNotice}</p> : null}
             {initialCode && code === initialCode ? <p id="pair-code-from-link" className="mt-1 text-[12px] text-ink-secondary">{t("pair.fromLink")}</p> : null}
             <label className={fieldLabel} htmlFor="pair-label">
               {t("pair.deviceLabel")}

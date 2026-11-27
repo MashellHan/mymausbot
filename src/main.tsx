@@ -20,11 +20,14 @@ import { TEAM_LEFT_REFUSAL } from "../shared/cloud-hints";
 import { HomeScreen, SignedOutAtHome } from "./components/HomeScreen";
 import { PageBoundary } from "./components/PageBoundary";
 import { preloadPwaBootCache, type PwaBootCache } from "./lib/pwa-cache";
+import { bootstrapPwaPerf, pwaPerf } from "./lib/pwa-perf";
 import { registerPwaServiceWorker } from "./lib/pwa-sw";
 import { installStaleModuleRecovery } from "./lib/stale-module-recovery";
 import { markSessionEnded, endedBeforeReload, forgetEndedSession } from "./lib/session-ended";
 import { startDesktopLaunchMarks } from "./lib/launch-marks";
 import "./styles.css";
+
+bootstrapPwaPerf();
 
 // Before first paint; settleInterfaceMode must run before applySkin writes omb-skin.
 installStaleModuleRecovery();
@@ -54,18 +57,22 @@ async function chooseRoot(
   const home = window.ogb?.home;
   if (location.pathname === "/home" && home) return <HomeScreen bridge={home} manage={window.ogb?.cloudPlan?.manage} />;
   const pwaBoot = await pwaBootPromise;
+  pwaPerf.mark("pwa_config_ready", pwaBoot.status);
   if (pwaBoot.status === "failed") {
     await pageLanguage;
+    pwaPerf.setBootPath("pair");
     return <PairPage initialCode={null} reason={pwaBoot.error} />;
   }
   if (pwaBoot.status === "confirm") {
     await pageLanguage;
+    pwaPerf.setBootPath("pair");
     return <PairPage initialCode={null} pendingPwaReplace={{ existing: pwaBoot.existing, payload: pwaBoot.payload }} />;
   }
   if (pwaBoot.status === "paired" && location.pathname === "/pair") {
     history.replaceState(null, "", pairedDestination(location.search));
   }
   if (location.pathname === "/pair") {
+    pwaPerf.setBootPath("pair");
     const signIn = takeBrowserSignInFromLocation();
     if (signIn) {
       const preview = await previewBrowserSignIn(signIn);
@@ -77,6 +84,8 @@ async function chooseRoot(
   if (location.pathname !== "/desktop-viewer") {
     const cached = await pwaCachePromise;
     if (cached) {
+      pwaPerf.mark("idb_cache_ready");
+      pwaPerf.setBootPath("cached");
       forgetEndedSession();
       void readSessionState().then((session) => {
         if (session.kind === "unauthenticated") {
@@ -112,6 +121,7 @@ async function chooseRoot(
     return <DesktopViewer />;
   }
   const { default: App } = await (appPage ?? loadApp());
+  pwaPerf.setBootPath("network");
   void loadTheme();
   return <App />;
 }
@@ -166,8 +176,16 @@ function renderBootFallback(rootEl: HTMLElement, error: unknown): void {
 }
 
 const rootEl = document.getElementById("root")!;
-void Promise.all([brandBoot, chooseRoot(pwaBoot, pwaCache), pageLanguage.catch(() => "en")])
+void Promise.all([
+  brandBoot,
+  chooseRoot(pwaBoot, pwaCache),
+  pageLanguage.then((lang) => {
+    pwaPerf.mark("locale_ready", lang);
+    return lang;
+  }).catch(() => "en"),
+])
   .then(([, root]) => {
+    pwaPerf.mark("root_render_called");
     createRoot(rootEl).render(<StrictMode><PageBoundary>{root}</PageBoundary></StrictMode>);
   })
   .catch((error: unknown) => {
