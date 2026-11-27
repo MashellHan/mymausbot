@@ -130,7 +130,7 @@ function buildMiniAppSdkSource(githubActivity: boolean, managedRelease: boolean,
       siteListeners.forEach(function (listener) {
         listener({ site: message.site, opening: message.opening, phase: message.phase });
       });
-    } else if ((message.type === "query-result" || message.type === "query-batch-result" || message.type === "dashboard-result" || message.type === "site-result" || message.type === "kv-result") && pending.has(message.id)) {
+    } else if ((message.type === "query-result" || message.type === "query-batch-result" || message.type === "dashboard-result" || message.type === "site-result" || message.type === "kv-result" || message.type === "action-result") && pending.has(message.id)) {
       var answer = pending.get(message.id);
       pending.delete(message.id);
       if (message.error) answer.reject(new Error(String(message.error)));
@@ -187,6 +187,13 @@ function buildMiniAppSdkSource(githubActivity: boolean, managedRelease: boolean,
       },
       delete: function (keys, namespace) {
         return ready.then(function () { return request({ mausMiniApp: 1, type: "kv-delete", keys: Array.isArray(keys) ? keys : [], namespace: namespace || "prefs" }); });
+      }
+    }),
+    actions: Object.freeze({
+      invoke: function (action, requestKey) {
+        return ready.then(function () {
+          return request({ mausMiniApp: 1, type: "action-invoke", action: action, requestKey: requestKey });
+        });
       }
     }),
     onDataChanged: function (listener) {
