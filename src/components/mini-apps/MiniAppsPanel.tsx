@@ -28,6 +28,7 @@ import {
 import { miniAppNativeFrameGuard } from "./native-frame-guard";
 import { applyMiniAppOrder } from "./mini-app-reorder";
 import { applyMiniAppDataChanged, MINI_APP_FALLBACK_POLL_MS, shouldCheckMiniAppUpdate, useMiniAppLiveSync } from "./mini-app-live-sync";
+import { clearMiniAppClientCache, MiniAppClientCache } from "./mini-app-client-cache";
 
 const REFRESH_MS = MINI_APP_FALLBACK_POLL_MS;
 const RELEASE_REQUEST_TIMEOUT_MS = 30_000;
@@ -40,21 +41,11 @@ function rememberApp(key: string | null, id: string): void { if (!key) return; t
 function barKey(storageKey: string | null): string { return storageKey ? `${storageKey}:bar-collapsed` : DEFAULT_BAR_COLLAPSED_KEY; }
 
 function savedBarCollapsed(storageKey: string | null): boolean {
-  try {
-    const scoped = storageKey ? localStorage.getItem(barKey(storageKey)) : null;
-    const raw = scoped ?? localStorage.getItem(DEFAULT_BAR_COLLAPSED_KEY);
-    return raw === "1" || raw === "true";
-  } catch {
-    return false;
-  }
+  try { const raw = (storageKey ? localStorage.getItem(barKey(storageKey)) : null) ?? localStorage.getItem(DEFAULT_BAR_COLLAPSED_KEY); return raw === "1" || raw === "true"; } catch { return false; }
 }
-
 function rememberBarCollapsed(storageKey: string | null, collapsed: boolean): void {
   const value = collapsed ? "1" : "0";
-  try {
-    localStorage.setItem(DEFAULT_BAR_COLLAPSED_KEY, value);
-    if (storageKey) localStorage.setItem(barKey(storageKey), value);
-  } catch {}
+  try { localStorage.setItem(DEFAULT_BAR_COLLAPSED_KEY, value); if (storageKey) localStorage.setItem(barKey(storageKey), value); } catch {}
 }
 
 function changedState(left: MiniAppState | null, right: MiniAppState): boolean {
@@ -117,6 +108,8 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
   const recoveryTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const rollingBackAppsRef = useRef(new Set<string>());
   const runtimeReadySeenRef = useRef<Record<string, { revision: number; templateVersion: number }>>({});
+  const panelDocCacheRef = useRef<MiniAppClientCache | null>(null);
+  if (!panelDocCacheRef.current) panelDocCacheRef.current = new MiniAppClientCache();
   documentRef.current = document;
   stateRef.current = appState;
   inventoryRef.current = inventory;
@@ -540,24 +533,40 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
         const lostHongguoGrant = currentDocument?.app.nativeIdentity === "hongguo"
           && (listed.nativeIdentity !== "hongguo" || listed.nativeKind !== "hongguo");
         if (lostHongguoGrant) forgetHongguoHome(storageKey, target);
-        const nextState = await api<MiniAppState>(`/api/mini-apps/${encodeURIComponent(target)}/state`, { background: true, signal: controller.signal, timeoutMs: 10_000 });
+        const grantChanged = (currentDocument?.app.dashboard?.kind ?? null) !== (listed.dashboard?.kind ?? null)
+          || (currentDocument?.app.dashboard?.renderer ?? null) !== (listed.dashboard?.renderer ?? null)
+          || (currentDocument?.app.dashboardIdentity ?? null) !== (listed.dashboardIdentity ?? null)
+          || (currentDocument?.app.nativeKind ?? null) !== (listed.nativeKind ?? null)
+          || (currentDocument?.app.nativeIdentity ?? null) !== (listed.nativeIdentity ?? null);
+        const clientCache = panelDocCacheRef.current!;
+        const cachedDoc = grantChanged ? null : clientCache.getDocument(target, listed.revision, listed.templateVersion);
+        const needDocFetch = !cachedDoc && (!currentDocument || currentDocument.app.id !== target
+          || currentDocument.app.revision !== listed.revision || currentDocument.app.templateVersion !== listed.templateVersion || grantChanged);
+        const statePromise = api<MiniAppState>(`/api/mini-apps/${encodeURIComponent(target)}/state`, { background: true, signal: controller.signal, timeoutMs: 10_000 });
+        const docPromise = needDocFetch
+          ? api<MiniAppDocument>(`/api/mini-apps/${encodeURIComponent(target)}`, { background: true, signal: controller.signal, timeoutMs: 10_000 })
+          : null;
+        const [nextState, fetchedDoc] = await Promise.all([statePromise, docPromise ?? Promise.resolve<MiniAppDocument | null>(null)]);
         if (!active || target !== selectedRef.current || startMutationEpoch !== mutationEpochRef.current) return;
         const pendingForTarget = pendingUpdatesRef.current[target];
         if (isPendingUpdateApplied(pendingForTarget) && nextState.status === "active"
           && nextState.revision < pendingForTarget.candidateRevision) {
           return;
         }
-        const grantChanged = (currentDocument?.app.dashboard?.kind ?? null) !== (listed.dashboard?.kind ?? null)
-          || (currentDocument?.app.dashboard?.renderer ?? null) !== (listed.dashboard?.renderer ?? null)
-          || (currentDocument?.app.dashboardIdentity ?? null) !== (listed.dashboardIdentity ?? null)
-          || (currentDocument?.app.nativeKind ?? null) !== (listed.nativeKind ?? null)
-          || (currentDocument?.app.nativeIdentity ?? null) !== (listed.nativeIdentity ?? null);
         if (changedState(stateRef.current, nextState) || grantChanged) {
           if (!currentDocument || currentDocument.app.id !== target || currentDocument.app.revision !== nextState.revision
             || currentDocument.app.templateVersion !== nextState.templateVersion || grantChanged) {
-            const nextDocument = await api<MiniAppDocument>(`/api/mini-apps/${encodeURIComponent(target)}`, { background: true, signal: controller.signal, timeoutMs: 10_000 });
+            let nextDocument = fetchedDoc && fetchedDoc.app.revision === nextState.revision && fetchedDoc.app.templateVersion === nextState.templateVersion
+              ? fetchedDoc
+              : cachedDoc && cachedDoc.app.revision === nextState.revision && cachedDoc.app.templateVersion === nextState.templateVersion
+                ? cachedDoc
+                : null;
+            if (!nextDocument) {
+              nextDocument = await api<MiniAppDocument>(`/api/mini-apps/${encodeURIComponent(target)}`, { background: true, signal: controller.signal, timeoutMs: 10_000 });
+            }
             if (!active || target !== selectedRef.current || startMutationEpoch !== mutationEpochRef.current) return;
             if (nextDocument.app.revision !== nextState.revision || nextDocument.app.templateVersion !== nextState.templateVersion) throw new Error(t("computer.miniApps.changedDuringRead"));
+            clientCache.setDocument(nextDocument);
             const latestPending = pendingUpdatesRef.current[target];
             let promotedDuringDocRead = false;
             if (latestPending) {
@@ -628,6 +637,8 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
       } catch (cause) {
         if (!active || controller.signal.aborted) return;
         if (cause instanceof ApiError && (cause.status === 401 || cause.status === 403)) {
+          panelDocCacheRef.current?.clear();
+          clearMiniAppClientCache(storageKey);
           pauseRecovery();
           forgetHongguoHome(storageKey, readingInventory ? undefined : selectedRef.current ?? undefined);
           documentRef.current = null;
@@ -923,17 +934,12 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
 
 
   const revoked = () => {
-    documentRef.current = null;
-    stateRef.current = null;
-    setDocument(null);
-    setAppState(null);
+    panelDocCacheRef.current?.clear(); clearMiniAppClientCache(storageKey);
+    documentRef.current = null; stateRef.current = null; setDocument(null); setAppState(null);
     setError(t("computer.miniApps.accessEnded"));
   };
   const changed = () => {
-    documentRef.current = null;
-    stateRef.current = null;
-    setDocument(null);
-    setAppState(null);
+    documentRef.current = null; stateRef.current = null; setDocument(null); setAppState(null);
     setRefreshKey((current) => current + 1);
   };
 
@@ -972,15 +978,9 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
         {updateCheckError && <p role="alert" data-mini-app-update-check-error className="mx-4 mt-3 rounded-lg bg-danger/10 px-3 py-2 text-[12px] text-danger">{updateCheckError}</p>}
         {rollbackNotice && selected?.id === rollbackNotice.appId && <p role="alert" data-mini-app-update-rolled-back className="mx-4 mt-3 rounded-lg bg-warning/10 px-3 py-2 text-[12px] text-warning">{rollbackNotice.message}</p>}
         {toast && selected && toast.appId === selected.id && selectedUpdate?.status === "available" && selectedUpdate.available && (
-          <MiniAppUpdateToast
-            appName={miniAppDisplayName(selected)}
-            version={toast.appVersion}
-            updating={updatingAppId === selected.id}
-            error={updateError}
-            restoreFocusOnError={updateSource === "toast"}
-            onUpdate={() => void performUpdate(selected, selectedUpdate.available!, "toast")}
-            onDismiss={dismissToast}
-          />
+          <MiniAppUpdateToast appName={miniAppDisplayName(selected)} version={toast.appVersion} updating={updatingAppId === selected.id}
+            error={updateError} restoreFocusOnError={updateSource === "toast"}
+            onUpdate={() => void performUpdate(selected, selectedUpdate.available!, "toast")} onDismiss={dismissToast} />
         )}
         {loading && apps === null && <p role="status" className="flex items-center gap-2 px-4 py-8 text-[13px] text-ink-secondary"><Loader2 size={15} className="animate-spin" aria-hidden="true" />{t("computer.miniApps.loading")}</p>}
         {selected && <MiniAppContent selected={selected} document={document} appState={appState} owner={owner} nativeGuard={nativeGuard}
