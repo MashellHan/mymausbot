@@ -17,6 +17,7 @@ import {
 } from "../lib/session";
 import { pairedDestination } from "../lib/phone-pairing";
 import { activatePwaPairing, parsePwaPairHash, remoteFetch, type PwaAuthRecord } from "../lib/pwa-config";
+import { requestWebPushPermissionOnGesture } from "../lib/web-push";
 import type { PwaPairingPayload } from "../../shared/pwa-bridge";
 import { t } from "../lib/i18n";
 import { formatPairingCode, PAIRING_INPUT_PROBLEM_KEY, readPairingInput } from "../../shared/pairing-code";
@@ -170,6 +171,7 @@ export function PairPage({
   async function confirmPwaReplace(e: React.FormEvent) {
     e.preventDefault();
     if (!pendingPwaReplace) return;
+    requestWebPushPermissionOnGesture();
     setBusy(true);
     setError(null);
     const result = await activatePwaPairing(pendingPwaReplace.payload, { deviceName: label });
@@ -183,9 +185,10 @@ export function PairPage({
 
   async function submitCode(e: React.FormEvent) {
     e.preventDefault();
+    const pwa = parsePwaLinkInput(code);
+    if (pwa?.ok) requestWebPushPermissionOnGesture();
     setBusy(true);
     setError(null);
-    const pwa = parsePwaLinkInput(code);
     const result = pwa?.ok
       ? await activatePwaPairing(pwa.payload, { deviceName: label })
       : await pairWithCode({ code, label, attemptId });

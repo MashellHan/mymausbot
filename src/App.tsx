@@ -272,6 +272,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   useEffect(() => {
     if (!remotePwa) return;
     const stopSwSync = installWebPushSwSync();
+    void syncPushSubscriptionOnForeground();
     const resync = () => {
       if (document.visibilityState === "visible") void syncPushSubscriptionOnForeground();
     };

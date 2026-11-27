@@ -20,6 +20,7 @@ export const SW_PUSH_SUBSCRIPTION_CHANGE_TYPE = "omb:pushsubscriptionchange" as 
 export const SW_SET_BADGE_TYPE = "omb:set-app-badge" as const;
 
 const CACHE_KEY_PREFIX = "omb.webPush.sub.v1:";
+const OPT_OUT_KEY = "omb.webPush.optOut.v1";
 
 export type WebPushAvailabilityState = "needs-install" | "unsupported" | "default" | "denied" | "granted";
 
@@ -76,7 +77,33 @@ const INITIAL_SNAPSHOT: WebPushClientSnapshot = {
 
 let snapshotOwner: string | null = null;
 let clientSnapshot: WebPushClientSnapshot = INITIAL_SNAPSHOT;
+let optOutFallback = false;
+let autoSyncInFlight: Promise<void> | null = null;
 const snapshotListeners = new Set<() => void>();
+
+export function isWebPushOptedOut(): boolean {
+  try {
+    if (typeof globalThis.localStorage?.getItem === "function") {
+      return globalThis.localStorage.getItem(OPT_OUT_KEY) === "1";
+    }
+  } catch {
+    return optOutFallback;
+  }
+  return optOutFallback;
+}
+
+function setWebPushOptOut(optedOut: boolean): void {
+  optOutFallback = optedOut;
+  try {
+    if (optedOut) {
+      if (typeof globalThis.localStorage?.setItem === "function") {
+        globalThis.localStorage.setItem(OPT_OUT_KEY, "1");
+      }
+    } else if (typeof globalThis.localStorage?.removeItem === "function") {
+      globalThis.localStorage.removeItem(OPT_OUT_KEY);
+    }
+  } catch {}
+}
 
 function currentOwner(): string {
   return getPwaAuth()?.ownerKey ?? "local";
@@ -151,6 +178,8 @@ export function useWebPushClientSnapshot(): WebPushClientSnapshot {
 export function resetWebPushClientStateForTests(): void {
   snapshotOwner = null;
   clientSnapshot = INITIAL_SNAPSHOT;
+  autoSyncInFlight = null;
+  setWebPushOptOut(false);
 }
 
 function resolveEnv(env: WebPushEnvironment = {}): {
@@ -527,6 +556,9 @@ export async function enableWebPush(options: {
           updatedAt: Date.now(),
           hasKeys: true,
         };
+    if (normalized.preferences.enabled) {
+      setWebPushOptOut(false);
+    }
     writeCachedSubscription(normalized);
     setClientSnapshot({
       loaded: true,
@@ -549,6 +581,8 @@ export async function updateWebPushPreferences(
   patch: Partial<WebPushPreferences>,
   options: { fetchImpl?: typeof fetch; deviceLabel?: string } = {},
 ): Promise<{ ok: true; subscription: PublicWebPushSubscription } | { ok: false; error: string; expired?: boolean }> {
+  if (patch.enabled === false) setWebPushOptOut(true);
+  else if (patch.enabled === true) setWebPushOptOut(false);
   const prev = ensureOwnerSnapshot().subscription;
   if (!prev) {
     return { ok: false, error: "No active subscription" };
@@ -611,6 +645,7 @@ export async function unsubscribeWebPush(options: { fetchImpl?: typeof fetch } =
       await browserSub.unsubscribe();
     } catch {}
   }
+  setWebPushOptOut(true);
   writeCachedSubscription(null);
   setClientSnapshot({ subscription: null, error: null });
 }
@@ -662,32 +697,107 @@ export function syncAppBadge(unreadCount: number): void {
   }
 }
 
+/** Must run synchronously before any await so iOS WebKit accepts the user gesture. */
+export function requestWebPushPermissionOnGesture(): void {
+  if (!isWebPushSupported() || isWebPushOptedOut()) return;
+  if (typeof Notification === "undefined" || Notification.permission !== "default") return;
+  if (typeof Notification.requestPermission !== "function") return;
+  try {
+    void Promise.resolve(Notification.requestPermission()).catch(() => {});
+  } catch {}
+}
+
 export async function syncPushSubscriptionOnForeground(options: { fetchImpl?: typeof fetch } = {}): Promise<void> {
+  if (autoSyncInFlight) return autoSyncInFlight;
   if (!isRemotePwaMode()) return;
   const env = detectWebPushEnvironment();
   if (env.availability !== "granted") return;
-  const cached = ensureOwnerSnapshot().subscription;
-  if (!cached) return;
-  const browserSub = await getBrowserPushSubscription();
-  if (!browserSub || browserSub.endpoint === cached.endpoint) return;
-  const keys = extractPushSubscriptionKeys(browserSub);
-  if (!keys) return;
-  try {
-    const saved = await upsertWebPushSubscription(
-      {
-        endpoint: browserSub.endpoint,
-        keys,
-        preferences: cached.preferences,
-        deviceLabel: cached.deviceLabel ?? defaultDeviceLabel(),
-      },
-      options.fetchImpl,
-    );
-    if (saved) {
-      const normalized = { ...saved, preferences: normalizeWebPushPreferences(saved.preferences) };
-      writeCachedSubscription(normalized);
-      setClientSnapshot({ subscription: normalized, lastLoadedAt: Date.now() });
+  if (isWebPushOptedOut()) return;
+
+  const run = (async () => {
+    try {
+      const snapshot = ensureOwnerSnapshot();
+      const cached = snapshot.subscription;
+      const browserSub = await getBrowserPushSubscription();
+      if (isWebPushOptedOut()) return;
+
+      if (!cached || !browserSub) {
+        await enableWebPush({
+          ...(cached ? { preferences: cached.preferences, deviceLabel: cached.deviceLabel } : {}),
+          fetchImpl: options.fetchImpl,
+        });
+        return;
+      }
+
+      if (browserSub.endpoint !== cached.endpoint) {
+        const keys = extractPushSubscriptionKeys(browserSub);
+        if (!keys) {
+          await enableWebPush({
+            preferences: cached.preferences,
+            deviceLabel: cached.deviceLabel,
+            fetchImpl: options.fetchImpl,
+          });
+          return;
+        }
+        const saved = await upsertWebPushSubscription(
+          {
+            endpoint: browserSub.endpoint,
+            keys,
+            preferences: cached.preferences,
+            deviceLabel: cached.deviceLabel ?? defaultDeviceLabel(),
+          },
+          options.fetchImpl,
+        );
+        if (saved) {
+          const normalized = { ...saved, preferences: normalizeWebPushPreferences(saved.preferences) };
+          writeCachedSubscription(normalized);
+          setClientSnapshot({ loaded: true, subscription: normalized, lastLoadedAt: Date.now() });
+        }
+        return;
+      }
+
+      if (!ensureOwnerSnapshot().loaded) {
+        const data = await fetchWebPushSubscription(options.fetchImpl);
+        if (isWebPushOptedOut()) return;
+        if (data.subscription) {
+          const normalized = {
+            ...data.subscription,
+            preferences: normalizeWebPushPreferences(data.subscription.preferences),
+          };
+          writeCachedSubscription(normalized);
+          setClientSnapshot({
+            loaded: true,
+            subscription: normalized,
+            vapidPublicKey: data.vapidPublicKey,
+            vapidEnabled: Boolean(data.vapidPublicKey),
+            error: null,
+            lastLoadedAt: Date.now(),
+          });
+        } else if (data.vapidPublicKey) {
+          await enableWebPush({
+            preferences: cached.preferences,
+            deviceLabel: cached.deviceLabel,
+            fetchImpl: options.fetchImpl,
+          });
+        } else {
+          setClientSnapshot({
+            loaded: true,
+            vapidPublicKey: null,
+            vapidEnabled: false,
+            lastLoadedAt: Date.now(),
+          });
+        }
+      }
+    } catch {}
+  })();
+
+  autoSyncInFlight = run;
+  void run.finally(() => {
+    if (autoSyncInFlight === run) {
+      autoSyncInFlight = null;
     }
-  } catch {}
+  });
+  return run;
 }
 
 export function installWebPushSwSync(options: { fetchImpl?: typeof fetch } = {}): () => void {
