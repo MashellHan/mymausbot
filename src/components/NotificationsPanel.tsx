@@ -12,6 +12,7 @@ import { threadUpdatedLabel } from "./SidebarThreadRow";
 import type { NotificationLogEntry, NotifyKind } from "../../shared/notification";
 import { plainPreviewText } from "../../shared/plain-preview";
 import { isRemotePwaMode } from "@/lib/pwa-transport";
+import { useSidePanelResize } from "./inbox/inbox-panel-resize";
 import { Select } from "./Select";
 
 const KIND_LOOK: Record<NotifyKind, { Icon: LucideIcon; className: string; status: LocaleKey }> = {
@@ -134,6 +135,15 @@ export function NotificationsPanel() {
   const { state, dispatch } = useStore();
   const showThreads = useShowThreads();
   const phone = useMediaQuery(PHONE_LAYOUT, false);
+  const {
+    panelWidth, panelMinWidth, panelMaxWidth, separatorRef, separatorWidth,
+    onSeparatorKeyDown, onResizeStart, onResizeMove, onResizeEnd, onDoubleClick,
+  } = useSidePanelResize({
+    defaultWidth: 300,
+    minWidth: 260,
+    maxWidth: 640,
+    storageKey: "omb-notifications-panel-width",
+  });
   const [now, setNow] = useState(() => Date.now());
   const [botFilter, setBotFilter] = useState(ALL_BOTS);
   const bots = notificationBots(state.notifications);
@@ -176,8 +186,27 @@ export function NotificationsPanel() {
       />
       <aside
         aria-label={t("notifications.title")}
-        className="animate-panel-in motion-reduce:animate-none flex h-full w-[300px] max-w-full shrink-0 flex-col border-l border-hairline/40 bg-panel max-md:fixed max-md:inset-x-0 max-md:top-[calc(env(safe-area-inset-top,0px)+2.25rem)] max-md:bottom-0 max-md:z-[45] max-md:h-auto max-md:w-full max-md:rounded-t-[18px] max-md:border-t max-md:border-l-0 max-md:border-hairline/50 max-md:animate-sheet-in max-md:pb-[env(safe-area-inset-bottom,0px)]"
+        style={phone ? undefined : { width: panelWidth, maxWidth: panelMaxWidth }}
+        className="animate-panel-in motion-reduce:animate-none relative flex h-full max-w-full shrink-0 flex-col border-l border-hairline/40 bg-panel max-md:fixed max-md:inset-x-0 max-md:top-[calc(env(safe-area-inset-top,0px)+2.25rem)] max-md:bottom-0 max-md:z-[45] max-md:h-auto max-md:w-full max-md:rounded-t-[18px] max-md:border-t max-md:border-l-0 max-md:border-hairline/50 max-md:animate-sheet-in max-md:pb-[env(safe-area-inset-bottom,0px)]"
       >
+        <div
+          ref={separatorRef}
+          role="separator"
+          data-notifications-resize
+          aria-orientation="vertical"
+          aria-label={t("computer.resizeAria")}
+          aria-valuemin={panelMinWidth}
+          aria-valuemax={panelMaxWidth}
+          aria-valuenow={separatorWidth}
+          tabIndex={0}
+          onKeyDown={onSeparatorKeyDown}
+          onPointerDown={onResizeStart}
+          onPointerMove={onResizeMove}
+          onPointerUp={onResizeEnd}
+          onPointerCancel={onResizeEnd}
+          onDoubleClick={onDoubleClick}
+          className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize hover:bg-accent/40 focus-visible:bg-accent/60 max-md:hidden"
+        />
         <span aria-hidden className="hidden max-md:mx-auto max-md:mt-2 max-md:block max-md:h-1 max-md:w-8 max-md:rounded-full max-md:bg-ink/15" />
         <div className="flex items-center gap-1.5 border-b border-hairline/40 px-3.5 py-2.5 max-md:py-2">
           <span className="flex-1 text-[13px] font-medium text-ink max-md:text-[15px] max-md:font-semibold">

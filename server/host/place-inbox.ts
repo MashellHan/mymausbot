@@ -206,6 +206,17 @@ export function createPlaceInbox(deps: PlaceInboxDeps) {
 
   function addLine(line: Line): Line {
     if (line.job) lines = lines.filter((one) => one.job !== line.job || one.seen || one.done);
+    const normalized = line.text.replace(/\s+/g, " ").trim();
+    const duplicate = line.kind === "message"
+      ? undefined
+      : lines.findLast((one) => one.kind === line.kind && one.botId === line.botId && one.threadId === line.threadId
+        && one.guest === line.guest && !one.done && one.text.replace(/\s+/g, " ").trim() === normalized);
+    if (duplicate) {
+      duplicate.at = line.at;
+      duplicate.seen = false;
+      save();
+      return duplicate;
+    }
     lines.push(line);
     save();
     return line;
