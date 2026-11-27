@@ -88,6 +88,13 @@ export function registerPathDir(dir: string): void {
   resetPathCache();
 }
 
+export function unregisterPathDir(dir: string): void {
+  const at = registeredDirs.indexOf(dir);
+  if (at === -1) return;
+  registeredDirs.splice(at, 1);
+  resetPathCache();
+}
+
 // App-installed standalone builds go last: a copy the person installs themselves, anywhere, takes over.
 const fallbackDirs: string[] = [];
 
@@ -385,7 +392,7 @@ function parseCmdShim(shim: string, env?: NodeJS.ProcessEnv): ResolvedSpawn | nu
       const command = join(dir, desktop[1]);
       const archive = join(dir, desktop[2]);
       const script = join(archive, desktop[3]);
-      if (isFile(command) && isFile(archive)) {
+      if (isFile(command) && (isFile(archive) || isFile(script))) {
         return { command, args: ["--expose-internals", script], env: { ELECTRON_RUN_AS_NODE: "1" } };
       }
     }

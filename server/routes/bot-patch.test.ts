@@ -8,7 +8,7 @@ import type { ConnectorScopes } from "../../shared/connector-scopes.ts";
 import type { WireBot } from "../../shared/wire.ts";
 import { VPS_BOT_ALIAS_CHANGE_ERROR, VPS_BOT_ALIAS_LIFECYCLE_ERROR, VPS_BOT_ALIAS_RESOURCES_ERROR } from "../cloud-backend.ts";
 import { DATA_DIR, type AppConfig } from "../config.ts";
-import type { ModelSelection } from "../contracts.ts";
+import type { ModelSelection, ProviderInstance } from "../contracts.ts";
 import type { RequestAuth } from "../request-auth.ts";
 import { Store, type BotRecord } from "../store.ts";
 import * as vps from "../vps-computer.ts";
@@ -574,5 +574,39 @@ describe("PATCH /api/bots/:id mainThreadChoice", () => {
     expect(client.status).toBe(403);
     expect(paired.status).toBe(403);
     expect(store.bot(bot.id)?.mainThreadChoice).toBeUndefined();
+  });
+});
+
+describe("PATCH /api/bots/:id fallback", () => {
+  it("refuses a new backup that cannot take over the bot's workspace", async () => {
+    const claude = { instanceId: "claude", driverKind: "claudeAgent", enabled: true, adapter: { capabilities: {} } } as unknown as ProviderInstance;
+    const openai = { instanceId: "openai", driverKind: "openai-compat", enabled: true, adapter: { capabilities: {} } } as unknown as ProviderInstance;
+    const { store, bot, patch } = fixture({ registry: { get: (id: string) => id === "claude" ? claude : id === "openai" ? openai : null } } as unknown as Partial<BotPatchRouteDeps>);
+
+    const refused = await patch(bot.id, { fallback: [{ instanceId: "openai", model: "gpt-5" }] });
+    expect(refused).toEqual({ status: 400, body: { error: "The backup cannot use the same workspace." } });
+    expect(store.bot(bot.id)?.fallback).toBeUndefined();
+
+    expect((await patch(bot.id, { fallback: [{ instanceId: "claude", model: "claude-haiku-5" }] })).status).toBe(200);
+  });
+
+  it("refuses a new backup that drops a tool the primary uses", async () => {
+    const claude = { instanceId: "claude", driverKind: "claudeAgent", enabled: true, adapter: { capabilities: { composioMcp: true } } } as unknown as ProviderInstance;
+    const bare = { instanceId: "other-claude", driverKind: "claudeAgent", enabled: true, adapter: { capabilities: { composioMcp: false } } } as unknown as ProviderInstance;
+    const { bot, patch } = fixture({ registry: { get: (id: string) => id === "claude" ? claude : id === "other-claude" ? bare : null } } as unknown as Partial<BotPatchRouteDeps>);
+
+    const refused = await patch(bot.id, { fallback: [{ instanceId: "other-claude", model: "claude-haiku-5" }] });
+    expect(refused).toEqual({ status: 400, body: { error: "The backup does not support all of this AI's tools and attachments." } });
+  });
+
+  it("keeps an already-saved incompatible backup editable", async () => {
+    const claude = { instanceId: "claude", driverKind: "claudeAgent", enabled: true, adapter: { capabilities: {} } } as unknown as ProviderInstance;
+    const openai = { instanceId: "openai", driverKind: "openai-compat", enabled: true, adapter: { capabilities: {} } } as unknown as ProviderInstance;
+    const { store, bot, patch } = fixture({ registry: { get: (id: string) => id === "claude" ? claude : id === "openai" ? openai : null } } as unknown as Partial<BotPatchRouteDeps>);
+    store.patchBot(bot.id, { fallback: [{ instanceId: "openai", model: "gpt-5" }] });
+
+    const saved = await patch(bot.id, { fallback: [{ instanceId: "openai", model: "gpt-5" }, { instanceId: "claude", model: "claude-haiku-5" }] });
+    expect(saved.status).toBe(200);
+    expect(store.bot(bot.id)?.fallback).toEqual([{ instanceId: "openai", model: "gpt-5" }, { instanceId: "claude", model: "claude-haiku-5" }]);
   });
 });

@@ -19,7 +19,7 @@ const candidates = () => [
 function cliJson(cli, args, timeout) {
   return new Promise(resolve => {
     execFile(cli, args, {
-      timeout, killSignal: "SIGKILL", maxBuffer: 16 * 1024 * 1024,
+      timeout, killSignal: "SIGKILL", maxBuffer: 16 * 1024 * 1024, windowsHide: true,
       env: { ...process.env, TAILSCALE_BE_CLI: "1", PATH: [process.env.PATH ?? "", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"].join(delimiter) },
     }, (error, stdout) => {
       // Tailscale errors can contain credentials and peer details; none cross IPC or enter logs.

@@ -1435,6 +1435,7 @@
   "devices.route.on": "An",
   "devices.route.onSince": "An · seit {date}",
   "devices.route.relay": "Überall, über {app}",
+  "remote.diagnosis.next.signIn": "Melde dich unter Überall, über {app} in Telefon & Geräte an. Das ist eine eigene Anmeldung, getrennt von Dein Konto.",
   "devices.route.relayDetail": "Ende-zu-Ende-verschlüsselt. {app} kann es nicht lesen.",
   "devices.route.setUp": "Einrichten",
   "devices.route.turnOff": "Ausschalten",

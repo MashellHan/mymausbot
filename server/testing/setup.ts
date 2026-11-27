@@ -6,6 +6,7 @@ import { delimiter, join } from "node:path";
 import { afterAll, afterEach } from "vitest";
 
 import { removeTempDir } from "./cleanup.ts";
+import { noHostContainerEnv } from "./container-env.ts";
 
 // Hosted Linux runners may expose working bwrap. Cloud fixtures exercise fake engines without a box;
 // mask its probe through PATH so their child servers get the same test environment on every runner image.
@@ -21,6 +22,7 @@ if (process.platform === "linux" && process.env.GITHUB_ACTIONS === "true" &&
 const home = mkdtempSync(join(tmpdir(), "omb-test-home-"));
 process.env.HOME = home;
 process.env.USERPROFILE = home;
+Object.assign(process.env, noHostContainerEnv(home));
 // A provider that answers 5xx retries with backoff: no test should wait out real seconds.
 process.env.FAKE_OPENAI_COMPAT_RETRY_SCALE ??= "0.001";
 // OMB_DATA_DIR must never escape the throwaway home the suite deletes.

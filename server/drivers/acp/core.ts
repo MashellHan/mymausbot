@@ -223,6 +223,8 @@ export interface AcpSupport extends AcpDriverHooks {
   ): void;
   /** The authenticate methodId from initialize's authMethods; null skips authenticate. */
   pickAuthMethod(authMethods: Array<{ id?: string }>, env: Record<string, string | undefined>): string | null;
+  /** Extra authenticate params, e.g. an API key the CLI does not read from the environment. Never logged. */
+  authMeta?(env: Record<string, string | undefined>): Record<string, unknown> | undefined;
   /** "fail": abort if auth is missing/errors (subscription CLIs).
    * "fail-request": cached API credentials need no method, but a requested
    * OAuth login must succeed. "continue": proceed on an ambient login. */
@@ -233,6 +235,7 @@ export interface AcpSupport extends AcpDriverHooks {
     config: AcpConfig,
     instanceId: string, allowEnv?: readonly string[],
   ): boolean | Promise<boolean>;
+  skipAuthenticateWhenAuthenticated?: boolean;
   /** Refuse a first-party cloud turn before spawning when snapshot auth is
    * false. Local injected models deliberately bypass this subscription gate. */
   requireAuthenticationBeforeSpawn?: boolean;
@@ -1142,9 +1145,13 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
                   ? session.initResult.authMethods
                   : [];
                 const methodId = support.pickAuthMethod(methods, spawnEnv);
-                if (methodId) {
+                const skip = methodId && support.skipAuthenticateWhenAuthenticated === true
+                  && await support.isAuthenticated(spawnEnv, turnConfig, instanceId, instanceEnvNames(input.environment, spawnEnv));
+                if (skip) session.authenticated = true;
+                else if (methodId) {
+                  const meta = support.authMeta?.(spawnEnv);
                   try {
-                    await session.host.once("authenticate", () => request("authenticate", { methodId }, INIT_TIMEOUT));
+                    await session.host.once("authenticate", () => request("authenticate", { methodId, ...(meta ? { _meta: meta } : {}) }, INIT_TIMEOUT));
                     session.authenticated = true;
                   } catch (error) {
                     if (signIn.asked(error) || support.authFailure !== "continue") throw signIn.asked(error) ?? new Error(support.loginNote);
@@ -1529,6 +1536,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             prompt,
             defaultModel: catalog.models.default, model,
             pickAuthMethod: (methods) => support.pickAuthMethod(methods, spawnEnv),
+            ...(support.authMeta ? { authMeta: support.authMeta(spawnEnv) } : {}),
             authRequired: support.authFailure === "fail-request" ? "if-requested" : support.authFailure === "fail",
             loginNote: support.loginNote,
             clientCapabilitiesMeta: support.clientCapabilitiesMeta,
