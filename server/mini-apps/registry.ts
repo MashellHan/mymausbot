@@ -7,7 +7,7 @@ import type { HongguoHistoryEntry, HongguoHistoryRequest, HongguoHistoryResponse
   HongguoPreferencesResponse } from "../../shared/hongguo-mini-app.ts";
 import { MINI_APP_AGENT_TEAM_BASE_RESOURCES, MINI_APP_DASHBOARD_RESOURCES, MINI_APP_SHIPPED_TEMPLATE_KINDS, type MiniAppArchive, type MiniAppCustomIcon, type MiniAppDashboardDeclaration, type MiniAppDashboardDiscovery,
   type MiniAppDashboardKind, type MiniAppDashboardReadResult, type MiniAppDocument, type MiniAppMutationResult,
-  type MiniAppDashboardResource, type MiniAppQuery, type MiniAppQueryResult, type MiniAppReleaseProvenance,
+  type MiniAppDashboardResource, type MiniAppQuery, type MiniAppQueryBatchEntryResult, type MiniAppQueryBatchRequest, type MiniAppQueryBatchResult, type MiniAppQueryResult, type MiniAppReleaseProvenance,
   type MiniAppRollback, type MiniAppState, type MiniAppShippedTemplateKind, type MiniAppNativeKind,
   type MiniAppSummary, type MiniAppUpdateCheckResult } from "../../shared/mini-apps.ts";
 import { AppDocs } from "../app-docs.ts";
@@ -15,7 +15,7 @@ import { rowRate } from "../chat-apps.ts";
 import type { DataEngine } from "../data/types.ts";
 import { applicationDatabase, withApplicationWrite } from "../message-db.ts";
 import type { LocalDashboardProviders } from "../routes/local-dashboard.ts";
-import { appFailure, archiveSchema, miniAppIconSchema, parseDashboardRead, parsePublish, parseQuery, parseReleaseUpdateApply, rollbackSchema } from "./validation.ts";
+import { appFailure, archiveSchema, miniAppIconSchema, parseDashboardRead, parsePublish, parseQuery, parseQueryBatch, parseReleaseUpdateApply, rollbackSchema } from "./validation.ts";
 import { developedMiniApps, ensureMiniAppDevelopment, recordMiniAppDevelopment } from "./development.ts";
 import { AGENT_TEAM_NATIVE_PLACEHOLDER_SHA256, REVIEWED_AGENT_TEAM_HTML_SHA256 } from "./default-template-history.ts";
 import { parseHongguoHistory, parseHongguoPreferences } from "./hongguo-validation.ts";
@@ -848,5 +848,50 @@ export class MiniApps {
       cursor: input.cursor,
     });
     return this.queryCache.getOrLoad(cacheKey, binding.datasetId, load);
+  }
+
+  async queryBatch(actor: MiniAppActor, id: string, raw: unknown): Promise<MiniAppQueryBatchResult> {
+    const input: MiniAppQueryBatchRequest = parseQueryBatch(raw);
+    const { app, bindings } = this.versionBindings(actor, id);
+    this.expected(app, input.expectedRevision);
+    if (app.status !== "active") throw appFailure(409, "This Mini App is archived.");
+    const key = `${actor.botId ?? MINI_APPS_OWNER}:${id}`;
+    const tokens = 1 + Math.floor(input.queries.length / 4);
+    if ((this.running.get(key) ?? 0) >= 8) throw appFailure(429, "Too many Mini App reads. Wait a moment.");
+    for (let i = 0; i < tokens; i += 1) {
+      if (!this.rate.take(key)) throw appFailure(429, "Too many Mini App reads. Wait a moment.");
+    }
+    this.running.set(key, (this.running.get(key) ?? 0) + 1);
+    try {
+      const results: MiniAppQueryBatchEntryResult[] = [];
+      let totalBytes = 0;
+      for (const item of input.queries) {
+        const binding = bindings.find((candidate) => Object.hasOwn(candidate.queries, item.queryId));
+        if (!binding) {
+          results.push({ ok: false, status: 400, error: "This query is not declared by the installed Mini App.", code: "undeclared_query" });
+          continue;
+        }
+        try {
+          const page = await this.readNamedCached(id, app.revision, binding, { ...item, expectedRevision: input.expectedRevision });
+          const itemBytes = Buffer.byteLength(JSON.stringify(page), "utf8");
+          if (itemBytes > 1_000_000 || totalBytes + itemBytes > 2_000_000) {
+            results.push({ ok: false, status: 413, error: "This query page is too large. Publish a smaller page size or fewer columns.", code: "output_too_large" });
+            continue;
+          }
+          totalBytes += itemBytes;
+          results.push({ ok: true, result: page });
+        } catch (error) {
+          const status = error && typeof error === "object" && "status" in error && Number.isInteger(Number(error.status)) ? Number(error.status) : 500;
+          const code = error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : undefined;
+          results.push({ ok: false, status, error: error instanceof Error ? error.message : "Query failed.", ...(code ? { code } : {}) });
+        }
+      }
+      const current = this.require(actor, id);
+      this.expected(current, app.revision);
+      return { appId: id, revision: app.revision, results };
+    } finally {
+      const count = (this.running.get(key) ?? 1) - 1;
+      if (count) this.running.set(key, count); else this.running.delete(key);
+    }
   }
 }
