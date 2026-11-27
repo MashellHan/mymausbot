@@ -170,8 +170,16 @@ const FIND_FIELDS = `((nonce, step) => {
   const inputs = all("input").filter(usable);
   const codes = inputs.filter(isCode);
   const rest = inputs.filter((el) => !codes.includes(el));
-  const passwords = rest.filter((el) => el.type === "password" && !tokens(el).includes("new-password"));
-  const password = passwords.find((el) => tokens(el).includes("current-password")) || passwords[0] || null;
+  const isNew = (el) => tokens(el).includes("new-password");
+  const passwords = rest.filter((el) => el.type === "password" && !isNew(el));
+  const fresh = rest.filter((el) => el.type === "password" && isNew(el));
+  // Some sign-in forms (TikTok's) mark their only password box new-password.
+  const steps = (() => { try { return location.pathname.split("/").map((step) => decodeURIComponent(step).toLowerCase()); } catch { return []; } })();
+  const PAGE = /\\.(?:html?|xhtml|shtml|php|aspx?|jspx?|do|action|cgi|cfm|servlet)$/;
+  const signIn = steps.some((step) => ["login", "log-in", "signin", "sign-in"].includes(step.replace(PAGE, ""))) &&
+    !steps.some((step) => ["signup", "sign-up", "register", "registration", "join", "reset", "forgot", "change"].some((word) => step.includes(word)));
+  const password = passwords.find((el) => tokens(el).includes("current-password")) || passwords[0] ||
+    (signIn && fresh.length === 1 ? fresh[0] : null);
   const USER = /user|e-?mail|login|account|identifier|phone|mobile/;
   const userLike = (el) => tokens(el).includes("username") || tokens(el).includes("email") || el.type === "email" || (plain(el) && USER.test(hint(el)));
   let username = null;
@@ -188,6 +196,13 @@ const FIND_FIELDS = `((nonce, step) => {
     const near = (el) => el.parentElement === first.parentElement || (el.parentElement && first.parentElement && el.parentElement.parentElement === first.parentElement.parentElement);
     const group = first.maxLength === 1 ? inputs.filter((el) => el.maxLength === 1 && near(el)) : [];
     boxes = group.length >= 4 ? group : [first];
+  } else if (inputs.length === 6 && inputs.every((el) =>
+    el.type === "number" && el.getAttribute("maxlength") === "1" &&
+    !NOT_CODE.test(hint(el)) && el.parentElement?.parentElement === inputs[0].parentElement?.parentElement
+  ) && all("h1, h2, h3, h4, h5, h6, [role=heading], legend").some((el) =>
+    visible(el) && /^verify security code$/i.test((el.textContent || "").trim())
+  )) {
+    boxes = inputs;
   }
   if (username) username.setAttribute(MARK, key + "username");
   if (password) password.setAttribute(MARK, key + "password");

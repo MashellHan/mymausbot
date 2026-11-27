@@ -66,7 +66,7 @@ export function placeInboxViewer(auth: RequestAuth, cloud: { personal: boolean; 
 
 export interface PlaceInboxDeps {
   dataDir: string;
-  store: Pick<Store, "bot" | "botByThread" | "taskByThread" | "groupByThread" | "appendMessage" | "patchTask" | "markGroupThreadUnread" | "messagesFor" | "activePath" | "onChange">;
+  store: Pick<Store, "bot" | "botByThread" | "taskByThread" | "groupByThread" | "appendMessage" | "patchTask" | "markGroupThreadUnread" | "messagesFor" | "newestMessageId" | "activePath" | "onChange">;
   openCards(): OpenCardRow[];
   /** A running turn waits on this card's answer. */
   live(threadId: string, requestId: string): boolean;
@@ -188,11 +188,16 @@ export function createPlaceInbox(deps: PlaceInboxDeps) {
     return [...rows.values()];
   }
 
-  const lineRow = (line: Line): InboxRow => ({
-    id: line.id, kind: line.kind, tab: lineTab(line), from: { name: line.from, botId: line.botId }, ...(line.workingFor ? { workingFor: line.workingFor } : {}),
-    origin: { botId: line.botId, threadId: line.threadId, title: titleOf(line.botId, line.threadId), ...(line.groupId ? { groupId: line.groupId } : {}), messageId: line.id },
-    text: clip(line.text, ROW_TEXT_MAX), at: line.at, unread: !line.seen, ...(line.kind === "message" ? { replies: true as const } : {}),
-  });
+  const focusOf = (line: Line): string | undefined => line.kind === "message" ? line.id : store.newestMessageId(line.threadId);
+
+  const lineRow = (line: Line): InboxRow => {
+    const focus = focusOf(line);
+    return {
+      id: line.id, kind: line.kind, tab: lineTab(line), from: { name: line.from, botId: line.botId }, ...(line.workingFor ? { workingFor: line.workingFor } : {}),
+      origin: { botId: line.botId, threadId: line.threadId, title: titleOf(line.botId, line.threadId), ...(line.groupId ? { groupId: line.groupId } : {}), ...(focus ? { messageId: focus } : {}) },
+      text: clip(line.text, ROW_TEXT_MAX), at: line.at, unread: !line.seen, ...(line.kind === "message" ? { replies: true as const } : {}),
+    };
+  };
 
   function view(auth: RequestAuth): InboxView {
     const visible: AskRow[] = [...askRows(auth), ...lines.filter((line) => lineFor(auth, line)).map(lineRow)].sort((a, b) => b.at - a.at);

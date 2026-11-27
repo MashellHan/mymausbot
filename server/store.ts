@@ -41,7 +41,7 @@ import { sameModelSelection } from "../shared/thread-model.ts";
 import { initialGreetingMessage } from "./initial-greeting.ts"; import { createDefaultBot, defaultBotRefusal, type DefaultBotIntro } from "./default-bot.ts";
 import { appsFromCreator } from "./inherited-apps.ts"; import { newBotOwner, sharedAsMaker, sharedUnlessRestricted, type NewBotSharingRule } from "./new-bot-sharing.ts";
 import { ThreadCache, type ThreadState } from "./thread-cache.ts";
-import { lastMessageId, messagesBefore } from "./thread-history.ts";
+import { lastMessageId, messagesBefore, newestMessageId } from "./thread-history.ts";
 import { titleFromMessage, UNTITLED_TASK } from "./thread-title.ts";
 import { buildTask, threadTitleFrom, UNTITLED_THREAD, type NewThreadLevel } from "./task-record.ts";
 import { repairLegacyWorkThreads } from "./legacy-work-threads.ts";
@@ -998,9 +998,8 @@ export class Store {
     return busy;
   }
 
-  messagesFor(threadId: string): Message[] {
-    return this.thread(threadId).messages;
-  }
+  messagesFor(threadId: string): Message[] { return this.thread(threadId).messages; }
+  newestMessageId(threadId: string): string | undefined { return newestMessageId(threadId, this.threads.get(threadId)); }
 
   /** Legacy rows without a parentId chain only on a full load, so a bounded page missing that context falls back to one. */
   messagesTail(threadId: string, limit: number): { messages: Message[]; hasMore: boolean; activeLeafId: string | null } {
