@@ -1,7 +1,11 @@
 // With Learn from group chats on, a member bot's room turns are read too: the person's
 // lines as the person's, other people's and other bots' under narrower
 // rules (the background review Hermes Agent runs in group threads, MIT).
-import { factIdentity, foldForMatch, isMemoryDate, notebookIdentities } from "./memory-entries.ts";
+import { createHash } from "node:crypto";
+import { factIdentity, foldForMatch, isExpired, isMemoryDate, notebookIdentities, parseMemoryEntries } from "./memory-entries.ts";
+import { parseTopicHeader, readTopicHead, topicWords } from "./memory-topics.ts";
+import { recallTerms } from "./message-db.ts";
+import { join } from "node:path";
 
 export type CandidateKind = "preference" | "fact" | "decision" | "outcome";
 export const CANDIDATE_KINDS: readonly CandidateKind[] = ["preference", "fact", "decision", "outcome"];
@@ -9,7 +13,9 @@ export const CANDIDATE_KINDS: readonly CandidateKind[] = ["preference", "fact", 
 export interface Candidate {
   text: string;
   kind: CandidateKind;
+  validFrom?: string;
   until?: string;
+  supersedes?: string;
   aboutUser: boolean;
   noted?: boolean;
   topic?: string;
@@ -62,7 +68,7 @@ export function captureItemLimit(conversations: number): number {
 const clip = (text: string) => text.replace(/\s+/g, " ").trim().slice(0, LINE_MAX);
 
 /** One conversation per entry of `conversations`; `turns` is the same as a single one. */
-export function capturePrompt(input: { botName: string; turns?: readonly CaptureTurn[]; conversations?: readonly (readonly CaptureTurn[])[]; notebook: string; today: string; topics?: string }): string {
+export function capturePrompt(input: { botName: string; turns?: readonly CaptureTurn[]; conversations?: readonly (readonly CaptureTurn[])[]; notebook: string; today: string; topics?: string; topicExcerpts?: string }): string {
   const said = (line: RoomLine) =>
     line.by === "person" ? `Person: ${clip(line.text)}`
     : line.by === "other" ? `${clip(line.name).slice(0, 40)} (another person): ${clip(line.text)}`
@@ -101,6 +107,8 @@ export function capturePrompt(input: { botName: string; turns?: readonly Capture
     "- Write each as one self-contained sentence of fact in the third person (\"The person lives in Pune\"), keeping numbers, signs and names exactly as said.",
     "- Give every preference and fact its evidence: the words it rests on, copied exactly from what was said to the assistant. With no such words, leave the item out.",
     "- A fact that is only true until a known day (an appointment on Friday, exams this weekend, a trip next week) IS worth keeping: give it that day as until, computed from today, and it is forgotten automatically after. A date that comes back every year (a birthday, an anniversary) or a lasting fact never gets until.",
+    "- If a fact starts on a known future date (e.g. a move or trip starting next month), set validFrom to that YYYY-MM-DD date.",
+    "- If a new fact directly updates or replaces an existing line shown in the notebook or topic excerpts below (e.g. moved cities, switched tools, changed preference), set \"supersedes\" to the exact text of the outdated fact being replaced.",
     ...(room ? [
       many
         ? `- A conversation marked (group chat) is a group chat ("room") ${input.botName} is a member of. In it, only lines marked Person are the Person's own words.`
@@ -119,13 +127,14 @@ export function capturePrompt(input: { botName: string; turns?: readonly Capture
     "",
     "The notebook already holds these lines. Propose nothing already there, and nothing that only restates one — except a durable aboutUser fact, which you list anyway with \"noted\": true when the notebook already holds it:",
     notebook,
+    ...(input.topicExcerpts?.trim() ? ["", "Relevant existing topic notes (use \"supersedes\" if a new fact replaces one of these):", input.topicExcerpts.trim().slice(0, 3_000)] : []),
     "",
     "Work through the Person's messages sentence by sentence and check each stated fact against these rules before answering.",
     ...(many ? ['Give every item "from": the number of the conversation it came from.'] : []),
     `Answer with a JSON list and nothing else, at most ${limit} items. Answer [] only when the Person stated nothing worth keeping:`,
     many
-      ? '[{"from": 1, "text": "...", "kind": "preference|fact|decision|outcome", "evidence": "the exact words", "until": "YYYY-MM-DD or omit", "aboutUser": true|false, "noted": true|false, "topic": "name or omit", "topicAliases": ["..."], "confidence": 0..1}]'
-      : '[{"text": "...", "kind": "preference|fact|decision|outcome", "evidence": "the exact words", "until": "YYYY-MM-DD or omit", "aboutUser": true|false, "noted": true|false, "topic": "name or omit", "topicAliases": ["..."], "confidence": 0..1}]',
+      ? '[{"from": 1, "text": "...", "kind": "preference|fact|decision|outcome", "evidence": "the exact words", "validFrom": "YYYY-MM-DD or omit", "until": "YYYY-MM-DD or omit", "supersedes": "exact old fact text or omit", "aboutUser": true|false, "noted": true|false, "topic": "name or omit", "topicAliases": ["..."], "confidence": 0..1}]'
+      : '[{"text": "...", "kind": "preference|fact|decision|outcome", "evidence": "the exact words", "validFrom": "YYYY-MM-DD or omit", "until": "YYYY-MM-DD or omit", "supersedes": "exact old fact text or omit", "aboutUser": true|false, "noted": true|false, "topic": "name or omit", "topicAliases": ["..."], "confidence": 0..1}]',
   ].join("\n");
 }
 
@@ -175,7 +184,7 @@ export function parseCandidates(text: string, today: string, max = MAX_CANDIDATE
   const out: Candidate[] = [];
   for (const item of list) {
     if (!item || typeof item !== "object") continue;
-    const { text: raw, kind, until, aboutUser, noted, topic, topicAliases, confidence, from: rawFrom, evidence } = item as Record<string, unknown>;
+    const { text: raw, kind, validFrom, until, supersedes, aboutUser, noted, topic, topicAliases, confidence, from: rawFrom, evidence } = item as Record<string, unknown>;
     const from = typeof rawFrom === "string" && /^\d+$/.test(rawFrom.trim()) ? Number(rawFrom) : rawFrom;
     if (typeof raw !== "string" || !raw.trim()) continue;
     if (typeof kind !== "string" || !CANDIDATE_KINDS.includes(kind as CandidateKind)) continue;
@@ -184,10 +193,16 @@ export function parseCandidates(text: string, today: string, max = MAX_CANDIDATE
     if (!factText) continue;
     const validUntil = isMemoryDate(until) && until >= today ? until : undefined;
     if (isMemoryDate(until) && !validUntil) continue;
+    const parsedValidFrom = isMemoryDate(validFrom) && validFrom > today && (!validUntil || validFrom <= validUntil) ? validFrom : undefined;
+    const parsedSupersedes = typeof supersedes === "string" && supersedes.trim()
+      ? supersedes.replace(/\s+/g, " ").replace(/^\s*(?:[-*•]|\d+[.)])\s+/, "").trim().slice(0, TEXT_MAX)
+      : undefined;
     out.push({
       text: factText,
       kind: kind as CandidateKind,
+      ...(parsedValidFrom ? { validFrom: parsedValidFrom } : {}),
       ...(validUntil ? { until: validUntil } : {}),
+      ...(parsedSupersedes && factIdentity(parsedSupersedes) !== factIdentity(factText) ? { supersedes: parsedSupersedes } : {}),
       aboutUser: aboutUser === true && (kind === "preference" || kind === "fact") && !validUntil,
       ...(noted === true ? { noted: true } : {}),
       ...(topicFileName(topic) ? { topic: topicFileName(topic)! } : {}),
@@ -242,6 +257,51 @@ export function newCandidates(candidates: readonly Candidate[], notebook: string
     out.push(candidate);
   }
   return out;
+}
+
+export function strikeSupersededLine(text: string, target: string, today: string, replacementText: string, path: string): { next: string; struck: boolean } {
+  const targetIdentity = factIdentity(target);
+  const match = parseMemoryEntries(text).find((entry) => !entry.struck && factIdentity(entry.body) === targetIdentity);
+  if (!match) return { next: text, struck: false };
+  const newId = createHash("sha256").update(`${path}:${today}:${factIdentity(replacementText)}`).digest("hex").slice(0, 10);
+  const lines = text.split("\n");
+  const body = match.raw.slice(match.prefix.length);
+  lines[match.line] = `${match.prefix}~~${body}~~ · superseded ${today} by ${newId}`;
+  return { next: lines.join("\n"), struck: true };
+}
+
+export function matchedTopicExcerpts(input: {
+  dir: string;
+  topics: ReadonlyArray<{ name: string }>;
+  read: (relativePath: string) => string | null;
+  conversations: readonly CaptureBatch[];
+  today: string;
+  archiveTopic: string;
+}): string {
+  const sample = input.conversations
+    .flatMap((batch) => batch.turns.flatMap((turn) => (turn.room ? turn.room.map((line) => line.text) : [turn.person, turn.bot])))
+    .join(" ")
+    .slice(0, 2_000);
+  const terms = new Set(recallTerms(sample));
+  if (!terms.size) return "";
+  const blocks: string[] = [];
+  let lineCount = 0;
+  for (const topic of input.topics) {
+    if (topic.name === input.archiveTopic) continue;
+    const words = topicWords(topic.name, parseTopicHeader(readTopicHead(join(input.dir, topic.name))));
+    if (!words.some((word) => terms.has(word))) continue;
+    const raw = input.read(`memory/${topic.name}`);
+    if (!raw) continue;
+    const live = parseMemoryEntries(raw)
+      .filter((entry) => !entry.struck && !isExpired(entry, input.today))
+      .slice(-(30 - lineCount))
+      .map((entry) => `- ${entry.body}`);
+    if (!live.length) continue;
+    blocks.push(`memory/${topic.name}:\n${live.join("\n")}`);
+    lineCount += live.length;
+    if (blocks.length >= 3 || lineCount >= 30) break;
+  }
+  return blocks.join("\n\n");
 }
 
 export interface CaptureBatch {
