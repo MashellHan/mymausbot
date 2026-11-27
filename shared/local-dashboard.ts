@@ -34,6 +34,8 @@ export interface LocalAgentTokenUsageWindow {
 /** Member usage over the rolling window; cost coverage is tracked independently from token coverage. */
 export interface LocalAgentMemberTokenUsageWindow extends LocalAgentTokenUsageWindow {
   estimatedCost: LocalUsageEstimatedCost;
+  /** Observed generated output tokens (including reasoning) within this window; absent on legacy hosts. */
+  outputTokens?: number | null;
   /** Observed active execution duration in seconds within this window (bounded per-step/turn intervals); absent on legacy hosts. */
   activeSeconds?: number | null;
 }

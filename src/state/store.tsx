@@ -2390,14 +2390,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 rawDispatch({ type: "forkPanelMessage", threadId: body.threadId, message: body.message });
               }
               if (body?.queued && typeof body.threadId === "string" && typeof body.queueId === "string") {
+                const alreadyInTranscript = Boolean(body.message && body.message.queueId === body.queueId);
                 rawDispatch({ type: "optimisticMessageRemoved", threadId: body.threadId, sendId });
-                rawDispatch({
-                  type: "pendingQueued",
-                  threadId: body.threadId,
-                  queueId: body.queueId,
-                  text: action.text,
-                  reason: body.reason === "capacity" || body.reason === "group-turn" ? body.reason : undefined,
-                });
+                if (!alreadyInTranscript) {
+                  rawDispatch({
+                    type: "pendingQueued",
+                    threadId: body.threadId,
+                    queueId: body.queueId,
+                    text: action.text,
+                    reason: body.reason === "capacity" || body.reason === "group-turn" ? body.reason : undefined,
+                  });
+                }
               }
             })
             .catch((error) => {

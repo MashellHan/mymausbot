@@ -84,6 +84,7 @@ import {
   composerCanSteerQueuedMessages,
   doubleEnterSteerWindowExpiresAt,
   doubleEnterSteersQueue,
+  filterVisibleQueuedMessages,
   roomSteersQueued,
 } from "./ComposerQueuedMessages";
 import { skillAuthoringEnabled, supportsAgents } from "@/lib/feature-flags";
@@ -408,7 +409,10 @@ export function Composer({
   };
 
   const sharedChat = Boolean(state.config?.team && !group && profile?.tasks?.some((task) => task.threadId === threadId && !task.private));
-  const queuedMessages = sharedChat ? [] : state.queued ?? [];
+  const queuedMessages = useMemo(
+    () => (sharedChat ? [] : filterVisibleQueuedMessages(state.queued, group?.messages ?? bot?.messages)),
+    [sharedChat, state.queued, group?.messages, bot?.messages],
+  );
   const pendingCount = queuedMessages.length;
   const canSteerQueued = composerCanSteerQueuedMessages(
     busy,

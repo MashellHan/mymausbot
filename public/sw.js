@@ -306,11 +306,17 @@ self.addEventListener("push", (event) => {
     tasks.push(
       (async () => {
         // iOS Notification Center can stack notifications with the same tag unless prior ones are closed first.
-        if (tag && typeof self.registration.getNotifications === "function") {
+        if (typeof self.registration.getNotifications === "function") {
           try {
-            const existing = await self.registration.getNotifications({ tag });
-            for (const item of existing || []) {
-              if (item && typeof item.close === "function") item.close();
+            const tagsToClose = new Set();
+            if (tag) tagsToClose.add(tag);
+            if (botId) tagsToClose.add(`openmausbot:${botId}`);
+            if (kind === "spend") tagsToClose.add("openmausbot:spend");
+            for (const closeTag of tagsToClose) {
+              const existing = await self.registration.getNotifications({ tag: closeTag });
+              for (const item of existing || []) {
+                if (item && typeof item.close === "function") item.close();
+              }
             }
           } catch {}
         }

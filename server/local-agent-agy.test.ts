@@ -129,7 +129,7 @@ describe("Antigravity CLI (agy) support in Agent Team", () => {
       taskHint: "Review PR #1218 at exact head.",
       messagePreview: "READY: mausbot-review (agy / Gemini 4 Neon High 1M)",
     });
-    expect(member.tokenUsage24h).toMatchObject({ coverage: "partial", knownTokens: 36_000, estimatedCost: { coverage: "partial" } });
+    expect(member.tokenUsage24h).toMatchObject({ coverage: "partial", knownTokens: 36_000, outputTokens: 1_000, estimatedCost: { coverage: "partial" } });
     expect(member.tokenUsage24h!.estimatedCost.usd).toBeGreaterThan(0);
     expect(team.tokenUsage24h).toEqual({ coverage: "partial", knownTokens: 36_000 });
 
@@ -200,13 +200,13 @@ describe("Antigravity CLI (agy) support in Agent Team", () => {
       const snap = await teams.get();
       const byName = new Map(snap.teams[0]!.agents.map((m) => [m.name, m]));
       expect(byName.get("mausbot-review")!.tokenUsage24h).toEqual({
-        coverage: "ready", knownTokens: 0, activeSeconds: 0, estimatedCost: { coverage: "ready", usd: 0 },
+        coverage: "ready", knownTokens: 0, outputTokens: 0, activeSeconds: 0, estimatedCost: { coverage: "ready", usd: 0 },
       });
-      expect(byName.get("mausbot-review")!.tokenUsage7d).toMatchObject({ coverage: "partial", knownTokens: 36_000, activeSeconds: 30 });
+      expect(byName.get("mausbot-review")!.tokenUsage7d).toMatchObject({ coverage: "partial", knownTokens: 36_000, outputTokens: 1_000, activeSeconds: 30 });
       expect(byName.get("mausbot-upstream")!.tokenUsage24h).toEqual({
-        coverage: "ready", knownTokens: 0, activeSeconds: 0, estimatedCost: { coverage: "ready", usd: 0 },
+        coverage: "ready", knownTokens: 0, outputTokens: 0, activeSeconds: 0, estimatedCost: { coverage: "ready", usd: 0 },
       });
-      expect(byName.get("mausbot-upstream")!.tokenUsage7d).toMatchObject({ coverage: "partial", knownTokens: 1_600, activeSeconds: 1 });
+      expect(byName.get("mausbot-upstream")!.tokenUsage7d).toMatchObject({ coverage: "partial", knownTokens: 1_600, outputTokens: 100, activeSeconds: 1 });
     } finally {
       if (prevXdg === undefined) delete process.env.XDG_DATA_HOME;
       else process.env.XDG_DATA_HOME = prevXdg;

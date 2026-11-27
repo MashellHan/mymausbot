@@ -292,6 +292,61 @@ describe("iOS standalone PWA fallback", () => {
     }));
   });
 
+  it("suppresses local SW notification in standalone PWA mode when an active Web Push subscription covers the kind", async () => {
+    const swShow = vi.fn(async () => {});
+    const storage = new Map<string, string>([
+      [
+        "omb.webPush.sub.v1:local",
+        JSON.stringify({
+          endpoint: "https://web.push.apple.com/sub-1",
+          endpointOrigin: "https://web.push.apple.com",
+          preferences: {
+            enabled: true,
+            urgent: true,
+            finished: true,
+            failures: true,
+            mentions: true,
+            spend: true,
+            liveActivities: false,
+          },
+          createdAt: 1,
+          updatedAt: 1,
+          hasKeys: true,
+        }),
+      ],
+    ]);
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+      removeItem: (key: string) => storage.delete(key),
+    });
+    vi.stubGlobal("Notification", class {
+      static permission = "granted" as NotificationPermission;
+      constructor() {
+        throw new TypeError("Illegal constructor");
+      }
+    });
+    vi.stubGlobal("document", { hasFocus: () => false });
+    vi.stubGlobal("window", { focus: vi.fn(), matchMedia: () => ({ matches: true }) });
+    vi.stubGlobal("navigator", {
+      standalone: true,
+      serviceWorker: {
+        getRegistration: vi.fn(async () => ({ showNotification: swShow })),
+      },
+    });
+    const { resetWebPushClientStateForTests } = await import("./web-push");
+    resetWebPushClientStateForTests();
+
+    showNotification({ ...frame, kind: "done" }, vi.fn());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(swShow).not.toHaveBeenCalled();
+
+    // A kind disabled in Web Push preferences still falls back to local SW notification.
+    showNotification({ ...frame, kind: "brief" }, vi.fn());
+    await vi.waitFor(() => expect(swShow).toHaveBeenCalledOnce());
+    resetWebPushClientStateForTests();
+  });
+
   it("works in standalone PWA mode even when global Notification constructor throws in browser fallback", async () => {
     const swShow = vi.fn(async () => {});
     vi.stubGlobal("Notification", class {
