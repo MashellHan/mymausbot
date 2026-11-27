@@ -3929,3 +3929,12 @@ button:disabled.bg-danger {
     padding-bottom: 0.5rem;
   }
 }
+
+/* Defer layout/paint for offscreen historical transcript rows while keeping tail rows eager. */
+.chat-row-cv {
+  content-visibility: auto;
+  contain: layout style;
+}
+.chat-code-block pre {
+  -webkit-overflow-scrolling: touch;
+}

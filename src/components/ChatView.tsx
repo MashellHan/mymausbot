@@ -142,6 +142,7 @@ import { pendingApprovals } from "./PendingApproval";
 import { TranscriptAnnouncer } from "./TranscriptAnnouncer";
 import { JumpToLatestButton } from "./JumpToLatestButton";
 import { isBotTextRow, joinedCorners, needsStamp, quietRow, shouldCollapseUserMessage, simpleRowLayout, SIMPLE_BOT_BUBBLE, SIMPLE_BUBBLE_MAX, SIMPLE_BUBBLE_TEXT, SIMPLE_STACKED, SIMPLE_USER_BUBBLE, type BubbleJoin } from "./chat-bubble";
+import { shouldDeferRowPaint, transcriptRowPerfStyle } from "@/lib/transcript-perf";
 
 interface ChatRows {
   botId: string; threadId: string; botName: string; botColor: Bot["color"]; voiceId?: string;
@@ -764,8 +765,9 @@ const MessagesList = memo(function MessagesList({
           }
         })();
         if (!row) return divider && <div key={m.id} className="contents">{divider}</div>;
+        const deferPaint = shouldDeferRowPaint({ index: i, total: items.length, messageId: m.id, focusedId: focus?.messageId, editingId, emergingId, live: isLiveReply(m) });
         return (
-          <div key={m.id} className="contents" data-mid={m.id} data-tuck={layout?.tucks[i] ? "" : undefined}>
+          <div key={m.id} className={deferPaint ? "chat-row-cv flex flex-col gap-3" : "contents"} style={transcriptRowPerfStyle(m, deferPaint)} data-mid={m.id} data-tuck={layout?.tucks[i] ? "" : undefined}>
             {newDay && <DaySeparator at={m.at} today={today} simple={simple} />}
             {divider}
             {m.automation && <AutomationCaption message={m} line={m.automation} botId={botId} />}{m.inbox && <InboxCaption message={m} />}
