@@ -38,6 +38,7 @@ import {
   type PendingMiniAppUpdateRecovery,
 } from "./mini-app-update";
 import { miniAppNativeFrameGuard } from "./native-frame-guard";
+import { applyMiniAppOrder } from "./mini-app-reorder";
 
 const REFRESH_MS = 15_000;
 const RELEASE_REQUEST_TIMEOUT_MS = 30_000;
@@ -939,12 +940,15 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     setRefreshKey((current) => current + 1);
   };
 
-  const toggleBar = () => {
-    setBarCollapsed((current) => {
-      const next = !current;
-      rememberBarCollapsed(storageKey, next);
-      return next;
-    });
+  const toggleBar = () => { setBarCollapsed((current) => { const next = !current; rememberBarCollapsed(storageKey, next); return next; }); };
+
+  const reorderApps = (orderedIds: string[]) => {
+    if (!apps || owner !== true) return;
+    setApps((c) => (c ? applyMiniAppOrder(c, orderedIds) : c));
+    setInventory((c) => (inventoryRef.current = c ? applyMiniAppOrder(c, orderedIds) : c));
+    void api<Inventory>("/api/mini-apps/order", { method: "PUT", body: JSON.stringify({ appIds: orderedIds }), timeoutMs: 10_000 })
+      .then((res) => { if (!mountedRef.current || !Array.isArray(res?.apps)) return; inventoryRef.current = res.apps; setInventory(res.apps); setApps(res.apps.filter((e) => e.status === "active")); })
+      .catch(() => { if (mountedRef.current) setRefreshKey((c) => c + 1); });
   };
 
   const libraryPopover = (
@@ -961,7 +965,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     <div ref={panelRef} className="@container/mini-apps flex min-h-0 min-w-0 flex-1 flex-col" data-testid="mini-apps-panel">
       <MiniAppsHeader apps={apps} selected={selected} selectedId={selectedId} selectedUpdate={selectedUpdate} barCollapsed={barCollapsed}
         archivedKind={archivedKind} actionsBusy={busyKind !== null || updatingAppId !== null} checking={checking} canRestore={Boolean(previousReleaseTemplate)}
-        libraryPopover={libraryPopover} tabListRef={tabListRef} choose={choose} toggleBar={toggleBar}
+        canReorder={owner === true} libraryPopover={libraryPopover} tabListRef={tabListRef} choose={choose} toggleBar={toggleBar} onReorder={reorderApps}
         onAddArchived={() => { setLibraryFocus(archivedKind); setLibraryOpen(true); }} onRestorePrevious={() => void restorePreviousRelease()}
         onRefresh={() => { manualRefreshRef.current = true; setRollbackNotice(null); setRefreshKey((current) => current + 1); }} />
       <>

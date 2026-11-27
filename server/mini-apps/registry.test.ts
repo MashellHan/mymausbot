@@ -661,4 +661,20 @@ describe("persistent Mini Apps", () => {
     });
     expect(rolledCorrupt.app.icon).toBeNull();
   });
+
+  it("persists owner-defined mini app sort_order across reads and appends unlisted apps stably", async () => {
+    const { apps } = fixture();
+    const first = (await apps.publish(owner, publication({ requestKey: "order-1", slug: "alpha", title: "Alpha" }))).app;
+    const second = (await apps.publish(owner, publication({ requestKey: "order-2", slug: "beta", title: "Beta" }))).app;
+    const third = (await apps.publish(owner, publication({ requestKey: "order-3", slug: "gamma", title: "Gamma" }))).app;
+    expect(apps.list(owner).map((a) => a.id)).toEqual([first.id, second.id, third.id]);
+
+    expect(() => apps.reorder(bot(), [third.id, first.id])).toThrow("Only the workspace owner can reorder Mini Apps.");
+
+    const reordered = apps.reorder(owner, [third.id, "nonexistent", first.id, third.id]);
+    expect(reordered.map((a) => a.id)).toEqual([third.id, first.id, second.id]);
+
+    closeMessageDb();
+    expect(apps.list(owner).map((a) => a.id)).toEqual([third.id, first.id, second.id]);
+  });
 });
