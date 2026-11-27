@@ -16,8 +16,18 @@ import { AgentRoleEditor, type AgentRoleEditorSelection } from "./AgentRoleEdito
 import { MiniAppSiteOverlay } from "./MiniAppSiteOverlay";
 import { isCustomLocalMiniApp, miniAppFrameDocument } from "./mini-app-document";
 import { createMiniAppSitePresentation, managedMiniAppSite, type MiniAppSite, type MiniAppSiteView } from "./mini-app-site";
+import { miniAppClientCache } from "./mini-app-client-cache";
 import { miniAppNativeFrameGuard } from "./native-frame-guard";
 import { miniAppPerfTelemetry } from "./mini-app-telemetry";
+import {
+  buildMausRpcError,
+  buildMausRpcSuccess,
+  isMausRpcEnvelope,
+  mapStatusToMausErrorCode,
+  parseMausRpcNotification,
+  parseMausRpcRequest,
+  type MausAppErrorCode,
+} from "../../../shared/mini-app-rpc";
 
 const MAX_ARGUMENT_BYTES = 64 * 1024;
 const MAX_RESULT_BYTES = 1_000_000;
@@ -119,6 +129,7 @@ export function mountMiniAppFrame(options: {
   container: HTMLElement;
   document: MiniAppDocument;
   state: MiniAppState;
+  storageKey?: string | null;
   onRevoked(): void;
   onChanged?(): void;
   onRuntimeReady?(info: { appId: string; revision: number; templateVersion: number }): void;
@@ -217,6 +228,14 @@ export function mountMiniAppFrame(options: {
     if (!active) return;
     host?.iframe.contentWindow?.postMessage({ mausMiniApp: 1, type: "media-result", id, ...(error ? { error } : payload) }, "*");
   };
+  const replyRpcSuccess = (id: string, result: unknown) => {
+    if (!active) return;
+    host?.iframe.contentWindow?.postMessage(buildMausRpcSuccess(id, result), "*");
+  };
+  const replyRpcError = (id: string, code: MausAppErrorCode, message: string, status?: number) => {
+    if (!active) return;
+    host?.iframe.contentWindow?.postMessage(buildMausRpcError(id, code, message, status), "*");
+  };
   const handle = (event: MessageEvent) => {
     if (!active || !host || !host.iframe.contentWindow || event.source !== host.iframe.contentWindow) return;
     if (sitePresentation?.receive(event, host.iframe, frameInitialized)) return;
@@ -225,6 +244,65 @@ export function mountMiniAppFrame(options: {
       miniAppPerfTelemetry().markIframeInit(document.app.id);
       postHostSelection(currentGithubSelection);
       return;
+    }
+    if (isMausRpcEnvelope(event.data)) {
+      if (event.origin !== "null") return;
+      const notification = parseMausRpcNotification(event.data);
+      if (notification) {
+        if (notification.method === "maus/notifications/ready") {
+          if (!runtimeReadyNotified && miniAppNativeFrameGuard() && frameInitialized
+            && state.status === "active" && document.app.status === "active"
+            && state.appId === document.app.id && state.revision === document.app.revision
+            && state.templateVersion === document.app.templateVersion
+            && Boolean((document.app as { release?: unknown }).release)) {
+            runtimeReadyNotified = true;
+            options.onRuntimeReady?.({
+              appId: document.app.id,
+              revision: document.app.revision,
+              templateVersion: document.app.templateVersion,
+            });
+          }
+        }
+        return;
+      }
+      const parsedRpc = parseMausRpcRequest(event.data);
+      if (!parsedRpc.ok) {
+        if (parsedRpc.id) replyRpcError(parsedRpc.id, parsedRpc.code, parsedRpc.message);
+        return;
+      }
+      const rpcReq = parsedRpc.request;
+      if (rpcReq.method === "maus/dashboard.read") {
+        const legacy = parseFrameDashboard({ mausMiniApp: 1, type: "dashboard-read", id: rpcReq.id, selection: rpcReq.params.selection });
+        if (!legacy) return replyRpcError(rpcReq.id, "INVALID_REQUEST", "This dashboard resource or its parameters are unavailable.");
+        if (!acceptsDashboardRequest(legacy.selection.resource)) {
+          return replyRpcError(rpcReq.id, "UNAVAILABLE", "This dashboard is unavailable. Refresh and try again.");
+        }
+        const now = Date.now();
+        recentReads = recentReads.filter((at) => now - at < 60_000);
+        if (recentReads.length >= MAX_READS_PER_MINUTE) return replyRpcError(rpcReq.id, "RATE_LIMITED", "Too many reads. Wait a minute and try again.", 429);
+        recentReads.push(now);
+        const controller = new AbortController();
+        dashboardControllers.set(controller, rpcReq.id);
+        const revision = state.revision;
+        void api<MiniAppDashboardReadResult>(`/api/mini-apps/${encodeURIComponent(document.app.id)}/dashboard`, {
+          method: "POST", body: JSON.stringify({ ...legacy.selection, expectedRevision: revision }), signal: controller.signal, timeoutMs: 15_000,
+        }).then((result) => {
+          if (!active || state.revision !== revision || controller.signal.aborted) return;
+          if (!acceptsDashboardRequest(legacy.selection.resource) || result.appId !== document.app.id || result.revision !== revision
+            || result.resource !== legacy.selection.resource || utf8Bytes(JSON.stringify(result)) > MAX_RESULT_BYTES) {
+            return replyRpcError(rpcReq.id, "REVISION_CONFLICT", "This dashboard changed while its data was being read.", 409);
+          }
+          replyRpcSuccess(rpcReq.id, result);
+        }).catch((error: unknown) => {
+          if (!active || controller.signal.aborted) return;
+          const status = error instanceof ApiError ? error.status : undefined;
+          if (status === 401 || status === 403 || (usageFrame && status === 404)) options.onRevoked();
+          else if (usageFrame && status === 409) options.onChanged?.();
+          replyRpcError(rpcReq.id, mapStatusToMausErrorCode(status), error instanceof Error ? error.message : "The dashboard read failed. Try again.", status);
+        }).finally(() => dashboardControllers.delete(controller));
+        return;
+      }
+      return replyRpcError(rpcReq.id, "UNAVAILABLE", `Method '${rpcReq.method}' is not enabled for this Mini App.`);
     }
     if (record(event.data) && event.data.mausMiniApp === 1 && event.data.type === "agent-md-edit") {
       const { id, selection } = event.data;
@@ -436,6 +514,20 @@ export function mountMiniAppFrame(options: {
     const now = Date.now();
     recentReads = recentReads.filter((at) => now - at < 60_000);
     if (recentReads.length >= MAX_READS_PER_MINUTE) return reply(request.id, undefined, "Too many reads. Wait a minute and try again.");
+    const queryCache = miniAppClientCache(options.storageKey ?? null);
+    const cacheKey = queryCache.queryKey({
+      appId: document.app.id,
+      appRevision: state.revision,
+      datasetId: binding.datasetId,
+      dataRevision,
+      queryId: request.queryId,
+      parameters: request.parameters,
+      cursor: request.options?.cursor,
+    });
+    const cachedResult = queryCache.getQuery(cacheKey);
+    if (cachedResult) {
+      return reply(request.id, cachedResult);
+    }
     recentReads.push(now);
     const controller = new AbortController();
     controllers.set(controller, [request.id]);
@@ -454,10 +546,14 @@ export function mountMiniAppFrame(options: {
       if (!miniAppNativeFrameGuard()) return reply(request.id, undefined, "This Mini App requires the guarded desktop window.");
       if (!Array.isArray(result.columns) || !Array.isArray(result.rows) || result.rows.length > 100 || result.revision !== dataRevision
         || utf8Bytes(JSON.stringify(result)) > MAX_RESULT_BYTES) return reply(request.id, undefined, "This result is too large. Narrow the query or use the next page.");
+      queryCache.setQuery(cacheKey, { appId: document.app.id, datasetId: binding.datasetId, dataRevision }, result);
       reply(request.id, result);
     }).catch((error: unknown) => {
       if (!active || controller.signal.aborted) return;
-      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) options.onRevoked();
+      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+        queryCache.clear();
+        options.onRevoked();
+      }
       reply(request.id, undefined, error instanceof Error ? error.message : "The data read failed. Try again.");
     }).finally(() => controllers.delete(controller));
   };
@@ -538,9 +634,10 @@ export function mountMiniAppFrame(options: {
   };
 }
 
-export function MiniAppFrame({ document, state, onRevoked, onChanged, onRuntimeReady, site, hongguo, refreshKey = 0, githubSelection, onGithubSelectionChange }: {
+export function MiniAppFrame({ document, state, storageKey, onRevoked, onChanged, onRuntimeReady, site, hongguo, refreshKey = 0, githubSelection, onGithubSelectionChange }: {
   document: MiniAppDocument;
   state: MiniAppState;
+  storageKey?: string | null;
   onRevoked(): void;
   onChanged?(): void;
   onRuntimeReady?(info: { appId: string; revision: number; templateVersion: number }): void;
@@ -575,6 +672,7 @@ export function MiniAppFrame({ document, state, onRevoked, onChanged, onRuntimeR
       container: box.current,
       document,
       state,
+      storageKey,
       onRevoked: () => revoked.current(),
       onChanged: () => dashboardChanged.current?.(),
       onRuntimeReady: (info) => runtimeReadyRef.current?.(info),

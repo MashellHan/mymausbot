@@ -39,13 +39,25 @@ function buildMiniAppSdkSource(githubActivity: boolean, managedRelease: boolean,
   var closed = false;
   var markedReady = false;
   var canOpenSources = false;
+  function makeAppError(message, code, status) {
+    var err = new Error(String(message || "The host refused this request."));
+    err.name = "MausAppError";
+    if (code) err.code = String(code);
+    if (typeof status === "number") err.status = status;
+    return err;
+  }
   function post(message) { parent.postMessage(message, "*"); }
   function request(message) {
-    if (closed) return Promise.reject(new Error("This app was closed."));
+    if (closed) return Promise.reject(makeAppError("This app was closed.", "CLOSED"));
     return new Promise(function (resolve, reject) {
       var id = "mini:" + (++sequence);
       pending.set(id, { resolve: resolve, reject: reject });
       post(Object.assign({ id: id }, message));
+    });
+  }
+  function rpc(method, params) {
+    return ready.then(function () {
+      return request({ jsonrpc: "2.0", method: method, params: params || {} });
     });
   }
   function apply(context) {
@@ -77,14 +89,19 @@ function buildMiniAppSdkSource(githubActivity: boolean, managedRelease: boolean,
     var message = event.data;
     if (message.jsonrpc === "2.0") {
       if (message.method === "ui/notifications/host-context-changed") apply(message.params);
-      else if (message.method === "ui/resource-teardown" && message.id !== undefined) {
+      else if (message.method === "maus/notifications/data-changed") {
+        var info = message.params && typeof message.params === "object" ? message.params : undefined;
+        listeners.forEach(function (listener) { listener(info); });
+      } else if (message.method === "ui/resource-teardown" && message.id !== undefined) {
         post({ jsonrpc: "2.0", id: message.id, result: {} });
         close();
       } else if (message.method === undefined && pending.has(message.id)) {
         var waiting = pending.get(message.id);
         pending.delete(message.id);
-        if (message.error) waiting.reject(new Error(String(message.error.message || "The host refused this request.")));
-        else waiting.resolve(message.result);
+        if (message.error) {
+          var errData = message.error.data && typeof message.error.data === "object" ? message.error.data : null;
+          waiting.reject(makeAppError(message.error.message || "The host refused this request.", errData && errData.errorCode, errData && errData.status));
+        } else waiting.resolve(message.result);
       }
       return;
     }
@@ -128,10 +145,21 @@ function buildMiniAppSdkSource(githubActivity: boolean, managedRelease: boolean,
     apply(answer && answer.hostContext);
     post({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
   });
+  var visibilityListeners = new Set();
+  window.addEventListener("message", function (event) {
+    if (event.source !== window.parent) return;
+    var msg = event.data;
+    if (msg && msg.jsonrpc === "2.0" && msg.method === "ui/notifications/visibility-changed" && msg.params && typeof msg.params.visible === "boolean") {
+      visibilityListeners.forEach(function (fn) { try { fn({ visible: msg.params.visible }); } catch (e) {} });
+    }
+  });
   function openSource(url) {
     return ready.then(function () { return request({ jsonrpc: "2.0", method: "ui/open-link", params: { url: url } }); }).then(function () {});
   }
   var base = {
+    version: 2,
+    sdkVersion: 2,
+    rpc: rpc,
     query: function (queryId, parameters, options) {
       return ready.then(function () { return request({ mausMiniApp: 1, type: "query", queryId: queryId, parameters: parameters, options: options }); });
     },
@@ -154,6 +182,11 @@ function buildMiniAppSdkSource(githubActivity: boolean, managedRelease: boolean,
       if (typeof listener !== "function") throw new TypeError("A listener is required.");
       listeners.add(listener);
       return function () { listeners.delete(listener); };
+    },
+    onVisibilityChanged: function (listener) {
+      if (typeof listener !== "function") throw new TypeError("A listener is required.");
+      visibilityListeners.add(listener);
+      return function () { visibilityListeners.delete(listener); };
     },
     get openSource() { return canOpenSources ? openSource : undefined; }
   };
