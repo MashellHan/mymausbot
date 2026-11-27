@@ -3,22 +3,26 @@ import type { MiniAppDataBinding, MiniAppNamedPage } from "../../shared/mini-app
 import { MiniAppQueryCache } from "./query-cache.ts";
 
 const binding: MiniAppDataBinding = {
+  id: "b-1",
   datasetId: "ds-1",
+  source: { schema: "main", table: "events" },
+  fields: { v: { column: "v", sourceType: "BIGINT", as: "decimal", scale: 0 } },
   queries: {
     summary: {
-      sql: "SELECT 1",
+      kind: "rows",
+      columns: ["v"],
       parameters: {},
+      filters: [],
+      orderBy: [],
       pageSize: 50,
     },
   },
 };
 
-const page = (dataRevision: number, value: number): MiniAppNamedPage => ({
-  columns: [{ name: "v", type: "INTEGER" }],
+const page = (revision: number, value: number): MiniAppNamedPage => ({
+  columns: [{ name: "v", type: "decimal" }],
   rows: [[value]],
-  hasMore: false,
-  dataRevision,
-  elapsedMs: 1,
+  revision,
 });
 
 describe("MiniAppQueryCache", () => {

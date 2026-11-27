@@ -74,7 +74,7 @@ export class MiniAppQueryCache {
       if (oldest === undefined) break;
       this.delete(oldest);
     }
-    this.entries.set(key, { datasetId, dataRevision: page.dataRevision, bytes, page: structuredClone(page) });
+    this.entries.set(key, { datasetId, dataRevision: page.revision, bytes, page: structuredClone(page) });
     this.totalBytes += bytes;
   }
 
