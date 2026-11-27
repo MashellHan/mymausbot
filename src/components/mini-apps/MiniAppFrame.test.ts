@@ -409,18 +409,26 @@ describe("persistent Mini App frame", () => {
     mount.retire();
   });
 
-  it("offers openSource only after a built-in report receives its link capability", async () => {
+  it("offers openSource to active built-in reports, html team dashboard, and custom local Mini Apps when desktop opener is available", async () => {
     const report = { ...document, app: { ...app, shippedTemplateKind: "x_ai_digest" as const } };
     const reportDoc = miniAppFrameDocument(report, true);
+    const customDoc = miniAppFrameDocument(document, true);
+    const hongguoDocument: MiniAppDocument = { ...document, app: { ...app, slug: "hongguo", nativeIdentity: "hongguo", nativeKind: "hongguo" }, bindings: [] };
     expect(reportDoc.can.openLinks).toBe(true);
     expect(miniAppFrameDocument(report, false).can.openLinks).toBe(false);
     expect(miniAppFrameDocument({ ...report, app: { ...report.app, status: "archived" } }, true).can.openLinks).toBe(false);
     expect(miniAppFrameDocument({ ...report, app: { ...report.app, shippedTemplateKind: "bookkeeping" } }, true).can.openLinks).toBe(false);
+    expect(miniAppFrameDocument({ ...report, app: { ...report.app, shippedTemplateKind: "mojo" } }, true).can.openLinks).toBe(false);
+    expect(miniAppFrameDocument(usageDocument, true).can.openLinks).toBe(false);
+    expect(miniAppFrameDocument(hongguoDocument, true).can.openLinks).toBe(false);
     expect(miniAppFrameDocument(teamDocument, true).can.openLinks).toBe(true);
     expect(miniAppFrameDocument(teamDocument, false).can.openLinks).toBe(false);
     expect(miniAppFrameDocument({ ...teamDocument, app: { ...teamDocument.app, status: "archived" } }, true).can.openLinks).toBe(false);
-    expect(miniAppFrameDocument({ ...teamDocument, app: { ...teamDocument.app, dashboardIdentity: null } }, true).can.openLinks).toBe(false);
-    for (const [doc, allowed] of [[reportDoc, true], [miniAppFrameDocument(document, false), false]] as const) {
+    expect(miniAppFrameDocument({ ...teamDocument, app: { ...teamDocument.app, dashboard: null } }, true).can.openLinks).toBe(false);
+    expect(customDoc.can.openLinks).toBe(true);
+    expect(miniAppFrameDocument(document, false).can.openLinks).toBe(false);
+    expect(miniAppFrameDocument({ ...document, app: { ...app, status: "archived" } }, true).can.openLinks).toBe(false);
+    for (const [doc, allowed] of [[reportDoc, true], [customDoc, true], [miniAppFrameDocument(document, false), false]] as const) {
       const view = new HappyWindow({ settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
       const sent: Array<Record<string, unknown>> = [];
       const parent = { postMessage: (message: Record<string, unknown>) => sent.push(message) };
@@ -506,6 +514,86 @@ describe("persistent Mini App frame", () => {
     expect(openExternal).toHaveBeenCalledTimes(1);
     mount.retire();
     focused.mockRestore();
+  });
+
+  it("opens only engaged https links for active custom local Mini Apps", async () => {
+    const openExternal = vi.fn(async () => true);
+    vi.stubGlobal("ogb", { platform: "darwin", app: { version: "fixture", ownPage: true, blocksOpaqueFrameNavigation: true }, openExternal });
+    const focused = vi.spyOn(window.document, "hasFocus").mockReturnValue(true);
+    const customApp = { ...app, slug: "work-threads-tracker", title: "Work messages" };
+    const customDocument: MiniAppDocument = { ...document, app: customApp };
+    const mount = mountMiniAppFrame({ container, document: customDocument, state, onRevoked: vi.fn() });
+    const view = mount.iframe.contentWindow!;
+    const posted = vi.spyOn(view, "postMessage");
+    try {
+      send(view, { jsonrpc: "2.0", id: "init", method: "ui/initialize", params: {} });
+      expect(posted.mock.calls.find(([message]) => (message as { id?: string }).id === "init")?.[0])
+        .toMatchObject({ result: { hostCapabilities: { openLinks: {} } } });
+      send(view, { jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
+
+      send(view, { jsonrpc: "2.0", id: "early", method: "ui/open-link", params: { url: "https://example.com/thread" } });
+      await vi.waitFor(() => expect(posted.mock.calls.some(([message]) => (message as { id?: string }).id === "early")).toBe(true));
+      expect(posted.mock.calls.find(([message]) => (message as { id?: string }).id === "early")?.[0])
+        .toMatchObject({ error: { message: expect.stringContaining("clicks in the app") } });
+      expect(openExternal).not.toHaveBeenCalled();
+
+      mount.iframe.dispatchEvent(new Event("pointerenter"));
+      mount.iframe.focus();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      send(view, { jsonrpc: "2.0", id: "js", method: "ui/open-link", params: { url: "javascript:alert(1)" } });
+      await vi.waitFor(() => expect(posted.mock.calls.some(([message]) => (message as { id?: string }).id === "js")).toBe(true));
+      expect(posted.mock.calls.find(([message]) => (message as { id?: string }).id === "js")?.[0])
+        .toMatchObject({ error: { message: expect.stringContaining("Only http and https") } });
+
+      send(view, { jsonrpc: "2.0", id: "ftp", method: "ui/open-link", params: { url: "ftp://example.com/thread" } });
+      await vi.waitFor(() => expect(posted.mock.calls.some(([message]) => (message as { id?: string }).id === "ftp")).toBe(true));
+      expect(posted.mock.calls.find(([message]) => (message as { id?: string }).id === "ftp")?.[0])
+        .toMatchObject({ error: { message: expect.stringContaining("Only http and https") } });
+      expect(openExternal).not.toHaveBeenCalled();
+
+      send(view, { jsonrpc: "2.0", id: "https", method: "ui/open-link", params: { url: "https://example.com/thread" } });
+      await vi.waitFor(() => expect(openExternal).toHaveBeenCalledWith("https://example.com/thread"));
+      await vi.waitFor(() => expect(posted.mock.calls.find(([message]) => (message as { id?: string }).id === "https")?.[0]).toMatchObject({ result: {} }));
+    } finally {
+      mount.retire();
+    }
+
+    const httpMount = mountMiniAppFrame({ container, document: customDocument, state, onRevoked: vi.fn() });
+    const httpView = httpMount.iframe.contentWindow!;
+    const httpPosted = vi.spyOn(httpView, "postMessage");
+    try {
+      send(httpView, { jsonrpc: "2.0", id: "init", method: "ui/initialize", params: {} });
+      send(httpView, { jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
+      httpMount.iframe.dispatchEvent(new Event("pointerenter"));
+      httpMount.iframe.focus();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      send(httpView, { jsonrpc: "2.0", id: "http", method: "ui/open-link", params: { url: "http://example.com/thread" } });
+      await vi.waitFor(() => expect(httpPosted.mock.calls.some(([message]) => (message as { id?: string }).id === "http")).toBe(true));
+      expect(httpPosted.mock.calls.find(([message]) => (message as { id?: string }).id === "http")?.[0])
+        .toMatchObject({ error: { message: "Only HTTPS links can be opened from this Mini App." } });
+      expect(openExternal).toHaveBeenCalledTimes(1);
+    } finally {
+      httpMount.retire();
+      focused.mockRestore();
+    }
+
+    const archivedMount = mountMiniAppFrame({ container, document: customDocument, state: { ...state, status: "archived" }, onRevoked: vi.fn() });
+    const archivedView = archivedMount.iframe.contentWindow!;
+    const archivedPosted = vi.spyOn(archivedView, "postMessage");
+    try {
+      send(archivedView, { jsonrpc: "2.0", id: "init", method: "ui/initialize", params: {} });
+      send(archivedView, { jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
+      archivedMount.iframe.dispatchEvent(new Event("pointerenter"));
+      archivedMount.iframe.focus();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      send(archivedView, { jsonrpc: "2.0", id: "archived", method: "ui/open-link", params: { url: "https://example.com/thread" } });
+      await vi.waitFor(() => expect(archivedPosted.mock.calls.find(([message]) => (message as { id?: string }).id === "archived")?.[0])
+        .toMatchObject({ error: { message: expect.stringContaining("unavailable") } }));
+      expect(openExternal).toHaveBeenCalledTimes(1);
+    } finally {
+      archivedMount.retire();
+    }
   });
 
   it("keeps an archived report from opening a source even after frame engagement", async () => {
