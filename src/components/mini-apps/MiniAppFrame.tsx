@@ -240,6 +240,10 @@ export function mountMiniAppFrame(options: {
     if (!active) return;
     host?.iframe.contentWindow?.postMessage({ mausMiniApp: 1, type: "kv-result", id, ...(error ? { error } : { result }) }, "*");
   };
+  const replyAction = (id: string, result?: unknown, error?: string) => {
+    if (!active) return;
+    host?.iframe.contentWindow?.postMessage({ mausMiniApp: 1, type: "action-result", id, ...(error ? { error } : { result }) }, "*");
+  };
   const handle = (event: MessageEvent) => {
     if (!active || !host || !host.iframe.contentWindow || event.source !== host.iframe.contentWindow) return;
     if (sitePresentation?.receive(event, host.iframe, frameInitialized)) return;
@@ -351,6 +355,40 @@ export function mountMiniAppFrame(options: {
           if (err instanceof ApiError && (err.status === 401 || err.status === 403)) options.onRevoked();
           replyKv(id, undefined, err instanceof Error ? err.message : "Failed to delete preferences.");
         });
+      return;
+    }
+    if (record(event.data) && event.data.mausMiniApp === 1 && event.data.type === "action-invoke") {
+      const id = typeof event.data.id === "string" && event.data.id.length <= 100 ? event.data.id : "";
+      if (!id) return;
+      if (event.origin !== "null" || !miniAppNativeFrameGuard() || !frameInitialized
+        || state.status !== "active" || document.app.status !== "active" || state.revision !== document.app.revision) {
+        return replyAction(id, undefined, "Mini App actions are unavailable.");
+      }
+      const engaged = typeof (host as { engaged?: () => boolean }).engaged === "function"
+        ? (host as { engaged: () => boolean }).engaged()
+        : false;
+      if (!engaged) {
+        return replyAction(id, undefined, "Interact with this Mini App before invoking an action.");
+      }
+      const requestKey = typeof event.data.requestKey === "string" && event.data.requestKey.length >= 4
+        ? event.data.requestKey
+        : `act-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      void api(`/api/mini-apps/${encodeURIComponent(document.app.id)}/action`, {
+        method: "POST",
+        body: JSON.stringify({
+          expectedRevision: state.revision,
+          requestKey,
+          action: event.data.action,
+        }),
+        timeoutMs: 15_000,
+      }).then((res) => {
+        if (!active) return;
+        replyAction(id, res);
+      }).catch((err: unknown) => {
+        if (!active) return;
+        if (err instanceof ApiError && (err.status === 401 || err.status === 403)) options.onRevoked();
+        replyAction(id, undefined, err instanceof Error ? err.message : "The Mini App action failed.");
+      });
       return;
     }
     if (record(event.data) && event.data.mausMiniApp === 1 && event.data.type === "agent-md-edit") {
