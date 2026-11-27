@@ -28,7 +28,7 @@ function makeBot(overrides: Partial<Bot> = {}): Bot {
     workspace: "/tmp/atlas",
     threadId: "t-1",
     activeLeafId: null,
-    messages: [{ id: "m-1", role: "assistant", text: "Ready to ship", at: Date.now() } as Bot["messages"][number]],
+    messages: [{ id: "m-1", role: "bot", kind: "text", text: "Ready to ship", at: Date.now() }],
     busy: false,
     ...overrides,
   } as Bot;
@@ -43,7 +43,7 @@ function makeRowProps(bot: Bot, extra: Partial<BotRowProps> = {}): BotRowProps {
     mascotMotion: null,
     reveal: null,
     pendingQueued: {},
-    routineRuns: {},
+    routineRuns: [],
     instances: [],
     liveCall: null,
     density: "comfortable",
