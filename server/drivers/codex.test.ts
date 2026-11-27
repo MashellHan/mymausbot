@@ -28,7 +28,7 @@ import { CODEX_USAGE_LIMIT_REACHED } from "../../shared/codex-usage-limit.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { TEAM_TOOLS_FAILED } from "./team-tools.ts";
 import { unsupportedCallsNotice } from "./codex-unsupported-calls.ts";
-import { rebuiltSessionNotice } from "../resume-recovery.ts";
+import { instructionsOverflowNotice, rebuiltSessionNotice } from "../resume-recovery.ts";
 import { startFakeHttpMcp, type FakeHttpMcp } from "../testing/fake-http-mcp-server.ts";
 import { OWN_MCP_HTTP_ENV } from "./own-mcp-http.ts";
 import { ownMcpHttpRoutes } from "../routes/own-mcp-http.ts";
@@ -884,6 +884,29 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     const room = await threadStart("room.json", "t-room", true);
     expect(room.ephemeral).toEqual([true]);
     await expect.poll(() => processIsAlive(room.pid)).toBe(false);
+  });
+
+  it("replaces a resumed thread whose accumulated instruction blocks pass the provider cap with a fresh session", async () => {
+    await create({ mode: "resume" });
+    process.env.FAKE_CODEX_RETRY_SCALE = "0.001";
+    const instructions = "Stable rules.";
+    const receiptPath = join(DATA_DIR, "codex-instructions", `${createHash("sha256").update(JSON.stringify(["t-overflow", "codex-thread-1"])).digest("hex")}.sha256`);
+    mkdirSync(dirname(receiptPath), { recursive: true });
+    // An earlier block, with the thread's blocks already near the cap: injecting this changed one would cross it.
+    writeFileSync(receiptPath, JSON.stringify({ instructions: createHash("sha256").update("Older rules.").digest("hex"), injected: 84_900 }), { mode: 0o600 });
+    const dump = join(scratch, "instruction-overflow.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    const recoveryText = "History\nUser: go on";
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-overflow", text: "go on", systemStable: instructions, systemVolatile: "", resumeCursor: "codex-thread-1", recoveryText });
+    await expect(recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId)).resolves.toMatchObject({ ok: true });
+    const calls = JSON.parse(readFileSync(dump, "utf8")).calls;
+    expect(calls.map((call: { method: string }) => call.method)).not.toContain("thread/resume");
+    expect(calls.map((call: { method: string }) => call.method)).not.toContain("thread/inject_items");
+    expect(calls.find((call: { method: string }) => call.method === "turn/start").params.input).toEqual([{ type: "text", text: recoveryText }]);
+    expect(recorder.events.filter((e) => e.type === "turn.retrying")).toMatchObject([{ reason: "instruction_overflow" }]);
+    expect(recorder.events.filter((e) => e.type === "runtime.error" && e.turnId === turnId)).toEqual([]);
+    expect(recorder.events.filter((e) => e.type === "session.started").at(-1)).toMatchObject({ sessionId: "codex-thread-1", rebuilt: true });
+    expect(recorder.events.filter((e) => e.type === "runtime.notice")).toEqual([expect.objectContaining({ message: instructionsOverflowNotice("Codex") })]);
   });
 
   it("ignores requests received after turn completion", async () => {

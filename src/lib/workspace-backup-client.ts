@@ -2,6 +2,14 @@ import { WORKSPACE_BACKUP_CLIENT_KEYS, type WorkspaceBackupClientState } from ".
 
 export const WORKSPACE_RESTORE_MARKER = "omb-pending-workspace-restore";
 
+export function hasPendingWorkspaceRestore(): boolean {
+  try {
+    return typeof localStorage !== "undefined" && Boolean(localStorage.getItem(WORKSPACE_RESTORE_MARKER));
+  } catch {
+    return false;
+  }
+}
+
 export function collectWorkspaceClientState(storage: Pick<Storage, "getItem"> = localStorage): WorkspaceBackupClientState {
   const result: WorkspaceBackupClientState = {};
   for (const key of WORKSPACE_BACKUP_CLIENT_KEYS) {

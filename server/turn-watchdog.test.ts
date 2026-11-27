@@ -611,6 +611,7 @@ describe("the stall handler", () => {
       process: { env },
       RoomTurnStallRegistry: class { stall() {} },
       TurnStops, stoppedTurnOutcome, reportsToRequester: () => true, stallLimitMs, ENGINE_EXIT_STALL_MS,
+      limitTakeover: {}, createRoomLimitTakeover: () => ({}),
       TurnWatchdog: class { options: unknown; constructor(options: { onStall: (turn: WatchedTurn) => void }) { this.options = options; } },
       store: { messagesFor: () => messages, activePath: () => messages, appendMessage() {} },
       turnResourceOwners: new Map(), directTurnGenerationByThread: new Map([["t1", "gen-1"]]), directRequestOwners: new Map(),

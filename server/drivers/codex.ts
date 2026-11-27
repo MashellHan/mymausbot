@@ -62,7 +62,7 @@ import { CODEX_TOOL_CONVERSION_REFUSAL, CONNECTION_INPUT_REFUSAL, isCodexToolCon
 import { archivedNativeCodexThread, CODEX_MISSING_CREDENTIALS, codexConnectionInputRefused, codexProviderMismatch, CODEX_SIGN_IN_EXPIRED, codexLimitFacts, codexNotSignedIn, CodexRpcError, codexSignInExpired, codexPlanModelRefused, codexSignInRefused, codexUserError, codexUserFailure, missingNativeCodexThread, type CodexRoute } from "./codex-errors.ts";
 import { codexTierOf } from "./codex-tier.ts"; import { codexLoginCheck, readCodexLogin, storedCodexLogin } from "./codex-login.ts";
 import { keyRejected, noteKeyAccepted, noteKeyRejected } from "../key-rejections.ts";
-import { classifyResumeFailure, mayReplay, rebuiltSessionNotice, recoveryPromptFor } from "../resume-recovery.ts";
+import { classifyResumeFailure, instructionsOverflowNotice, mayReplay, rebuiltSessionNotice, recoveryPromptFor } from "../resume-recovery.ts";
 import { extractMcpImages } from "../mcp-tool-images.ts"; import { codexImageInputs, withoutInlineImages } from "./codex-images.ts";
 import { parseProtocolAskQuestions, questionChoices } from "../../shared/ask-question.ts";
 import { codexQuestionReply, openAsyncQuestion, type CodexAsk } from "./codex-questions.ts";
@@ -380,6 +380,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       let stopRequested = false;
       let promptSubmitted = false;
       let recoveredMissingSession = false;
+      let droppedInstructionOverflow = false;
       let loginRaceRetried = false;
       const stopSignal = new AbortController();
       const { threadId } = turn;
@@ -1248,10 +1249,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         // only Full may synthesize approvals.
         autoAcceptPermissions = approvalMode === "full";
         const selection = codexThreadSelection({ routedProvider: routed ? routedProvider : undefined, plan }, turn.model);
-        const cursor = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
+        const cursor = !droppedInstructionOverflow && typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
         let startedModel: string | null = null;
-        let rebuiltFromReplay = false;
-        let promptText = turn.text;
+        let { text: promptText, replayed: rebuiltFromReplay } = droppedInstructionOverflow ? recoveryPromptFor({ recoveryText: turn.recoveryText, currentText: turn.text, failure: "before-accept" }) : { text: turn.text, replayed: false };
         if (reused) {
           codexThreadId = reused.nativeThreadId; approvalParams = reused.carried.approvalParams; resumedNativeThread = true;
           rolloutAt = rolloutMark(reused.carried.rolloutPath); state.usageBaseline = connection.usageTotal;
@@ -1321,7 +1321,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           startedModel = started?.model ?? null;
         }
         if (!codexThreadId) throw new Error("Codex did not return a native thread id");
-        const { deliverVolatile, hadVolatile, commitVolatile } = await syncCodexInstructions(
+        const { deliverVolatile, hadVolatile, commitVolatile, resetSession } = await syncCodexInstructions(
           threadId,
           codexThreadId,
           developerInstructions,
@@ -1329,7 +1329,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           resumedNativeThread,
           request,
           Boolean(turn.mentionTurn),
+          Boolean(turn.recoveryText?.trim()),
         );
+        if (resetSession) { droppedInstructionOverflow = true; return relaunch("instruction_overflow", "Codex did not shut down while moving this conversation to a fresh session", "rpc_error"); }
         if (deliverVolatile) {
           promptText = withContextNote(
             volatileContextNote(promptSplit ? turn.systemVolatile ?? "" : "", hadVolatile),
@@ -1337,7 +1339,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           );
         }
         emit({ ...base(threadId, turnId), type: "session.started", sessionId: codexThreadId, model: startedModel ?? turn.model ?? null, ...(rebuiltFromReplay ? { rebuilt: true } : {}) });
-        if (rebuiltFromReplay) emit({ ...base(threadId, turnId), type: "runtime.notice", message: rebuiltSessionNotice("Codex") });
+        if (rebuiltFromReplay) emit({ ...base(threadId, turnId), type: "runtime.notice", message: droppedInstructionOverflow ? instructionsOverflowNotice("Codex") : rebuiltSessionNotice("Codex") });
         const turnInput = [
           ...(promptText ? [{ type: "text" as const, text: promptText }] : []),
           ...await codexImageInputs(turn.images),

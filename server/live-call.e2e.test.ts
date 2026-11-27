@@ -304,10 +304,11 @@ posixOnly("Live call e2e", () => {
     writeFileSync(queueSteerGate, "refuse live steers until this test clears the gate");
     const { instances } = (await (await fetch(`${base}/api/instances`)).json()) as { instances: Array<{ instanceId: string; models: { default: string } }> };
     const bot = await createBot("codexQueue", instances.find((instance) => instance.instanceId === "codexQueue")!.models.default);
-    type Line = { id: string; role: string; text?: string; steered?: boolean; via?: string; callId?: string; card?: { requestId?: string } };
+    type Line = { id: string; role: string; text?: string; steered?: boolean; queueId?: string; intake?: { mode?: string; state?: string }; via?: string; callId?: string; card?: { requestId?: string } };
     const lines = async (): Promise<Line[]> => ((await (await fetch(`${base}/api/threads/${bot.threadId}/messages`)).json()) as { messages: Line[] }).messages;
     const sse = await openSse(`${base}/api/events`);
     let callId = "";
+    let pendingQueueId = "";
     try {
       expect((await post(`/api/bots/${bot.id}/messages`, { text: "first gated turn" })).status).toBe(202);
       await expect.poll(async () => (await lines()).some((line) => line.card?.requestId), { timeout: 20_000 }).toBe(true);
@@ -322,19 +323,40 @@ posixOnly("Live call e2e", () => {
         20_000,
       );
       const { queueId } = (waiting.queues[bot.threadId] as Array<{ queueId: string; text: string }>).find((item) => item.text === "steer these queued words")!;
-      expect((await lines()).some((line) => line.text === "steer these queued words")).toBe(false);
+      pendingQueueId = queueId;
+      const queuedRow = (await lines()).find((line) => line.text === "steer these queued words");
+      expect(queuedRow).toMatchObject({
+        text: "steer these queued words",
+        queueId,
+        via: "call",
+        callId: call.callId,
+        intake: { mode: "progressive-continue", state: "received" },
+      });
+      expect(queuedRow?.steered).toBeUndefined();
 
       rmSync(queueSteerGate, { force: true });
       const steered = await post(`/api/bots/${bot.id}/queue/${queueId}/steer`, { threadId: bot.threadId });
+      pendingQueueId = "";
       expect(steered).toMatchObject({ status: 200, body: { ok: true, steered: true, queueIds: [queueId] } });
       const line = { text: "steer these queued words", steered: true, via: "call", callId: call.callId };
       expect((steered.body as { messages: unknown[] }).messages).toEqual([expect.objectContaining(line)]);
       expect((await lines()).find((m) => m.text === "steer these queued words")).toMatchObject(line);
     } finally {
-      await post(`/api/bots/${bot.id}/interrupt`, { threadId: bot.threadId });
-      await expect.poll(() => isBusy(bot.id), { timeout: 20_000 }).toBe(false);
-      if (callId) await post("/api/live/call/end", { callId });
-      sse.close();
+      rmSync(queueSteerGate, { force: true });
+      try {
+        if (pendingQueueId) {
+          await fetch(`${base}/api/bots/${bot.id}/queue/${pendingQueueId}`, {
+            method: "DELETE",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ threadId: bot.threadId }),
+          }).catch(() => {});
+        }
+        await post(`/api/bots/${bot.id}/interrupt`, { threadId: bot.threadId });
+        await expect.poll(() => isBusy(bot.id), { timeout: 20_000 }).toBe(false);
+      } finally {
+        if (callId) await post("/api/live/call/end", { callId });
+        sse.close();
+      }
     }
   }, 60_000);
 
