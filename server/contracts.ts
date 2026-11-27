@@ -11,6 +11,7 @@ import type { ProviderIcon } from "../shared/provider-icon.ts";
 import type { ModelProviderRoute } from "../shared/model-provider-route.ts";
 import type { ModelListProblem } from "../shared/model-selection.ts";
 import type { ContextBreakdown } from "../shared/context-breakdown.ts";
+import type { SignInOutcome } from "../shared/sign-in-outcome.ts";
 
 export type { CloudBackend, EffortLevel, ModelSelection } from "../shared/wire.ts";
 export type {
@@ -518,6 +519,9 @@ export interface ProviderAuthenticationStatus extends Omit<ProviderAuthenticatio
   phase: "waiting" | "verifying" | "succeeded" | "failed" | "expired" | "cancelled";
   /** Safe, actionable copy; never unfiltered CLI output or credentials. */
   message?: string;
+  /** Why it ended, as a fixed code (shared/sign-in-outcome.ts), where the engine's sign-in knows; `interrupted` for a
+   * sign-in the server's stop or restart cut short. Absent on `waiting`, `verifying` and `succeeded`. */
+  reason?: SignInOutcome;
 }
 
 export interface ModelCatalog {

@@ -2682,7 +2682,6 @@
   "engineSetup.device.connectedAccount": "ChatGPT conectado",
   "engineSetup.device.copyCode": "Copiar el código de inicio de sesión",
   "engineSetup.device.description": "Conecta tu cuenta de ChatGPT a Codex. Completa el inicio de sesión en tu propio navegador; sin terminal y sin compartir contraseñas.",
-  "engineSetup.device.enableHint": "Puede que haga falta activar el inicio de sesión con código de dispositivo en los ajustes de seguridad de ChatGPT, o que lo active tu administrador de ChatGPT.",
   "engineSetup.device.enterCode": "Escribe este código de un solo uso en la página de inicio de sesión de OpenAI:",
   "engineSetup.device.expired": "Este código caducó. Solicita uno nuevo para intentarlo de nuevo.",
   "engineSetup.device.expires": "El código caduca a las {time}",
@@ -6038,7 +6037,7 @@
   "teamSettings.intro": "Se aplica a los {count} bots de este departamento, de uno en uno, con las mismas comprobaciones que la configuración de cada bot. Los bots que se rechazarían se omiten y aparecen con el motivo.",
   "teamSettings.keepEffort": "Mantener el esfuerzo de cada bot",
   "teamSettings.keepModel": "Mantener el modelo de cada bot",
-  "teamSettings.menu": "Configurar para todos los bots de este departamento…",
+  "teamSettings.menu": "Ajustes para todos los bots…",
   "teamSettings.model": "Modelo",
   "teamSettings.preview": "Qué recibe cada bot",
   "teamSettings.progress": "{done} de {count}…",
@@ -6510,5 +6509,10 @@
   "decider.provider.line": "O usa una clave de otro proveedor para estos modelos pequeños.",
   "computer.worksOnHintServer": "Elige dónde trabaja este bot. Un equipo que compartes desde la app de escritorio de {app} no se elige aquí: pídele al bot que lo use.",
   "settings.ai.otherServicesLine": "Claves para voces, equipos, apps y ayudantes, además de tus modelos principales.",
-  "botPanel.library.showAll": "Mostrar todo"
+  "botPanel.library.showAll": "Mostrar todo",
+  "server.chief.retryQueued": "Reintento del hilo #{title} de {name} en cola",
+  "attach.previewOutsideWorkspace": "Este archivo está fuera de la carpeta de trabajo de este chat, así que no se puede abrir aquí. Pide al bot que lo guardó que adjunte una copia.",
+  "accounts.claude.emailCode": "Parece el código de inicio de sesión que Claude te envía por correo. Introdúcelo en la página de Claude, haz clic en Autorizar y luego pega el código más largo que muestra Claude.",
+  "engineSetup.device.enableNote": "Si OpenAI dice que no se permite el inicio de sesión con código de dispositivo, actívalo en ChatGPT → Configuración → Seguridad (puede que tenga que hacerlo tu administrador de ChatGPT) y vuelve a intentarlo.",
+  "engineSetup.device.interrupted": "Este inicio de sesión se interrumpió. Empieza de nuevo."
 }

@@ -1393,7 +1393,6 @@
   "engineSetup.copyOnOpenHint": "टर्मिनल खुलते ही कमांड कॉपी हो जाता है।",
   "engineSetup.device.connectedAccount": "ChatGPT जुड़ गया",
   "engineSetup.device.description": "अपना ChatGPT खाता Codex से जोड़ें। साइन-इन अपने ब्राउज़र में पूरा करें; न टर्मिनल चाहिए, न पासवर्ड साझा करना।",
-  "engineSetup.device.enableHint": "डिवाइस-कोड लॉगिन को ChatGPT की सुरक्षा सेटिंग्स में या आपके ChatGPT एडमिन द्वारा चालू करना पड़ सकता है।",
   "engineSetup.device.failed": "साइन-इन पूरा नहीं हो सका। फिर से कोशिश करें, या Codex इंस्टॉलेशन जाँचें।",
   "engineSetup.device.security": "सिर्फ़ वही कोड डालें जो आपने यहाँ माँगा था। इससे आपके बॉट के लिए Codex में साइन इन होता है और आपके खाते की सीमाएँ इस्तेमाल होती हैं। आपका पासवर्ड OpenAI के पास रहता है, और साइन-इन वहीं रहता है जहाँ आपके बॉट चलते हैं।",
   "engineSetup.downloadNote": "Google से {mb} MB डाउनलोड। {app} इस्तेमाल से पहले इसकी जाँच करता है।",
@@ -3763,5 +3762,10 @@
   "decider.provider.line": "या इन छोटे मॉडलों के लिए किसी दूसरे प्रदाता की कुंजी इस्तेमाल करें।",
   "computer.worksOnHintServer": "चुनें कि यह बॉट कहाँ काम करे। {app} डेस्कटॉप ऐप से शेयर किया गया कंप्यूटर यहाँ नहीं चुना जाता: बस बॉट से उसका इस्तेमाल करने को कहें।",
   "settings.ai.otherServicesLine": "आपके मुख्य मॉडलों के अलावा आवाज़ों, कंप्यूटरों, ऐप्स और सहायकों के लिए कुंजियाँ।",
-  "botPanel.library.showAll": "सभी दिखाएँ"
+  "botPanel.library.showAll": "सभी दिखाएँ",
+  "server.chief.retryQueued": "{name} के थ्रेड #{title} का दोबारा प्रयास कतार में रखा गया",
+  "attach.previewOutsideWorkspace": "यह फ़ाइल इस चैट के कार्य फ़ोल्डर से बाहर है, इसलिए इसे यहाँ नहीं खोला जा सकता। जिस बॉट ने इसे सहेजा है, उससे इसकी एक कॉपी अटैच करने को कहें।",
+  "accounts.claude.emailCode": "यह वह लॉगिन कोड लगता है जो Claude आपको ईमेल करता है। इसे Claude के पेज पर डालें, Authorize पर क्लिक करें, फिर Claude जो लंबा कोड दिखाए उसे यहाँ पेस्ट करें।",
+  "engineSetup.device.enableNote": "अगर OpenAI कहे कि डिवाइस-कोड साइन-इन की अनुमति नहीं है, तो इसे ChatGPT → Settings → Security में चालू करें (शायद आपके ChatGPT एडमिन को करना पड़े), फिर दोबारा कोशिश करें।",
+  "engineSetup.device.interrupted": "यह साइन-इन बीच में रुक गया। फिर से शुरू करें।"
 }

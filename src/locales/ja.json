@@ -3315,7 +3315,6 @@
   "engineSetup.device.connectedAccount": "ChatGPT 接続済み",
   "engineSetup.device.copyCode": "サインインコードをコピー",
   "engineSetup.device.description": "Codex に ChatGPT アカウントを接続します。ご自身のブラウザーでサインインを完了できます。ターミナルやパスワードの共有は不要です。",
-  "engineSetup.device.enableHint": "デバイスコードログインは、ChatGPT のセキュリティ設定または ChatGPT の管理者による有効化が必要な場合があります。",
   "engineSetup.device.enterCode": "OpenAI のサインインページで、この使い捨てコードを入力してください：",
   "engineSetup.device.expired": "このコードの有効期限が切れました。新しいコードを要求して、もう一度お試しください。",
   "engineSetup.device.expires": "コードは {time} に期限切れになります",
@@ -7387,7 +7386,7 @@
   "teamSettings.intro": "この部署の{count}体のボットに、各ボット自身の設定と同じチェックを行いながら、1体ずつ適用します。拒否されるボットはスキップされ、理由とともに一覧表示されます。",
   "teamSettings.keepEffort": "各ボットの推論の強度を維持",
   "teamSettings.keepModel": "各ボットのモデルを維持",
-  "teamSettings.menu": "この部署のすべてのボットに設定…",
+  "teamSettings.menu": "すべてのボットの設定…",
   "teamSettings.model": "モデル",
   "teamSettings.preview": "各ボットへの適用内容",
   "teamSettings.progress": "{count}件中{done}件…",
@@ -8052,5 +8051,10 @@
   "server.teammates.noLongerWaiting": "{who} はもうあなたを待っていません",
   "decider.provider.line": "または、これらの小さなモデルに別のプロバイダーのキーを使います。",
   "computer.worksOnHintServer": "このボットの作業場所を選びます。{app} デスクトップアプリから共有したコンピューターはここでは選びません。使ってほしいときはボットに頼んでください。",
-  "settings.ai.otherServicesLine": "メインのモデル以外に使う、音声、コンピューター、アプリ、ヘルパー用のキーです。"
+  "settings.ai.otherServicesLine": "メインのモデル以外に使う、音声、コンピューター、アプリ、ヘルパー用のキーです。",
+  "server.chief.retryQueued": "{name} のスレッド #{title} の再試行を順番待ちにしました",
+  "attach.previewOutsideWorkspace": "このファイルはこのチャットの作業フォルダー外にあるため、ここでは開けません。保存したボットにコピーを添付するよう頼んでください。",
+  "accounts.claude.emailCode": "これは Claude からメールで届くログインコードのようです。Claude のページで入力して「承認」をクリックし、Claude に表示される長いコードを貼り付けてください。",
+  "engineSetup.device.enableNote": "デバイスコードでのサインインが許可されていないと OpenAI に表示された場合は、ChatGPT → 設定 → セキュリティ でオンにしてから（ChatGPT の管理者が行う必要がある場合があります）、もう一度お試しください。",
+  "engineSetup.device.interrupted": "このサインインは中断されました。もう一度始めてください。"
 }

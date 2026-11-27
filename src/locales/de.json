@@ -1491,7 +1491,6 @@
   "engineSetup.copyOnOpenHint": "Der Befehl wird kopiert, sobald das Terminal öffnet.",
   "engineSetup.device.connectedAccount": "ChatGPT verbunden",
   "engineSetup.device.description": "Verbinde dein ChatGPT-Konto mit Codex. Schließe die Anmeldung in deinem eigenen Browser ab; kein Terminal und kein Teilen von Passwörtern nötig.",
-  "engineSetup.device.enableHint": "Die Anmeldung per Gerätecode muss eventuell in den ChatGPT-Sicherheitseinstellungen oder von deinem ChatGPT-Admin aktiviert werden.",
   "engineSetup.device.failed": "Die Anmeldung konnte nicht abgeschlossen werden. Versuche es erneut oder prüfe die Codex-Installation.",
   "engineSetup.device.security": "Gib nur einen Code ein, den du hier angefordert hast. Damit wird Codex für deine Bots angemeldet und nutzt die Limits deines Kontos. Dein Passwort bleibt bei OpenAI, und die Anmeldung bleibt dort, wo deine Bots laufen.",
   "engineSetup.downloadNote": "{mb} MB Download von Google. {app} prüft ihn vor der Nutzung.",
@@ -4207,5 +4206,10 @@
   "settings.vault.bitwardenSecrets.guide": "Öffne in Bitwarden Secrets Manager die Maschinenkonten, wähle eines, das nur die Projekte lesen kann, die Bots brauchen, dann Zugriffstoken → Zugriffstoken erstellen, und füge das Token hier ein. Ein Geheimnis, dessen Notiz eine url:-Zeile hat (und optional username:- und totp:-Zeilen), ist das Login für diese Website, mit seinem Wert als Passwort.",
   "settings.vault.bitwardenSecrets.token": "Zugriffstoken",
   "settings.vault.bitwardenSecrets.note": "Wird verschlüsselt auf dem Computer gespeichert, auf dem dies läuft, und nie wieder angezeigt. Jeder Wert wird aus Bitwarden gelesen, wenn ein Bot ihn nutzt, und in Bitwarden geändert.",
-  "settings.vault.bitwardenSecrets.error": "Bitwarden Secrets Manager konnte nicht verbunden werden. Versuche es erneut."
+  "settings.vault.bitwardenSecrets.error": "Bitwarden Secrets Manager konnte nicht verbunden werden. Versuche es erneut.",
+  "server.chief.retryQueued": "Neuer Versuch im Thread #{title} von {name} wartet in der Warteschlange",
+  "attach.previewOutsideWorkspace": "Diese Datei liegt außerhalb des Arbeitsordners dieses Chats und kann hier nicht geöffnet werden. Bitte den Bot, der sie gespeichert hat, eine Kopie anzuhängen.",
+  "accounts.claude.emailCode": "Das sieht nach dem Anmeldecode aus, den Claude dir per E-Mail schickt. Gib ihn auf der Claude-Seite ein, klicke auf Autorisieren und füge dann den längeren Code ein, den Claude anzeigt.",
+  "engineSetup.device.enableNote": "Wenn OpenAI meldet, dass die Anmeldung per Gerätecode nicht erlaubt ist, schalte sie unter ChatGPT → Einstellungen → Sicherheit ein (eventuell muss das dein ChatGPT-Admin tun) und versuche es dann erneut.",
+  "engineSetup.device.interrupted": "Diese Anmeldung wurde unterbrochen. Starte sie neu."
 }

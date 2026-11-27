@@ -44,6 +44,8 @@ const SERVER_ENV_NAMES = new Set([
   "OMB_BOT_BOX",
   // An ended Cloud started only for its owner's export: the server runs frozen (server/move-freeze.ts).
   "OMB_CLOUD_EXPORT_ONLY",
+  // The canonical event log's bounds and drain concurrency: memory traded for completeness.
+  "OMB_EVENT_LOG_BATCH_LINES", "OMB_EVENT_LOG_QUEUE_BYTES", "OMB_EVENT_LOG_QUEUE_EVENTS", "OMB_EVENT_LOG_DRAIN_THREADS",
 ]);
 export function serverEnvironmentAllowed(name: string): boolean {
   return SERVER_ENV_NAMES.has(name) || name.startsWith("LC_");

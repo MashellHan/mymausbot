@@ -1464,7 +1464,6 @@
   "engineSetup.device.connectedAccount": "ChatGPT підключено",
   "engineSetup.device.copyCode": "Копіювати код входу",
   "engineSetup.device.description": "Підключіть ваш акаунт ChatGPT до Codex. Завершіть вхід у власному браузері; термінал чи спільний пароль не потрібні.",
-  "engineSetup.device.enableHint": "Вхід за кодом пристрою може потребувати увімкнення в налаштуваннях безпеки ChatGPT або від вашого адміна ChatGPT.",
   "engineSetup.device.enterCode": "Введіть цей одноразовий код на сторінці входу OpenAI:",
   "engineSetup.device.expired": "Цей код сплив. Запросіть новий код, щоб спробувати ще раз.",
   "engineSetup.device.expires": "Код спливає о {time}",
@@ -4184,5 +4183,10 @@
   "decider.provider.line": "Або використайте для цих невеликих моделей ключ іншого постачальника.",
   "computer.worksOnHintServer": "Виберіть, де працює цей бот. Комп’ютер, яким ви поділилися із застосунку {app} для комп’ютера, тут не вибирається: просто попросіть бота ним скористатися.",
   "settings.ai.otherServicesLine": "Ключі для голосів, комп’ютерів, застосунків і помічників, окрім ваших основних моделей.",
-  "botPanel.library.showAll": "Показати всі"
+  "botPanel.library.showAll": "Показати всі",
+  "server.chief.retryQueued": "Повтор у гілці #{title} ({name}) додано в чергу",
+  "attach.previewOutsideWorkspace": "Цей файл поза робочою папкою цього чату, тому його не можна відкрити тут. Попросіть бота, який його зберіг, прикріпити копію.",
+  "accounts.claude.emailCode": "Схоже, це код входу, який Claude надсилає поштою. Введіть його на сторінці Claude, натисніть «Авторизувати», а потім вставте довший код, який покаже Claude.",
+  "engineSetup.device.enableNote": "Якщо OpenAI повідомляє, що вхід за кодом пристрою не дозволено, увімкніть його в ChatGPT → Налаштування → Безпека (можливо, це має зробити ваш адмін ChatGPT), а потім спробуйте ще раз.",
+  "engineSetup.device.interrupted": "Вхід було перервано. Почніть знову."
 }

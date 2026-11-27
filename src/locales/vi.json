@@ -2302,7 +2302,6 @@
   "engineSetup.device.connectedAccount": "ChatGPT đã kết nối",
   "engineSetup.device.copyCode": "Sao chép mã đăng nhập",
   "engineSetup.device.description": "Kết nối tài khoản ChatGPT của bạn với Codex. Hoàn tất đăng nhập trong trình duyệt của riêng bạn; không cần chia sẻ terminal hay mật khẩu.",
-  "engineSetup.device.enableHint": "Tính năng đăng nhập bằng mã thiết bị có thể cần được bật trong cài đặt bảo mật của ChatGPT hoặc do quản trị viên ChatGPT của bạn cấp quyền.",
   "engineSetup.device.enterCode": "Nhập mã dùng một lần này trên trang đăng nhập của OpenAI:",
   "engineSetup.device.expired": "Mã này đã hết hạn. Hãy yêu cầu mã mới để thử lại.",
   "engineSetup.device.expires": "Mã hết hạn lúc {time}",
@@ -5532,7 +5531,7 @@
   "teamSettings.intro": "Áp dụng cho {count} bot trong phòng ban này, từng bot một, với cùng quy trình kiểm tra như cài đặt riêng của từng bot. Các bot bị từ chối sẽ được bỏ qua và liệt kê kèm lý do.",
   "teamSettings.keepEffort": "Giữ nguyên mức nỗ lực của từng bot",
   "teamSettings.keepModel": "Giữ nguyên mô hình của từng bot",
-  "teamSettings.menu": "Thiết lập cho tất cả bot trong phòng ban này…",
+  "teamSettings.menu": "Cài đặt cho tất cả bot…",
   "teamSettings.model": "Mô hình",
   "teamSettings.preview": "Thiết lập cho từng bot",
   "teamSettings.progress": "{done}/{count}…",
@@ -6004,5 +6003,10 @@
   "decider.provider.line": "Hoặc dùng khóa của nhà cung cấp khác cho các mô hình nhỏ này.",
   "computer.worksOnHintServer": "Chọn nơi bot này làm việc. Máy tính bạn chia sẻ từ ứng dụng {app} trên máy tính không chọn ở đây: chỉ cần nhờ bot dùng nó.",
   "settings.ai.otherServicesLine": "Khóa cho giọng nói, máy tính, ứng dụng và trợ lý, ngoài các mô hình chính của bạn.",
-  "botPanel.library.showAll": "Hiển thị tất cả"
+  "botPanel.library.showAll": "Hiển thị tất cả",
+  "server.chief.retryQueued": "Đã xếp hàng thử lại luồng #{title} của {name}",
+  "attach.previewOutsideWorkspace": "Tệp này nằm ngoài thư mục làm việc của cuộc trò chuyện này, vì vậy không thể mở ở đây. Hãy nhờ bot đã lưu tệp đính kèm một bản sao.",
+  "accounts.claude.emailCode": "Đây có vẻ là mã đăng nhập Claude gửi qua email cho bạn. Hãy nhập mã đó trên trang của Claude, nhấn Ủy quyền, rồi dán mã dài hơn mà Claude hiển thị.",
+  "engineSetup.device.enableNote": "Nếu OpenAI báo không cho phép đăng nhập bằng mã thiết bị, hãy bật tính năng này trong ChatGPT → Cài đặt → Bảo mật (có thể quản trị viên ChatGPT của bạn phải bật), rồi thử lại.",
+  "engineSetup.device.interrupted": "Lần đăng nhập này đã bị gián đoạn. Hãy bắt đầu lại."
 }

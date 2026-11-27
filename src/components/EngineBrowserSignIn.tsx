@@ -7,16 +7,18 @@ import { intlLocale, t } from "@/lib/i18n";
 import { engineSignedIn } from "@/lib/product-events";
 import { deviceFlowUnavailable, type DeviceSignInStatus } from "./DeviceSignIn";
 
-function ended(phase: "failed" | "expired"): DeviceSignInStatus {
+function ended(phase: "failed" | "expired", name: string): DeviceSignInStatus {
   return {
     phase, flowId: null, authorizationUrl: null, expiresAt: null,
-    ...(phase === "failed" ? { message: t("engineSetup.engineBrowser.failed") } : {}),
+    ...(phase === "failed" ? { message: t("engineSetup.engineBrowser.failed", { name }) } : {}),
   };
 }
 
 /** A start button, a spinner while the person finishes in their browser, and the outcome. */
-export function EngineBrowserSignIn({ instanceId, autoStart = false, onDone }: {
+export function EngineBrowserSignIn({ instanceId, name, autoStart = false, onDone }: {
   instanceId: string;
+  /** The engine's display name, for the sign-in copy. */
+  name: string;
   autoStart?: boolean;
   onDone?: (signedIn: boolean) => void;
 }) {
@@ -26,7 +28,7 @@ export function EngineBrowserSignIn({ instanceId, autoStart = false, onDone }: {
   const started = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const base = `/api/instances/${encodeURIComponent(instanceId)}/auth`;
-  const failed = t("engineSetup.engineBrowser.failed");
+  const failed = t("engineSetup.engineBrowser.failed", { name });
 
   // The sign-in already succeeded: a failed catalog refresh must not read as a failed sign-in.
   const refresh = async () => {
@@ -41,7 +43,7 @@ export function EngineBrowserSignIn({ instanceId, autoStart = false, onDone }: {
     const controller = new AbortController();
     const remaining = auth.expiresAt ? Date.parse(auth.expiresAt) - Date.now() : Number.NaN;
     const expiryTimer = Number.isFinite(remaining)
-      ? window.setTimeout(() => { controller.abort(); setAuth(ended("expired")); setError(null); }, Math.max(0, remaining))
+      ? window.setTimeout(() => { controller.abort(); setAuth(ended("expired", name)); setError(null); }, Math.max(0, remaining))
       : null;
     const timer = window.setTimeout(() => {
       void api(`${base}/status?flowId=${encodeURIComponent(auth.flowId!)}`, { signal: controller.signal })
@@ -54,7 +56,7 @@ export function EngineBrowserSignIn({ instanceId, autoStart = false, onDone }: {
         .catch((cause: unknown) => {
           if (controller.signal.aborted) return;
           if (deviceFlowUnavailable(cause)) {
-            setAuth(ended("failed"));
+            setAuth(ended("failed", name));
             setError(null);
             return;
           }
@@ -67,7 +69,7 @@ export function EngineBrowserSignIn({ instanceId, autoStart = false, onDone }: {
       if (expiryTimer !== null) window.clearTimeout(expiryTimer);
       controller.abort();
     };
-  }, [auth, base, busy, failed, instanceId, refreshInstances, refreshModels, onDone]);
+  }, [auth, base, busy, failed, instanceId, name, refreshInstances, refreshModels, onDone]);
 
   const start = async () => {
     setBusy(true);
@@ -90,7 +92,7 @@ export function EngineBrowserSignIn({ instanceId, autoStart = false, onDone }: {
       setAuth({ phase: "cancelled", flowId: null, authorizationUrl: null, expiresAt: null });
       onDone?.(false);
     } catch (cause) {
-      if (deviceFlowUnavailable(cause)) setAuth(ended("failed"));
+      if (deviceFlowUnavailable(cause)) setAuth(ended("failed", name));
       else setError(cause instanceof Error ? cause.message : failed);
     } finally { setBusy(false); }
   };
@@ -101,14 +103,14 @@ export function EngineBrowserSignIn({ instanceId, autoStart = false, onDone }: {
     void start();
   }, [autoStart]);
 
-  const startLabel = busy ? t("engineSetup.engineBrowser.starting")
+  const startLabel = busy ? t("engineSetup.engineBrowser.starting", { name })
     : auth || error ? t("engineSetup.device.tryAgain")
-    : t("engineSetup.engineBrowser.start");
+    : t("engineSetup.engineBrowser.start", { name });
 
   if (auth && auth.phase !== "waiting") {
-    const label = auth.phase === "succeeded" ? t("engineSetup.engineBrowser.connected")
+    const label = auth.phase === "succeeded" ? t("engineSetup.engineBrowser.connected", { name })
       : auth.phase === "cancelled" ? t("engineSetup.engineBrowser.cancelled")
-      : auth.phase === "expired" ? t("engineSetup.engineBrowser.expired")
+      : auth.phase === "expired" ? t("engineSetup.engineBrowser.expired", { name })
       : auth.message || failed;
     return (
       <div data-engine-browser-sign-in className="mt-3 space-y-2">

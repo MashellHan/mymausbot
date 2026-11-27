@@ -403,7 +403,7 @@ function LocalFileLink({ filePath, shownPath, shownName, name, source, children,
     ? t("common.saving")
     : save.state === "saved"
       ? t("common.saved")
-      : save.state === "failed" && !revealOnClick
+      : save.state === "failed" && (!revealOnClick || save.canOpenOutside)
         ? t("chat.retry")
         : null;
   const pathTitle = preview.available ? preview.label : revealOnClick ? t("attach.showInFolder") : t("chat.file.saveCopy");
@@ -446,9 +446,13 @@ function LocalFileLink({ filePath, shownPath, shownName, name, source, children,
           {save.state === "failed" ? saveFailureText(save) : label}
         </span>
       )}
-      {save.state === "failed" && save.outsideWorkspace && !revealOnClick && (
+      {save.state === "failed" && save.outsideWorkspace && (!revealOnClick || save.canOpenOutside) && (
         <span className="inline-flex flex-wrap items-center gap-x-1.5 text-[12px]">
-          <OutsideWorkspaceFile filePath={shownPath} />
+          <OutsideWorkspaceFile
+            filePath={shownPath}
+            onOpenOutside={save.canOpenOutside ? () => void save.save({ allowOutsideWorkspace: true }) : undefined}
+            openOutsideLabel={t("attach.saveOutsideFile")}
+          />
         </span>
       )}
       {save.folder && <MessageFolderFiles folderPath={filePath} listing={save.folder} message={message} />}

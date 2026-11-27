@@ -2302,7 +2302,6 @@
   "engineSetup.device.connectedAccount": "ChatGPT bağlandı",
   "engineSetup.device.copyCode": "Oturum açma kodunu kopyala",
   "engineSetup.device.description": "ChatGPT hesabınızı Codex'e bağlayın. Oturum açmayı kendi tarayıcınızda tamamlayın; terminal veya şifre paylaşımı gerekmez.",
-  "engineSetup.device.enableHint": "Cihaz kodu ile girişin ChatGPT güvenlik ayarlarında veya ChatGPT yöneticiniz tarafından etkinleştirilmesi gerekebilir.",
   "engineSetup.device.enterCode": "Bu tek kullanımlık kodu OpenAI oturum açma sayfasına girin:",
   "engineSetup.device.expired": "Bu kodun süresi doldu. Tekrar denemek için yeni bir kod talep edin.",
   "engineSetup.device.expires": "Kodun süresi {time} saatinde doluyor",
@@ -5532,7 +5531,7 @@
   "teamSettings.intro": "Bu departmandaki {count} bota, her botun kendi ayarlarındaki denetimlerin aynısıyla birer birer uygulanır. Reddedilecek botlar atlanır ve nedeniyle birlikte listelenir.",
   "teamSettings.keepEffort": "Her botun çaba seviyesini koru",
   "teamSettings.keepModel": "Her botun modelini koru",
-  "teamSettings.menu": "Bu departmandaki tüm botlar için ayarla…",
+  "teamSettings.menu": "Tüm botların ayarları…",
   "teamSettings.model": "Model",
   "teamSettings.preview": "Her botun alacağı",
   "teamSettings.progress": "{done} / {count}…",
@@ -6004,5 +6003,10 @@
   "decider.provider.line": "Ya da bu küçük modeller için başka bir sağlayıcının anahtarını kullanın.",
   "computer.worksOnHintServer": "Bu botun nerede çalışacağını seçin. {app} masaüstü uygulamasından paylaştığınız bilgisayar burada seçilmez: bottan onu kullanmasını isteyin yeter.",
   "settings.ai.otherServicesLine": "Ana modellerinizin dışında sesler, bilgisayarlar, uygulamalar ve yardımcılar için anahtarlar.",
-  "botPanel.library.showAll": "Tümünü göster"
+  "botPanel.library.showAll": "Tümünü göster",
+  "server.chief.retryQueued": "{name} için #{title} konusundaki yeniden deneme sıraya alındı",
+  "attach.previewOutsideWorkspace": "Bu dosya, bu sohbetin çalışma klasörünün dışında olduğu için burada açılamıyor. Dosyayı kaydeden bottan bir kopyasını eklemesini isteyin.",
+  "accounts.claude.emailCode": "Bu, Claude'un size e-postayla gönderdiği giriş kodu gibi görünüyor. Bunu Claude'un sayfasına girin, Yetkilendir'e tıklayın, ardından Claude'un gösterdiği daha uzun kodu yapıştırın.",
+  "engineSetup.device.enableNote": "OpenAI cihaz kodu ile girişe izin verilmediğini söylerse ChatGPT → Ayarlar → Güvenlik bölümünden açın (bunu ChatGPT yöneticinizin yapması gerekebilir), ardından tekrar deneyin.",
+  "engineSetup.device.interrupted": "Bu giriş yarıda kesildi. Yeniden başlayın."
 }
